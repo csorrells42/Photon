@@ -17,6 +17,10 @@ $script:ExpectedModels = @(
         inventoryModelId = 'docker.io/ai/qwen3:4B-UD-Q4_K_XL'
         inspectTags = @('ai/qwen3:4B-UD-Q4_K_XL', 'docker.io/ai/qwen3:4B-UD-Q4_K_XL')
         apiModelId = 'ai/qwen3:4B-UD-Q4_K_XL'
+        runtimeMode = 'completion'
+        contextSize = 16384
+        keepAlive = '-1'
+        runtimeFlags = @('--n-gpu-layers', '0')
     },
     [ordered]@{
         role = 'embedding'
@@ -29,6 +33,10 @@ $script:ExpectedModels = @(
             'docker.io/ai/nomic-embed-text-v1.5:latest'
         )
         apiModelId = 'ai/nomic-embed-text-v1.5'
+        runtimeMode = 'embedding'
+        contextSize = 2048
+        keepAlive = '-1'
+        runtimeFlags = @('--n-gpu-layers', '0', '--batch-size', '2048', '--ubatch-size', '2048')
     }
 )
 
@@ -135,7 +143,7 @@ function Read-ExactLock {
     for ($index = 0; $index -lt $script:ExpectedModels.Count; $index++) {
         $actual = $models[$index]
         $expected = $script:ExpectedModels[$index]
-        foreach ($field in @('role', 'pullReference', 'registryIdentity', 'inventoryModelId', 'apiModelId')) {
+        foreach ($field in @('role', 'pullReference', 'registryIdentity', 'inventoryModelId', 'apiModelId', 'runtimeMode', 'contextSize', 'keepAlive')) {
             if ([string]$actual.$field -cne [string]$expected[$field]) {
                 throw "model_lock_binding_mismatch:$field"
             }
@@ -148,8 +156,55 @@ function Read-ExactLock {
                 throw 'model_lock_tag_mismatch'
             }
         }
+        $actualRuntimeFlags = @($actual.runtimeFlags | ForEach-Object { [string]$_ })
+        $expectedRuntimeFlags = @($expected.runtimeFlags | ForEach-Object { [string]$_ })
+        if ($actualRuntimeFlags.Count -ne $expectedRuntimeFlags.Count) { throw 'model_lock_runtime_flag_count_mismatch' }
+        for ($flagIndex = 0; $flagIndex -lt $expectedRuntimeFlags.Count; $flagIndex++) {
+            if ($actualRuntimeFlags[$flagIndex] -cne $expectedRuntimeFlags[$flagIndex]) {
+                throw 'model_lock_runtime_flag_mismatch'
+            }
+        }
     }
     return $lock
+}
+
+function Set-ModelRuntimeConfiguration {
+    param([Parameter(Mandatory = $true)]$Model)
+
+    $arguments = @(
+        'model', 'configure',
+        '--mode', [string]$Model.runtimeMode,
+        '--context-size', [string]$Model.contextSize,
+        '--keep-alive', [string]$Model.keepAlive,
+        [string]$Model.pullReference,
+        '--'
+    ) + @($Model.runtimeFlags | ForEach-Object { [string]$_ })
+    Invoke-DockerCommand -Arguments $arguments | Out-Null
+
+    $shown = Invoke-DockerCommand -Arguments @('model', 'configure', 'show', [string]$Model.pullReference)
+    try { $records = @($shown.Output | ConvertFrom-Json -ErrorAction Stop) }
+    catch { throw "model_runtime_configuration_invalid_json:$($Model.role)" }
+    $matches = @($records | Where-Object { [string]$_.Mode -ceq [string]$Model.runtimeMode })
+    if ($matches.Count -ne 1) { throw "model_runtime_configuration_missing:$($Model.role)" }
+    $config = $matches[0].Config
+    $actualFlags = @($config.'runtime-flags' | ForEach-Object { [string]$_ })
+    $expectedFlags = @($Model.runtimeFlags | ForEach-Object { [string]$_ })
+    if ([int]$config.'context-size' -ne [int]$Model.contextSize -or
+        [string]$config.keep_alive -cne [string]$Model.keepAlive -or
+        $actualFlags.Count -ne $expectedFlags.Count) {
+        throw "model_runtime_configuration_mismatch:$($Model.role)"
+    }
+    for ($index = 0; $index -lt $expectedFlags.Count; $index++) {
+        if ($actualFlags[$index] -cne $expectedFlags[$index]) {
+            throw "model_runtime_configuration_flag_mismatch:$($Model.role)"
+        }
+    }
+    return [pscustomobject]@{
+        runtimeMode = [string]$Model.runtimeMode
+        contextSize = [int]$Model.contextSize
+        keepAlive = [string]$Model.keepAlive
+        runtimeFlags = $expectedFlags
+    }
 }
 
 function Get-ModelIdentity {
@@ -237,10 +292,10 @@ function Assert-ReceiptMatches {
 
     if ($null -eq $Receipt) { return }
     if ([string]$Receipt.schemaId -cne 'photon.model-runner.identity/v1' -or
-        [string]$Receipt.lockSha256 -cne $LockSha256 -or
         [string]$Receipt.containerEndpoint -cne $script:ExpectedContainerEndpoint) {
         throw 'model_identity_receipt_binding_mismatch'
     }
+    $sameLock = [string]$Receipt.lockSha256 -ceq $LockSha256
     $prior = @($Receipt.models)
     if ($prior.Count -ne $Identities.Count) { throw 'model_identity_receipt_count_mismatch' }
     foreach ($identity in $Identities) {
@@ -252,6 +307,14 @@ function Assert-ReceiptMatches {
             [string]$match[0].localDigest -cne [string]$identity.localDigest -or
             [string]$match[0].registryDigest -cne [string]$identity.registryDigest) {
             throw "model_identity_changed:$($identity.role)"
+        }
+        if ($sameLock -and (
+            [string]$match[0].runtimeMode -cne [string]$identity.runtimeMode -or
+            [int]$match[0].contextSize -ne [int]$identity.contextSize -or
+            [string]$match[0].keepAlive -cne [string]$identity.keepAlive -or
+            (@($match[0].runtimeFlags) -join "`0") -cne (@($identity.runtimeFlags) -join "`0")
+        )) {
+            throw "model_runtime_configuration_changed:$($identity.role)"
         }
     }
 }
@@ -304,7 +367,7 @@ ids = {entry.get("id") for entry in listed.get("data", []) if isinstance(entry, 
 if chat_inventory_id not in ids or embedding_inventory_id not in ids:
     raise RuntimeError("model_runner_api_identity_mismatch")
 
-embedding = request("/embeddings", {"model": embedding_id, "input": "Photon compatibility probe"})
+embedding = request("/embeddings", {"model": embedding_id, "input": " ".join(["memory"] * 900)})
 vector = embedding.get("data", [{}])[0].get("embedding", [])
 if not isinstance(vector, list) or len(vector) != 768 or not all(isinstance(value, (int, float)) for value in vector):
     raise RuntimeError("model_runner_embedding_contract_mismatch")
@@ -390,6 +453,11 @@ foreach ($model in @($lock.models)) {
         $identity = Get-ModelIdentity -Model $model
     }
     $identity | Add-Member -NotePropertyName registryDigest -NotePropertyValue ([string]$registryIdentity.localDigest)
+    $runtimeConfiguration = Set-ModelRuntimeConfiguration -Model $model
+    $identity | Add-Member -NotePropertyName runtimeMode -NotePropertyValue ([string]$runtimeConfiguration.runtimeMode)
+    $identity | Add-Member -NotePropertyName contextSize -NotePropertyValue ([int]$runtimeConfiguration.contextSize)
+    $identity | Add-Member -NotePropertyName keepAlive -NotePropertyValue ([string]$runtimeConfiguration.keepAlive)
+    $identity | Add-Member -NotePropertyName runtimeFlags -NotePropertyValue @($runtimeConfiguration.runtimeFlags)
     $identities += $identity
 }
 Assert-ReceiptMatches -Receipt $existingReceipt -LockSha256 $lockSha256 -Identities $identities

@@ -10,9 +10,11 @@ internal static class Program
         CatalogMatchesRenderer();
         await DefaultRegistryFailsClosedAsync();
         await KnownPinnedProvidersMapWithoutPathDisclosureAsync();
+        await DotnetSdkEvidenceMapsCompilerAndTestsAsync();
         RegistrationRejectsAmbiguityAndPathBasedDotnet();
         await StructuredBridgeGatesAndNormalizesAsync();
         await ConcreteOperationHandlersSmoke.RunAsync();
+        await ContainerGccAuthoritySmoke.RunAsync();
         Console.WriteLine("PASS language-tooling trusted registry smoke");
         return 0;
     }
@@ -71,6 +73,24 @@ internal static class Program
         var serialized = JsonSerializer.Serialize(report);
         Require(!serialized.Contains(provider.ExecutablePath, StringComparison.OrdinalIgnoreCase),
             "A trusted executable path crossed the evidence boundary.");
+    }
+
+    private static async Task DotnetSdkEvidenceMapsCompilerAndTestsAsync()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var provider = new DotnetToolchainProvider();
+        await using var registry = LanguageToolingRegistryFactory.Create(
+            workspace.Path,
+            [new DotnetSdkEvidenceSource(provider)]);
+        var report = await registry.DescribeProviderAsync("dotnet");
+        Require(report.Capabilities.Single(item => item.CapabilityId == "dotnet.compiler").Availability
+            == LanguageToolingCapabilityState.Available, "The host .NET build operation was not advertised.");
+        Require(report.Capabilities.Single(item => item.CapabilityId == "dotnet.tests").Availability
+            == LanguageToolingCapabilityState.Available, "The host .NET test operation was not advertised.");
+        var serialized = JsonSerializer.Serialize(report);
+        Require(!serialized.Contains("dotnet.exe", StringComparison.OrdinalIgnoreCase),
+            "The host .NET executable path crossed the evidence boundary.");
+        await provider.DisposeAsync();
     }
 
     private static void RegistrationRejectsAmbiguityAndPathBasedDotnet()

@@ -36,6 +36,7 @@ function snapshot(revision = 3, sessionId = 'session:1', projectId = 'project:1'
     units: 'millimeter',
     mode: 'canonical',
     entities: [{ id: 'part:shaft', parentId: null, kind: 'part', name: 'Shaft', visible: true, suppressed: false }],
+    occurrences: [],
     operations: [],
     issues: [],
     dirty: false,

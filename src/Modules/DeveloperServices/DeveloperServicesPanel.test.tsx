@@ -31,8 +31,8 @@ const description: DeveloperServicesDescription = {
     checkedAt: '2026-08-10T12:00:00.000Z',
     capabilities: [
       { capabilityId: 'dotnet.roslyn-lsp', availability: 'available', code: 'verified', detail: 'Verified.' },
-      { capabilityId: 'dotnet.compiler', availability: 'unavailable', code: 'unpinned', detail: 'Unpinned.' },
-      { capabilityId: 'dotnet.tests', availability: 'unavailable', code: 'missing', detail: 'Missing.' },
+      { capabilityId: 'dotnet.compiler', availability: 'available', code: 'verified', detail: 'Verified.' },
+      { capabilityId: 'dotnet.tests', availability: 'available', code: 'verified', detail: 'Verified.' },
       { capabilityId: 'dotnet.dap', availability: 'available', code: 'verified', detail: 'Verified.' },
     ],
   }],
@@ -78,14 +78,17 @@ function analysisResult(overrides: Partial<DeveloperBuildResult> = {}): Develope
 }
 
 describe('DeveloperServicesPanel', () => {
-  it('shows protocol v2 and separate build/analyze actions without a debugger action', () => {
+  it('shows protocol v2 with separate build/analyze and explicit debugger actions', () => {
     const markup = renderToStaticMarkup(<DeveloperServicesPanel controller={controller()} />)
     expect(markup).toContain('protocol v2')
     expect(markup).toContain('Build target')
     expect(markup).toContain('Analyze target')
     expect(markup).toContain('Debugger provider')
-    expect(markup).not.toContain('Start debugger')
-    expect(markup).not.toContain('Attach debugger')
+    expect(markup).toContain('.NET Debugger')
+    expect(markup).toContain('Launch')
+    expect(markup).toContain('Attach')
+    expect(markup).toContain('.NET Tests')
+    expect(markup).toContain('Run tests')
   })
 
   it('renders honest operation-specific cancellation state', () => {
@@ -112,7 +115,8 @@ describe('DeveloperServicesPanel', () => {
   it('renders capability readiness from trusted evidence instead of raw provider IDs', () => {
     const markup = renderToStaticMarkup(<DeveloperServicesPanel controller={controller()} />)
     expect(markup).toContain('.NET / Roslyn')
-    expect(markup).toContain('2/4 host verified')
+    expect(markup).toContain('Host verified')
+    expect(markup).not.toContain('2/4 host verified')
     expect(markup).toContain('Java / Eclipse JDT')
     expect(markup).toContain('Adapter pending')
     expect(markup).toContain('GNU C / C++')
@@ -128,7 +132,33 @@ describe('DeveloperServicesPanel', () => {
     expect(markup).toContain('disabled=""')
   })
 
-  it('offers bounded Python inspection without claiming executable tooling', () => {
+  it('projects trusted C++ evidence while retaining the native-host action gate', () => {
+    const gccDescription = {
+      ...description,
+      languageTooling: [...description.languageTooling, {
+        contract: LANGUAGE_TOOLING_CONTRACT,
+        source: 'trusted-host' as const,
+        evidenceId: 'desktop:gcc:1',
+        providerId: 'gcc' as const,
+        checkedAt: '2026-08-11T12:00:00.000Z',
+        capabilities: [{
+          capabilityId: 'gcc.compiler',
+          availability: 'available' as const,
+          code: 'verified-container-gcc-runtime',
+          detail: 'GCC and G++ are bound to the immutable Hermes runtime.',
+        }],
+      }],
+    }
+    const markup = renderToStaticMarkup(
+      <DeveloperServicesPanel controller={controller({ description: gccDescription })} selectedWorkspacePath="native/dragon.cpp" />,
+    )
+    expect(markup).toContain('GNU C/C++ source')
+    expect(markup).toContain('Host verified')
+    expect(markup).toMatch(/<button(?=[^>]*developer-build-button)(?=[^>]*disabled)[^>]*>[\s\S]*?Check with GCC<\/button>/)
+    expect(markup).not.toContain('GCC toolchain is not installed')
+  })
+
+  it('offers bounded Python inspection while keeping unverified operations disabled', () => {
     const pythonDescription = {
       ...description,
       languageTooling: [...description.languageTooling, {
@@ -141,8 +171,37 @@ describe('DeveloperServicesPanel', () => {
       }],
     }
     const markup = renderToStaticMarkup(<DeveloperServicesPanel controller={controller({ description: pythonDescription })} selectedWorkspacePath="tools/check.py" />)
-    expect(markup).toContain('Python source')
-    expect(markup).toContain('Inspect Python project')
-    expect(markup).not.toContain('Check with Python')
+    expect(markup).toContain('Python tooling')
+    expect(markup).toContain('Inspect project')
+    expect(markup).toContain('Check syntax')
+    expect(markup).toContain('Run unittest')
+    expect(markup).toContain('Verify Serena language service')
+    expect(markup.match(/disabled=""/g)?.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('enables all four Python operations only from trusted 4/4 evidence', () => {
+    const pythonDescription = {
+      ...description,
+      languageTooling: [...description.languageTooling, {
+        contract: LANGUAGE_TOOLING_CONTRACT,
+        source: 'trusted-host' as const,
+        evidenceId: 'desktop:python:4',
+        providerId: 'python' as const,
+        checkedAt: '2026-08-11T12:00:00.000Z',
+        capabilities: [
+          { capabilityId: 'python.project', availability: 'available' as const, code: 'verified', detail: 'Bounded inspection.' },
+          { capabilityId: 'python.lsp', availability: 'available' as const, code: 'verified', detail: 'Serena served the file.' },
+          { capabilityId: 'python.compiler', availability: 'available' as const, code: 'verified', detail: 'Pinned syntax authority.' },
+          { capabilityId: 'python.tests', availability: 'available' as const, code: 'verified', detail: 'Pinned unittest authority.' },
+        ],
+      }],
+    }
+    const markup = renderToStaticMarkup(<DeveloperServicesPanel controller={controller({ description: pythonDescription })} selectedWorkspacePath="tools/check.py" />)
+    expect(markup).toContain('Python</b>')
+    expect(markup).toContain('Host verified')
+    expect(markup).toContain('Inspect project')
+    expect(markup).toContain('Check syntax')
+    expect(markup).toContain('Run unittest')
+    expect(markup).toContain('Verify Serena language service')
   })
 })

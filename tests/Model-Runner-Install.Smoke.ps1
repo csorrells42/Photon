@@ -57,6 +57,10 @@ Assert-True ([string]$lock.containerEndpoint -ceq 'http://host.docker.internal:1
 Assert-True (@($lock.models).Count -eq 2) 'lock must contain exactly two models'
 Assert-True ([string]$lock.models[0].pullReference -ceq 'ai/qwen3:4B-UD-Q4_K_XL') 'chat model must be exact'
 Assert-True ([string]$lock.models[1].pullReference -ceq 'ai/nomic-embed-text-v1.5') 'embedding model must be exact'
+Assert-True ([string]$lock.models[0].runtimeMode -ceq 'completion' -and [int]$lock.models[0].contextSize -eq 16384 -and [string]$lock.models[0].keepAlive -ceq '-1') 'chat runtime policy must be exact'
+Assert-True ((@($lock.models[0].runtimeFlags) -join '|') -ceq '--n-gpu-layers|0') 'chat must remain CPU-first'
+Assert-True ([string]$lock.models[1].runtimeMode -ceq 'embedding' -and [int]$lock.models[1].contextSize -eq 2048 -and [string]$lock.models[1].keepAlive -ceq '-1') 'embedding runtime policy must be exact'
+Assert-True ((@($lock.models[1].runtimeFlags) -join '|') -ceq '--n-gpu-layers|0|--batch-size|2048|--ubatch-size|2048') 'embedding physical batch policy must be exact'
 
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('photon-model-runner-smoke-' + [Guid]::NewGuid().ToString('N'))
 try {
@@ -100,6 +104,42 @@ if ($args.Count -ge 3 -and $args[0] -ceq 'model' -and $args[1] -ceq 'status') {
     if ($env:PHOTON_FAKE_RUNNER_STATUS -ceq 'stopped') { '{"status":"stopped","engine":"llama.cpp"}' }
     else { '{"status":"running","engine":"llama.cpp"}' }
     exit 0
+}
+if ($args.Count -ge 3 -and $args[0] -ceq 'model' -and $args[1] -ceq 'configure') {
+    if ($args[2] -ceq 'show' -and $args.Count -eq 4) {
+        $reference = [string]$args[3]
+        if ($reference -ceq $qwen) {
+            @([ordered]@{
+                Backend = 'llama.cpp'
+                Model = 'docker.io/ai/qwen3:4B-UD-Q4_K_XL'
+                Mode = 'completion'
+                Config = [ordered]@{
+                    'context-size' = 16384
+                    'runtime-flags' = @('--n-gpu-layers', '0')
+                    keep_alive = '-1'
+                }
+            }) | ConvertTo-Json -Depth 6 -Compress
+            exit 0
+        }
+        if ($reference -ceq $embed) {
+            @([ordered]@{
+                Backend = 'llama.cpp'
+                Model = 'docker.io/ai/nomic-embed-text-v1.5:latest'
+                Mode = 'embedding'
+                Config = [ordered]@{
+                    'context-size' = 2048
+                    'runtime-flags' = @('--n-gpu-layers', '0', '--batch-size', '2048', '--ubatch-size', '2048')
+                    keep_alive = '-1'
+                }
+            }) | ConvertTo-Json -Depth 6 -Compress
+            exit 0
+        }
+        exit 93
+    }
+    $chatConfigure = 'model|configure|--mode|completion|--context-size|16384|--keep-alive|-1|ai/qwen3:4B-UD-Q4_K_XL|--|--n-gpu-layers|0'
+    $embedConfigure = 'model|configure|--mode|embedding|--context-size|2048|--keep-alive|-1|ai/nomic-embed-text-v1.5|--|--n-gpu-layers|0|--batch-size|2048|--ubatch-size|2048'
+    if ($commandLine -ceq $chatConfigure -or $commandLine -ceq $embedConfigure) { exit 0 }
+    exit 94
 }
 if ($args.Count -ge 3 -and $args[0] -ceq 'model' -and $args[1] -ceq 'inspect') {
     $isRemote = $args.Count -eq 4 -and $args[2] -ceq '--remote'
@@ -153,6 +193,8 @@ exit 92
     Assert-True ($pullCalls[0] -ceq 'model|pull|ai/qwen3:4B-UD-Q4_K_XL') 'chat pull must be exact'
     Assert-True ($pullCalls[1] -ceq 'model|pull|ai/nomic-embed-text-v1.5') 'embedding pull must be exact'
     Assert-True (@($calls | Where-Object { $_ -like 'model|inspect|--remote|*' }).Count -eq 2) 'each model must bind to its exact remote registry artifact'
+    Assert-True (@($calls | Where-Object { $_ -like 'model|configure|--mode|*' }).Count -eq 2) 'installer must apply exactly two locked per-mode runtime configurations'
+    Assert-True (@($calls | Where-Object { $_ -like 'model|configure|show|*' }).Count -eq 2) 'installer must read back both runtime configurations'
     Assert-True (@($calls | Where-Object { $_ -like 'exec|hermes|python|-c|*' }).Count -eq 1) 'API probe must run inside the gateway container'
     Assert-True (@($calls | Where-Object { $_ -like 'inspect|--type|container|--format|*HERMES_MEM0_MODEL_URL=http://host.docker.internal:12434/engines/v1*|hermes' }).Count -eq 1) 'gateway environment check must bind the exact composed OpenAI base URL'
 
@@ -163,16 +205,20 @@ exit 92
     Assert-True ([string]$receipt.models[1].inventoryModelId -ceq 'docker.io/ai/nomic-embed-text-v1.5:latest') 'embedding inventory must bind the full registry ID'
     Assert-True ([string]$receipt.models[0].registryDigest -ceq [string]$receipt.models[0].localDigest) 'chat local and registry digests must match'
     Assert-True ([string]$receipt.models[1].registryDigest -ceq [string]$receipt.models[1].localDigest) 'embedding local and registry digests must match'
+    Assert-True ([int]$receipt.models[0].contextSize -eq 16384 -and [string]$receipt.models[0].keepAlive -ceq '-1') 'chat receipt must bind its retained CPU-first context policy'
+    Assert-True ((@($receipt.models[1].runtimeFlags) -join '|') -ceq '--n-gpu-layers|0|--batch-size|2048|--ubatch-size|2048') 'embedding receipt must bind the physical batch policy'
     Assert-True ([int]$receipt.apiProbe.embeddingDimensions -eq 768) 'embedding API contract must be recorded'
     Assert-True ([string]$receipt.apiProbe.chatModelId -ceq 'ai/qwen3:4B-UD-Q4_K_XL') 'chat request must use the short API request ID'
     Assert-True ([string]$receipt.apiProbe.chatInventoryModelId -ceq 'docker.io/ai/qwen3:4B-UD-Q4_K_XL') 'chat inventory must bind the full registry ID'
     Assert-True ($installerText.Contains('len(vector) != 768')) 'container probe must require the measured 768-dimensional embedding contract'
     Assert-True (-not $installerText.Contains('chat.get("model")')) 'chat compatibility must not equate the internal response model path with the request ID'
+    Assert-True ($installerText.Contains('["memory"] * 900')) 'installer must prove an embedding input beyond the broken 512-token default'
 
     '' | Set-Content -LiteralPath (Join-Path $fakeRoot 'calls.log') -Encoding UTF8
     Invoke-Installer -ScriptPath $installer -FakeBin $fakeBin -FakeRoot $fakeRoot | Out-Null
     $secondCalls = @(Get-Content -LiteralPath (Join-Path $fakeRoot 'calls.log') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     Assert-True (@($secondCalls | Where-Object { $_ -like 'model|pull|*' }).Count -eq 0) 'repeat install must not repull verified models'
+    Assert-True (@($secondCalls | Where-Object { $_ -like 'model|configure|--mode|*' }).Count -eq 2) 'repeat install must reassert both runtime configurations after Docker restart or eviction'
 
     $env:PHOTON_FAKE_RUNNER_STATUS = 'stopped'
     try { Invoke-Installer -ScriptPath $installer -FakeBin $fakeBin -FakeRoot $fakeRoot -ExpectFailure | Out-Null }

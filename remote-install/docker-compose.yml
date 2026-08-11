@@ -19,6 +19,7 @@ services:
       - HERMES_DASHBOARD_PORT=9119
       - HERMES_WORKBENCH=1
       - HERMES_WORKBENCH_AUTHENTICATED_MEM0=1
+      - HERMES_WRITE_SAFE_ROOT=/workspace
       - HERMES_MEM0_MODEL_URL=http://host.docker.internal:12434/engines/v1
       - HERMES_MEM0_QDRANT_URL=http://memory-vector:6333
     depends_on:

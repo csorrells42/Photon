@@ -83,6 +83,7 @@ try {
     Require ($composeText -ceq [IO.File]::ReadAllText((Join-Path $projectRoot 'remote-install\docker-compose.yml'))) 'Compose mirrors are not byte-identical.'
     Require ($composeText.Contains('${HERMES_HOST_WORKSPACE_PATH:?launcher must set HERMES_HOST_WORKSPACE_PATH}')) 'Compose does not require the validated workspace authority.'
     Require ($composeText.Contains('create_host_path: false')) 'Compose may implicitly create an unintended host workspace.'
+    Require ($composeText.Contains('- HERMES_WRITE_SAFE_ROOT=/workspace')) 'Photon file writes are not confined to the validated workspace mount.'
     Require (-not $composeText.Contains('./workspace:/workspace')) 'The legacy fixed workspace bind is still present.'
 
     $localSettings = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'launcher.settings.json') | ConvertFrom-Json

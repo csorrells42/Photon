@@ -65,6 +65,7 @@ internal sealed class HermesConversationBridge : IAsyncDisposable
             application.MapGet("/v1/session", (Func<HttpContext, Task<IResult>>)(async context =>
                 await RelayAsync("snapshot", payload: null, context.RequestAborted).ConfigureAwait(false)));
             application.MapPost("/v1/turns", (Func<HttpContext, Task<IResult>>)SubmitTurnAsync);
+            application.MapPost("/v1/observe", (Func<HttpContext, Task<IResult>>)ObserveAsync);
             application.MapPost("/v1/interrupt", (Func<HttpContext, Task<IResult>>)(async context =>
                 await RelayAsync("interrupt", payload: null, context.RequestAborted).ConfigureAwait(false)));
             try
@@ -128,6 +129,34 @@ internal sealed class HermesConversationBridge : IAsyncDisposable
             _turnGate.Release();
         }
     }
+
+    private async Task<IResult> ObserveAsync(HttpContext context)
+    {
+        BridgeObserveRequest? request;
+        try
+        {
+            request = await context.Request.ReadFromJsonAsync<BridgeObserveRequest>(JsonOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            return Results.BadRequest(new { error = "The observation request was not valid JSON." });
+        }
+        var messageId = request?.MessageId?.Trim() ?? string.Empty;
+        var sender = request?.Sender?.Trim() ?? string.Empty;
+        var recipient = request?.Recipient?.Trim() ?? string.Empty;
+        var body = request?.Body?.Trim() ?? string.Empty;
+        if (messageId.Length is < 5 or > 128
+            || !IsIdentity(sender, allowEveryone: false)
+            || !IsIdentity(recipient, allowEveryone: true)
+            || sender.Equals(recipient, StringComparison.Ordinal)
+            || body.Length is < 1 or > 64 * 1024)
+            return Results.BadRequest(new { error = "The observation envelope is invalid." });
+        return await RelayAsync("observe", new { messageId, sender, recipient, body }, context.RequestAborted).ConfigureAwait(false);
+    }
+
+    private static bool IsIdentity(string value, bool allowEveryone) =>
+        value is "Chris" or "Codex" or "Photon" or "Ali" or "Scarlett"
+        || (allowEveryone && value == "Everyone");
 
     private async Task<IResult> RelayAsync(string operation, object? payload, CancellationToken cancellationToken, TimeSpan? timeout = null)
     {
@@ -225,5 +254,6 @@ internal sealed class HermesConversationBridge : IAsyncDisposable
         public string Endpoint => $"http://127.0.0.1:{Port}";
     }
     private sealed record BridgeTurnRequest(string? Text);
+    private sealed record BridgeObserveRequest(string? MessageId, string? Sender, string? Recipient, string? Body);
     private sealed record RendererReply(bool Ok, JsonElement Snapshot, string? Error);
 }

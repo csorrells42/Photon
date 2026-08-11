@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using PhotonCadFileConversion;
 using PhotonCadPreviews;
 using PhotonCadProjects;
 using PhotonCadProjects.Codec;
@@ -12,6 +13,7 @@ using PhotonCadProjects.RuntimeSync;
 using PhotonCadProjects.Windows;
 using PhotonCadRuntime;
 using PhotonCadRuntime.IndustrialProvider;
+using PhotonCadVerification;
 
 namespace HermesDesktop;
 
@@ -22,7 +24,25 @@ internal sealed record IndustrialMutationRequest(
     long BaseRevision,
     string EntityId,
     string CapabilityId,
-    IReadOnlyDictionary<string, double> Inputs);
+    IReadOnlyDictionary<string, double> NumericInputs,
+    IReadOnlyDictionary<string, PhotonCadIndustrialCatalogInputValue?> CatalogInputs,
+    AssemblyPlacementInputs? AssemblyInputs,
+    AssemblyTransformInputs? AssemblyTransform,
+    AssemblyRemovalInputs? AssemblyRemoval);
+
+internal sealed record AssemblyPlacementInputs(
+    string SourceEntityId,
+    string? ParentOccurrenceId,
+    IReadOnlyList<double> Transform);
+
+internal sealed record AssemblyRemovalInputs(
+    string OccurrenceId,
+    string SourceEntityId);
+
+internal sealed record AssemblyTransformInputs(
+    string OccurrenceId,
+    string SourceEntityId,
+    IReadOnlyList<double> Transform);
 
 internal sealed record IndustrialMutationBinding(
     PhotonCadRuntimeSyncRequest Request,
@@ -49,16 +69,22 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
 
     private const int MaximumRequestCharacters = 128;
     private const int MaximumActiveCoreRequests = 8;
+    private const int MaximumPendingPreviewRefreshes = 8;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan PreviewRefreshMarkerTimeToLive = TimeSpan.FromSeconds(15);
 
     private readonly string _installRoot;
     private readonly Action<object> _post;
     private readonly Func<CancellationToken, ValueTask<ICadRuntimeBroker>> _brokerFactory;
     private readonly Func<IndustrialMutationRequest, CancellationToken, ValueTask<IndustrialMutationBinding>>? _industrialBindingFactory;
+    private readonly Func<PhotonCadCanonicalProject, IReadOnlyList<PhotonCadCommittedVerificationCheck>, CancellationToken, ValueTask<PhotonCadCommittedVerificationResult>>? _industrialVerification;
     private readonly bool _legacyBrokerTestMode;
     private readonly PhotonCadProjectDesktopDispatcher _projects;
     private readonly PhotonCadCanonicalProjectCodecV1? _projectCodec;
     private readonly PhotonCadWindowsDesktopProjectHost? _projectHost;
+    private readonly IPhotonCadWindowsFileDialog? _projectDialog;
+    private readonly PhotonCadProjectWireProjection? _projectProjection;
+    private readonly PhotonCadStepPassthroughConversionAuthority _stepImportConversion = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _active = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _bindingGate = new(1, 1);
     private readonly SemaphoreSlim _resetGate = new(1, 1);
@@ -68,8 +94,12 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     private readonly object _previewLock = new();
     private readonly object _rendererLock = new();
     private readonly PhotonCadPreviewCustody _previewCustody;
+    private readonly PhotonCadStepExportHost _stepExportHost;
     private readonly Dictionary<string, PhotonCadPreviewReceipt> _previewReceipts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PhotonCadPreviewContext> _previewResources = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PendingPreviewRefreshMarker> _pendingPreviewRefreshes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, PendingPreviewRefreshMarker> _inflightPreviewRefreshes = new(StringComparer.Ordinal);
+    private readonly TimeProvider _previewRefreshTimeProvider;
     private Task<ICadRuntimeBroker>? _brokerTask;
     private Task<PhotonCadIndustrialProviderRuntime>? _industrialRuntimeTask;
     private TaskCompletionSource? _handlersDrained;
@@ -80,6 +110,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     private long _completedResetEpoch = -1;
     private int _inflightHandlers;
     private bool _rendererAdmissionOpen;
+    private string? _activeStepExportRequestId;
     private bool _disposed;
 
     internal PhotonCadBridge(
@@ -91,7 +122,10 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         PhotonCadWindowsDesktopProjectHost? runtimeProjectHost = null,
         PhotonCadCanonicalProjectCodecV1? projectCodec = null,
         Uri? workbenchOrigin = null,
-        Func<IndustrialMutationRequest, CancellationToken, ValueTask<IndustrialMutationBinding>>? industrialBindingFactory = null)
+        Func<IndustrialMutationRequest, CancellationToken, ValueTask<IndustrialMutationBinding>>? industrialBindingFactory = null,
+        Func<PhotonCadCanonicalProject, IReadOnlyList<PhotonCadCommittedVerificationCheck>, CancellationToken, ValueTask<PhotonCadCommittedVerificationResult>>? industrialVerification = null,
+        PhotonCadStepExportHost? stepExportHost = null,
+        TimeProvider? previewRefreshTimeProvider = null)
     {
         _installRoot = Path.GetFullPath(installRoot ?? throw new ArgumentNullException(nameof(installRoot)));
         ArgumentNullException.ThrowIfNull(post);
@@ -100,22 +134,26 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             lock (_rendererLock)
             {
                 if (_disposed || !_rendererAdmissionOpen) return;
+                ProcessProjectLifecycleResult(message);
                 LogCadResultFrame(message);
                 post(message);
             }
         };
         _brokerFactory = brokerFactory ?? ProvisionBrokerAsync;
         _industrialBindingFactory = industrialBindingFactory;
+        _industrialVerification = industrialVerification;
         _legacyBrokerTestMode = brokerFactory is not null && industrialBindingFactory is null;
         if ((runtimeProjectHost is null) != (projectCodec is null))
             throw new ArgumentException("The runtime project host and codec must be supplied together.");
         if (projects is null)
         {
             _projectCodec = projectCodec ?? new PhotonCadCanonicalProjectCodecV1();
-            _projectHost = runtimeProjectHost ?? new PhotonCadWindowsDesktopProjectHost(_projectCodec, projectDialog);
+            _projectDialog = projectDialog ?? new PhotonCadWindowsFileDialog(() => System.Windows.Application.Current?.MainWindow);
+            _projectHost = runtimeProjectHost ?? new PhotonCadWindowsDesktopProjectHost(_projectCodec, _projectDialog);
+            _projectProjection = new PhotonCadProjectWireProjection(_projectCodec);
             _projects = new PhotonCadProjectDesktopDispatcher(
                 _projectHost,
-                new PhotonCadProjectWireProjection(_projectCodec),
+                _projectProjection,
                 _post);
         }
         else
@@ -123,11 +161,17 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             _projects = projects;
             _projectHost = runtimeProjectHost;
             _projectCodec = projectCodec;
+            _projectDialog = projectDialog;
+            _projectProjection = projectCodec is null ? null : new PhotonCadProjectWireProjection(projectCodec);
         }
         var previewOrigin = workbenchOrigin ?? new Uri("https://127.0.0.1:9119/", UriKind.Absolute);
         _previewCustody = new PhotonCadPreviewCustody(
             _projectCodec ?? new PhotonCadCanonicalProjectCodecV1(),
             new PhotonCadPreviewCustodyOptions(previewOrigin, PreviewResourcePathPrefix));
+        var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        _stepExportHost = stepExportHost ?? new PhotonCadStepExportHost(
+            Path.Combine(localData, "PhotosAgapeAphthartos", "PhotonCad", "StepExportJournal"));
+        _previewRefreshTimeProvider = previewRefreshTimeProvider ?? TimeProvider.System;
     }
 
     private static void LogCadResultFrame(object message)
@@ -215,11 +259,20 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 case "photonCad.verify":
                     await VerifyAsync(message).ConfigureAwait(false);
                     break;
+                case "photonCad.step.export":
+                    await ExportStepAsync(message).ConfigureAwait(false);
+                    break;
+                case "photonCad.step.import":
+                    await ImportStepAsync(message).ConfigureAwait(false);
+                    break;
                 case "photonCad.cancel":
                     Cancel(message);
                     break;
                 case "photonCad.preview.resolve":
                     await ResolvePreviewAsync(message).ConfigureAwait(false);
+                    break;
+                case "photonCad.preview.hydrate":
+                    await HydratePreviewAsync(message).ConfigureAwait(false);
                     break;
                 case "photonCad.preview.cancel":
                     Cancel(message);
@@ -294,12 +347,43 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         lock (_rendererLock)
         {
             if (_disposed || !_rendererAdmissionOpen) return Task.CompletedTask;
-            if (type is "photonCad.project.open" or "photonCad.project.reopen" or "photonCad.project.refresh"
-                or "photonCad.project.saveAs" or "photonCad.project.close") RevokeAllPreviews();
+            PendingPreviewRefreshMarker? marker = null;
+            var preservesCommittedPreview = type == "photonCad.project.refresh"
+                && TryBeginPreviewRefresh(message, out marker);
+            if (!preservesCommittedPreview && marker is not null)
+                RevokeProjectPreviews(marker.CadSessionId, marker.ProjectId);
+            if (!preservesCommittedPreview && type is ("photonCad.project.open" or "photonCad.project.reopen" or "photonCad.project.refresh"
+                or "photonCad.project.saveAs" or "photonCad.project.close"))
+            {
+                if (TryProjectBinding(message, out var cadSessionId, out var projectId))
+                    RevokeProjectPreviews(cadSessionId, projectId);
+                else
+                    RevokeAllPreviews();
+            }
             // PhotonCadProjectDesktopDispatcher begins/reserves synchronously before its first await.
             // Starting it while holding the renderer gate means reset either sees and cancels the
             // reservation, or closes admission first and this old-generation request is dropped.
-            return _projects.HandleAsync(type, message);
+            var dispatch = _projects.HandleAsync(type, message);
+            return preservesCommittedPreview && marker is not null
+                ? ObservePreviewRefreshAsync(marker.RequestId, dispatch)
+                : dispatch;
+        }
+    }
+
+    private async Task ObservePreviewRefreshAsync(string requestId, Task dispatch)
+    {
+        try
+        {
+            await dispatch.ConfigureAwait(false);
+        }
+        finally
+        {
+            PendingPreviewRefreshMarker? abandoned = null;
+            lock (_previewLock)
+            {
+                if (_inflightPreviewRefreshes.Remove(requestId, out var marker)) abandoned = marker;
+            }
+            if (abandoned is not null) RevokeProjectPreviews(abandoned.CadSessionId, abandoned.ProjectId);
         }
     }
 
@@ -316,13 +400,14 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             {
                 try
                 {
-                    await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false);
+                    var runtime = await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false);
+                    var providerCatalog = await runtime.GetCatalogAsync(cancellationToken).ConfigureAwait(false);
                     _post(new
                     {
                         type = "photonCad.describe.result",
                         version = ProtocolVersion,
                         requestId,
-                        value = CadWireProjection.Description(IndustrialRendererDescription()),
+                        value = CadWireProjection.Description(IndustrialRendererDescription(providerCatalog)),
                     });
                 }
                 catch (Exception exception) when (IsIndustrialAvailabilityFailure(exception))
@@ -465,6 +550,11 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 PostError(requestId, "invalid_request", retryable: false);
                 return;
             }
+            if (!_legacyBrokerTestMode)
+            {
+                await VerifyCommittedIndustrialAsync(external, checks, cancellationToken).ConfigureAwait(false);
+                return;
+            }
             var broker = await GetBrokerAsync(cancellationToken).ConfigureAwait(false);
             var description = RendererDescription(broker);
             if (description.Availability != CadRuntimeAvailability.Ready)
@@ -524,6 +614,402 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         }).ConfigureAwait(false);
     }
 
+    private async Task VerifyCommittedIndustrialAsync(
+        ExternalRuntimeRequest external,
+        IReadOnlyList<CadVerificationCheck> checks,
+        CancellationToken cancellationToken)
+    {
+        if (_projectHost is null)
+        {
+            PostVerificationUnavailable(external, "committed_project_host_unavailable");
+            return;
+        }
+
+        try
+        {
+            var readback = await _projectHost.ResolveCommittedProjectReadbackAsync(
+                external.RequestId,
+                external.SessionId,
+                external.ProjectId,
+                external.Revision,
+                cancellationToken).ConfigureAwait(false);
+            var project = readback.Project;
+            var canonical = new PhotonCadCanonicalVerifier().Verify(
+                project.CanonicalBytes,
+                new PhotonCadVerificationRequest(
+                    readback.ByteLength,
+                    readback.StorageDigest,
+                    project.ContentDigest,
+                    project.BomDigest),
+                cancellationToken);
+            if (!canonical.Verified
+                || !StringComparer.Ordinal.Equals(canonical.ProjectId, external.ProjectId)
+                || canonical.Revision != external.Revision)
+            {
+                var failedReason = canonical.Checks.FirstOrDefault(value => value.Status == PhotonCadVerificationStatus.Failed)?.Reason
+                    ?? "canonical_verification_failed";
+                PostVerificationFailed(external, failedReason);
+                return;
+            }
+            var industrialChecks = checks.Select(value => value switch
+            {
+                CadVerificationCheck.ValidSolids => PhotonCadCommittedVerificationCheck.ValidSolids,
+                CadVerificationCheck.Interference => PhotonCadCommittedVerificationCheck.Interference,
+                CadVerificationCheck.Dimensions => PhotonCadCommittedVerificationCheck.Dimensions,
+                CadVerificationCheck.AssemblyStructure => PhotonCadCommittedVerificationCheck.AssemblyStructure,
+                CadVerificationCheck.ExportReadiness => PhotonCadCommittedVerificationCheck.ExportReadiness,
+                _ => throw new InvalidOperationException("committed_verification_check_invalid"),
+            }).ToArray();
+            var result = _industrialVerification is not null
+                ? await _industrialVerification(project, industrialChecks, cancellationToken).ConfigureAwait(false)
+                : await (await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false))
+                    .VerifyCommittedAsync(project, industrialChecks, cancellationToken).ConfigureAwait(false);
+            if (result.Revision != external.Revision)
+            {
+                PostVerificationUnavailable(external, "committed_project_revision_mismatch");
+                return;
+            }
+            if (!result.Available)
+            {
+                PostVerificationUnavailable(external, result.Reason);
+                return;
+            }
+            _post(new
+            {
+                type = "photonCad.verify.result",
+                version = ProtocolVersion,
+                value = new
+                {
+                    contractVersion = ProtocolVersion,
+                    requestId = external.RequestId,
+                    projectId = external.ProjectId,
+                    revision = external.Revision,
+                    status = result.Passed ? "passed" : "failed",
+                    stale = false,
+                    issues = result.Passed
+                        ? Array.Empty<object>()
+                        : new[]
+                        {
+                            new
+                            {
+                                code = SafeReason(result.Reason),
+                                severity = "error",
+                                message = "The committed CAD project failed the selected verification checks.",
+                                entityIds = Array.Empty<string>(),
+                            },
+                        },
+                    measuredAtUtc = Utc(result.MeasuredAtUtc),
+                },
+            });
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) when (exception is PhotonCadProjectException or ArgumentException or InvalidOperationException
+            or IOException or UnauthorizedAccessException or JsonException)
+        {
+            PostVerificationUnavailable(external, "committed_verification_unavailable");
+        }
+    }
+
+    private async Task ExportStepAsync(JsonElement message)
+    {
+        if (!TryEnvelope(message, out var requestId)
+            || message.EnumerateObject().Count() != 9
+            || !TryIdentifier(message, "sessionId", out var sessionId)
+            || !TryIdentifier(message, "projectId", out var projectId)
+            || !TryRevision(message, "revision", out var revision)
+            || !TryIdentifier(message, "contentDigest", out var contentDigest)
+            || !TryIdentifier(message, "entityId", out var entityId)
+            || !IsSha256Digest(contentDigest))
+        {
+            if (TryWireEnvelope(message, out requestId)) PostError(requestId, "invalid-step-export-request", retryable: false);
+            return;
+        }
+
+        CancellationTokenSource? prior = null;
+        lock (_rendererLock)
+        {
+            if (_activeStepExportRequestId is { } priorId) _active.TryGetValue(priorId, out prior);
+            _activeStepExportRequestId = requestId;
+        }
+        prior?.Cancel();
+        try
+        {
+            await RunAsync(requestId, async cancellationToken =>
+            {
+                if (_projectHost is null || _projectCodec is null)
+                {
+                    PostStepExportResult(requestId, "unavailable", "committed-project-host-unavailable", projectId, revision);
+                    return;
+                }
+                try
+                {
+                    var project = await _projectHost.ResolveCommittedProjectAsync(requestId, sessionId, projectId, revision, cancellationToken).ConfigureAwait(false);
+                    if (project.Dirty || !FixedDigestEquals(project.ContentDigest, contentDigest))
+                    {
+                        PostStepExportResult(requestId, "rejected", "committed-project-binding-mismatch", projectId, revision);
+                        return;
+                    }
+                    var state = _projectCodec.Inspect(project);
+                    var entity = state.Entities.SingleOrDefault(value => StringComparer.Ordinal.Equals(value.Id, entityId));
+                    if (entity is null || entity.Kind is not (PhotonCadEntityKindV1.Body or PhotonCadEntityKindV1.Part))
+                    {
+                        PostStepExportResult(requestId, "rejected", "step-export-entity-unavailable", projectId, revision);
+                        return;
+                    }
+                    var steps = state.Artifacts.Where(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry
+                            && value.Kind == PhotonCadArtifactKindV1.Step
+                            && StringComparer.Ordinal.Equals(value.OwnerEntityId, entityId))
+                        .Take(2).ToArray();
+                    if (steps.Length != 1)
+                    {
+                        PostStepExportResult(requestId, "rejected", "step-export-artifact-ambiguous", projectId, revision);
+                        return;
+                    }
+                    string rendererSession;
+                    lock (_rendererLock) rendererSession = _rendererSessionId;
+                    var receipt = await _stepExportHost.ExportAsync(rendererSession, sessionId, projectId, revision,
+                        entityId, steps[0].Content, steps[0].Digest, cancellationToken).ConfigureAwait(false);
+                    if (receipt is null)
+                    {
+                        PostStepExportResult(requestId, "cancelled", "native-picker-cancelled", projectId, revision);
+                        return;
+                    }
+                    _post(new
+                    {
+                        type = "photonCad.step.export.result",
+                        version = ProtocolVersion,
+                        value = new
+                        {
+                            contractVersion = ProtocolVersion,
+                            requestId,
+                            projectId,
+                            revision,
+                            status = "committed",
+                            reason = "step-export-committed",
+                            entityId,
+                            contentDigest = receipt.ContentDigest,
+                            byteLength = receipt.ByteLength,
+                            destinationLabel = receipt.DestinationLabel,
+                        },
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    PostStepExportResult(requestId, "cancelled", "step-export-cancelled", projectId, revision);
+                }
+                catch (Exception exception) when (exception is PhotonCadProjectException or PhotonCadArtifacts.PhotonCadArtifactException
+                    or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    PostStepExportResult(requestId, "rejected", "step-export-rejected", projectId, revision);
+                }
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_rendererLock)
+                if (StringComparer.Ordinal.Equals(_activeStepExportRequestId, requestId)) _activeStepExportRequestId = null;
+        }
+    }
+
+    private void PostStepExportResult(string requestId, string status, string reason, string? projectId, long revision)
+    {
+        if (projectId is null) return;
+        _post(new
+        {
+            type = "photonCad.step.export.result",
+            version = ProtocolVersion,
+            value = new { contractVersion = ProtocolVersion, requestId, projectId, revision, status, reason },
+        });
+    }
+
+    private async Task ImportStepAsync(JsonElement message)
+    {
+        if (!TryEnvelope(message, out var requestId) || message.EnumerateObject().Count() != 4)
+        {
+            if (TryWireEnvelope(message, out requestId))
+                PostStepImportResult(requestId, "rejected", "invalid-step-import-request");
+            return;
+        }
+
+        await RunAsync(requestId, async cancellationToken =>
+        {
+            if (_projectDialog is null || _projectHost is null || _projectCodec is null || _projectProjection is null)
+            {
+                PostStepImportResult(requestId, "unavailable", "step-import-host-unavailable");
+                return;
+            }
+
+            PhotonCadWindowsDialogResult sourceSelection;
+            try
+            {
+                sourceSelection = _projectDialog.Show("import-step");
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or PhotonCadProjectException)
+            {
+                PostStepImportResult(requestId, "unavailable", "step-source-picker-unavailable");
+                return;
+            }
+            if (!sourceSelection.Accepted)
+            {
+                PostStepImportResult(requestId, "cancelled", "native-picker-cancelled");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(sourceSelection.ExactPath))
+            {
+                PostStepImportResult(requestId, "rejected", "step-source-picker-invalid");
+                return;
+            }
+
+            PhotonCadConversionResult converted;
+            var displayName = SafeImportedStepDisplayName(sourceSelection.ExactPath);
+            try
+            {
+                await using var source = new FileStream(
+                    sourceSelection.ExactPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    bufferSize: 64 * 1024,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                converted = await _stepImportConversion.ConvertAsync(
+                    Path.GetFileName(sourceSelection.ExactPath),
+                    source,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                PostStepImportResult(requestId, "cancelled", "step-import-cancelled");
+                return;
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException
+                or NotSupportedException or ArgumentException)
+            {
+                PostStepImportResult(requestId, "rejected", "step-source-invalid");
+                return;
+            }
+
+            PhotonCadIndustrialProviderRuntime runtime;
+            try
+            {
+                runtime = await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (IsIndustrialAvailabilityFailure(exception))
+            {
+                PostStepImportResult(requestId, "unavailable", "industrial-runtime-unavailable");
+                return;
+            }
+
+            PhotonCadDesktopProjectPickerOutcome destination;
+            try
+            {
+                destination = await _projectHost.ChooseWorkspaceAsync(
+                    $"step-import-pick-{Guid.NewGuid():N}",
+                    "new",
+                    displayName,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                PostStepImportResult(requestId, "cancelled", "step-import-cancelled");
+                return;
+            }
+            catch (Exception exception) when (exception is PhotonCadProjectException or InvalidOperationException)
+            {
+                PostStepImportResult(requestId, "unavailable", "step-destination-picker-unavailable");
+                return;
+            }
+            if (destination.Status != PhotonCadNativeServiceStatus.Selected || destination.Workspace is null)
+            {
+                var status = destination.Status == PhotonCadNativeServiceStatus.Cancelled ? "cancelled" :
+                    destination.Status == PhotonCadNativeServiceStatus.Unavailable ? "unavailable" : "rejected";
+                PostStepImportResult(requestId, status, destination.Reason);
+                return;
+            }
+
+            try
+            {
+                var created = await _projectHost.CreateProjectAsync(
+                    new PhotonCadProjectCreateRequest(
+                        $"step-import-create-{Guid.NewGuid():N}",
+                        destination.Workspace.WorkspaceHandle,
+                        displayName,
+                        PhotonCadProjectUnit.Millimeter),
+                    cancellationToken).ConfigureAwait(false);
+                var digest = $"sha256:{converted.Artifact.Digest}";
+                var evidence = new PhotonCadProviderEvidence(
+                    PhotonCadBackendV1.Geometry,
+                    "photon.cad.step.import.v1",
+                    ["iso-10303-21"],
+                    digest,
+                    "external.step.part21.v1",
+                    digest,
+                    digest,
+                    digest,
+                    digest,
+                    new PhotonCadSourceIdentityV1("user-supplied-step", "part21", digest, "user-supplied"));
+                var bound = runtime.BindImportedStepPart(
+                    requestId,
+                    created.Snapshot.SessionId,
+                    created.Snapshot.ProjectId,
+                    created.Snapshot.Revision,
+                    $"imported-{Guid.NewGuid():N}",
+                    $"IMPORT-{converted.Artifact.Digest[..12].ToUpperInvariant()}",
+                    displayName,
+                    converted.Artifact.Content,
+                    digest,
+                    evidence);
+                var mapper = new PhotonCadRuntimeCanonicalMapperV1(_projectCodec);
+                var registration = _projectHost.CreateRuntimeProjectSynchronizer(bound.Provider, bound.Compensator, mapper);
+                var result = await _projectHost.ApplyRuntimeMutationAsync(registration, bound.Request, cancellationToken).ConfigureAwait(false);
+                var committed = new PhotonCadProjectDocument(
+                    created.WorkspaceHandle,
+                    created.ProjectHandle,
+                    result.SavedProject,
+                    result.SavedProject.ContentDigest,
+                    result.SavedProject.Revision,
+                    created.OpenedAtUtc);
+                _post(new
+                {
+                    type = "photonCad.step.import.result",
+                    version = ProtocolVersion,
+                    value = new
+                    {
+                        contractVersion = ProtocolVersion,
+                        requestId,
+                        status = "opened",
+                        reason = "step-import-committed",
+                        document = _projectProjection.Document(committed),
+                    },
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                PostStepImportResult(requestId, "cancelled", "step-import-cancelled");
+            }
+            catch (Exception exception) when (exception is PhotonCadProjectException or PhotonCadRuntimeSyncException
+                or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+            {
+                PostStepImportResult(requestId, "rejected", "step-import-commit-failed");
+            }
+        }).ConfigureAwait(false);
+    }
+
+    private void PostStepImportResult(string requestId, string status, string reason) => _post(new
+    {
+        type = "photonCad.step.import.result",
+        version = ProtocolVersion,
+        value = new { contractVersion = ProtocolVersion, requestId, status, reason },
+    });
+
+    private static string SafeImportedStepDisplayName(string exactPath)
+    {
+        var value = Path.GetFileNameWithoutExtension(exactPath).Trim();
+        var safe = new string(value.Take(120)
+            .Select(character => char.IsControl(character) || character is '\\' or '/' ? '-' : character)
+            .ToArray()).Trim().TrimEnd('.', ' ');
+        return string.IsNullOrWhiteSpace(safe) || safe is "." or ".." ? "Imported STEP part" : safe;
+    }
+
     private async Task ExecuteIndustrialAsync(
         ExternalRuntimeRequest external,
         CadOperationMode mode,
@@ -532,17 +1018,84 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         JsonElement targetsElement,
         CancellationToken cancellationToken)
     {
-        if (_projectHost is null || _projectCodec is null
-            || mode != CadOperationMode.Scratch
-            || capabilityId is not (CadPinnedCapabilityCatalog.BoxCapabilityId or CadPinnedCapabilityCatalog.CylinderCapabilityId)
-            || targetsElement.GetArrayLength() != 0)
+        if (_projectHost is null || _projectCodec is null || mode != CadOperationMode.Scratch)
         {
             PostOperationUnavailable(external, "industrial_persisted_operation_unavailable");
             return;
         }
 
-        IReadOnlyDictionary<string, double> inputs;
-        try { inputs = ParseIndustrialInputs(capabilityId, inputsElement); }
+        IReadOnlyDictionary<string, double> numericInputs = new Dictionary<string, double>(StringComparer.Ordinal);
+        IReadOnlyDictionary<string, PhotonCadIndustrialCatalogInputValue?> catalogInputs =
+            new Dictionary<string, PhotonCadIndustrialCatalogInputValue?>(StringComparer.Ordinal);
+        AssemblyPlacementInputs? assemblyInputs = null;
+        AssemblyTransformInputs? assemblyTransform = null;
+        AssemblyRemovalInputs? assemblyRemoval = null;
+        try
+        {
+            if (capabilityId == PhotonCadAssemblyContract.PlaceCapabilityId)
+            {
+                if (targetsElement.GetArrayLength() != 0) throw new ArgumentException("targets_invalid", nameof(targetsElement));
+                assemblyInputs = ParseAssemblyPlacementInputs(inputsElement);
+            }
+            else if (capabilityId == PhotonCadAssemblyContract.TransformCapabilityId)
+            {
+                if (targetsElement.GetArrayLength() != 1)
+                    throw new ArgumentException("assembly_transform_shape_invalid", nameof(targetsElement));
+                var target = targetsElement.EnumerateArray().Single();
+                var occurrenceId = target.ValueKind == JsonValueKind.String ? target.GetString() : null;
+                if (!IsIdentifier(occurrenceId)) throw new ArgumentException("assembly_transform_target_invalid", nameof(targetsElement));
+                var project = await _projectHost.ResolveCommittedProjectAsync(
+                    $"assembly-transform-resolve-{Guid.NewGuid():N}",
+                    external.SessionId,
+                    external.ProjectId,
+                    external.Revision,
+                    cancellationToken).ConfigureAwait(false);
+                var occurrence = _projectCodec.Inspect(project).Occurrences
+                    .SingleOrDefault(value => StringComparer.Ordinal.Equals(value.OccurrenceId, occurrenceId))
+                    ?? throw new ArgumentException("assembly_transform_target_missing", nameof(targetsElement));
+                assemblyTransform = new AssemblyTransformInputs(
+                    occurrence.OccurrenceId,
+                    occurrence.SourceEntityId,
+                    ParseAssemblyTransformInputs(inputsElement));
+            }
+            else if (capabilityId == PhotonCadAssemblyContract.RemoveCapabilityId)
+            {
+                if (inputsElement.EnumerateObject().Any() || targetsElement.GetArrayLength() != 1)
+                    throw new ArgumentException("assembly_remove_shape_invalid", nameof(targetsElement));
+                var target = targetsElement.EnumerateArray().Single();
+                var occurrenceId = target.ValueKind == JsonValueKind.String ? target.GetString() : null;
+                if (!IsIdentifier(occurrenceId)) throw new ArgumentException("assembly_remove_target_invalid", nameof(targetsElement));
+                var project = await _projectHost.ResolveCommittedProjectAsync(
+                    $"assembly-remove-resolve-{Guid.NewGuid():N}",
+                    external.SessionId,
+                    external.ProjectId,
+                    external.Revision,
+                    cancellationToken).ConfigureAwait(false);
+                var occurrence = _projectCodec.Inspect(project).Occurrences
+                    .SingleOrDefault(value => StringComparer.Ordinal.Equals(value.OccurrenceId, occurrenceId))
+                    ?? throw new ArgumentException("assembly_remove_target_missing", nameof(targetsElement));
+                assemblyRemoval = new AssemblyRemovalInputs(occurrence.OccurrenceId, occurrence.SourceEntityId);
+            }
+            else if (capabilityId is CadPinnedCapabilityCatalog.BoxCapabilityId or CadPinnedCapabilityCatalog.CylinderCapabilityId)
+            {
+                if (targetsElement.GetArrayLength() != 0) throw new ArgumentException("targets_invalid", nameof(targetsElement));
+                numericInputs = ParseIndustrialInputs(capabilityId, inputsElement);
+            }
+            else
+            {
+                if (targetsElement.GetArrayLength() != 0) throw new ArgumentException("targets_invalid", nameof(targetsElement));
+                var runtime = await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false);
+                var catalog = await runtime.GetCatalogAsync(cancellationToken).ConfigureAwait(false);
+                var item = catalog.Items.SingleOrDefault(candidate => StringComparer.Ordinal.Equals(candidate.CapabilityId, capabilityId))
+                    ?? throw new ArgumentException("industrial_catalog_capability_not_found", nameof(capabilityId));
+                catalogInputs = ParseIndustrialCatalogInputs(item, inputsElement);
+            }
+        }
+        catch (PhotonCadProjectException)
+        {
+            PostOperationUnavailable(external, "industrial_project_binding_unavailable");
+            return;
+        }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or JsonException)
         {
             PostError(external.RequestId, "invalid_request", retryable: false);
@@ -556,7 +1109,11 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             external.Revision,
             $"entity-{Guid.NewGuid():N}",
             capabilityId,
-            inputs);
+            numericInputs,
+            catalogInputs,
+            assemblyInputs,
+            assemblyTransform,
+            assemblyRemoval);
         IndustrialMutationBinding binding;
         try { binding = await CreateIndustrialBindingAsync(request, cancellationToken).ConfigureAwait(false); }
         catch (Exception exception) when (IsIndustrialAvailabilityFailure(exception))
@@ -566,7 +1123,27 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         }
 
         var mapper = new PhotonCadRuntimeCanonicalMapperV1(_projectCodec);
-        var registration = _projectHost.CreateRuntimeProjectSynchronizer(binding.Provider, binding.Compensator, mapper);
+        IPhotonCadSealedMutationProvider provider = binding.Provider;
+        IPhotonCadSealedMutationCompensator compensator = binding.Compensator;
+        if (assemblyInputs is not null)
+        {
+            var guarded = new AssemblyPlacementGuardProvider(binding.Request, assemblyInputs, provider, compensator);
+            provider = guarded;
+            compensator = guarded;
+        }
+        else if (assemblyTransform is not null)
+        {
+            var guarded = new AssemblyTransformGuardProvider(binding.Request, assemblyTransform, provider, compensator);
+            provider = guarded;
+            compensator = guarded;
+        }
+        else if (assemblyRemoval is not null)
+        {
+            var guarded = new AssemblyRemovalGuardProvider(binding.Request, assemblyRemoval, provider, compensator);
+            provider = guarded;
+            compensator = guarded;
+        }
+        var registration = _projectHost.CreateRuntimeProjectSynchronizer(provider, compensator, mapper);
         var result = await _projectHost.ApplyRuntimeMutationAsync(registration, binding.Request, cancellationToken).ConfigureAwait(false);
         PhotonCadPreviewReceipt? preview = null;
         try
@@ -582,6 +1159,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                     && StringComparer.Ordinal.Equals(pair.Value.Context.ProjectId, preview.Context.ProjectId)
                     && !StringComparer.Ordinal.Equals(pair.Key, preview.PreviewId)).Select(pair => pair.Key).ToArray())
                     _previewReceipts.Remove(stale);
+                TryCreatePreviewRefreshMarker(preview.PreviewId, preview.Context, result.SavedProject.ContentDigest);
             }
         }
         catch (Exception exception) when (exception is PhotonCadPreviewException or InvalidOperationException or ArgumentException)
@@ -593,6 +1171,73 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             type = "photonCad.execute.result",
             version = ProtocolVersion,
             value = ExternalCommittedOperationResult(result, external, _projectCodec, preview),
+        });
+    }
+
+    private static AssemblyPlacementInputs ParseAssemblyPlacementInputs(JsonElement inputs)
+    {
+        if (inputs.ValueKind != JsonValueKind.Object) throw new ArgumentException("inputs_invalid", nameof(inputs));
+        var expected = new[] { "parentOccurrenceId", "rotationDegrees", "sourceEntityId", "translation" };
+        var actual = inputs.EnumerateObject().Select(property => property.Name).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        if (!actual.SequenceEqual(expected, StringComparer.Ordinal)) throw new ArgumentException("inputs_invalid", nameof(inputs));
+        if (inputs.GetProperty("sourceEntityId") is not { ValueKind: JsonValueKind.String } source
+            || source.GetString() is not { } sourceEntityId)
+            throw new ArgumentException("inputs_invalid", nameof(inputs));
+        var parentElement = inputs.GetProperty("parentOccurrenceId");
+        var parentOccurrenceId = parentElement.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.String => parentElement.GetString(),
+            _ => throw new ArgumentException("inputs_invalid", nameof(inputs)),
+        };
+        var translation = ParseBoundedVector(inputs.GetProperty("translation"), 1_000_000);
+        var rotation = ParseBoundedVector(inputs.GetProperty("rotationDegrees"), 360);
+        return new AssemblyPlacementInputs(
+            sourceEntityId,
+            parentOccurrenceId,
+            RigidTransform(translation, rotation));
+    }
+
+    private static IReadOnlyList<double> ParseAssemblyTransformInputs(JsonElement inputs)
+    {
+        if (inputs.ValueKind != JsonValueKind.Object) throw new ArgumentException("inputs_invalid", nameof(inputs));
+        var expected = new[] { "rotationDegrees", "translation" };
+        var actual = inputs.EnumerateObject().Select(property => property.Name).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        if (!actual.SequenceEqual(expected, StringComparer.Ordinal)) throw new ArgumentException("inputs_invalid", nameof(inputs));
+        var translation = ParseBoundedVector(inputs.GetProperty("translation"), 1_000_000);
+        var rotation = ParseBoundedVector(inputs.GetProperty("rotationDegrees"), 360);
+        return RigidTransform(translation, rotation);
+    }
+
+    private static CadVector3 ParseBoundedVector(JsonElement value, double maximumAbsolute)
+    {
+        if (value.ValueKind != JsonValueKind.Object
+            || value.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)
+                .SequenceEqual(new[] { "x", "y", "z" }, StringComparer.Ordinal) is false)
+            throw new ArgumentException("inputs_invalid", nameof(value));
+        var x = RequiredDouble(value, "x");
+        var y = RequiredDouble(value, "y");
+        var z = RequiredDouble(value, "z");
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z)
+            || Math.Abs(x) > maximumAbsolute || Math.Abs(y) > maximumAbsolute || Math.Abs(z) > maximumAbsolute)
+            throw new ArgumentException("inputs_invalid", nameof(value));
+        return new CadVector3(x, y, z);
+    }
+
+    private static IReadOnlyList<double> RigidTransform(CadVector3 translation, CadVector3 rotationDegrees)
+    {
+        var x = rotationDegrees.X * Math.PI / 180d;
+        var y = rotationDegrees.Y * Math.PI / 180d;
+        var z = rotationDegrees.Z * Math.PI / 180d;
+        var sx = Math.Sin(x); var cx = Math.Cos(x);
+        var sy = Math.Sin(y); var cy = Math.Cos(y);
+        var sz = Math.Sin(z); var cz = Math.Cos(z);
+        return Array.AsReadOnly(new[]
+        {
+            cz * cy, (cz * sy * sx) - (sz * cx), (cz * sy * cx) + (sz * sx), translation.X,
+            sz * cy, (sz * sy * sx) + (cz * cx), (sz * sy * cx) - (cz * sx), translation.Y,
+            -sy, cy * sx, cy * cx, translation.Z,
+            0d, 0d, 0d, 1d,
         });
     }
 
@@ -616,6 +1261,43 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         return result;
     }
 
+    private static IReadOnlyDictionary<string, PhotonCadIndustrialCatalogInputValue?> ParseIndustrialCatalogInputs(
+        PhotonCadIndustrialCatalogItem item,
+        JsonElement inputs)
+    {
+        if (inputs.ValueKind != JsonValueKind.Object) throw new ArgumentException("inputs_invalid", nameof(inputs));
+        var expected = item.Parameters.Select(parameter => parameter.Id).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        var actual = inputs.EnumerateObject().Select(property => property.Name).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        if (!actual.SequenceEqual(expected, StringComparer.Ordinal)) throw new ArgumentException("inputs_invalid", nameof(inputs));
+        var result = new Dictionary<string, PhotonCadIndustrialCatalogInputValue?>(StringComparer.Ordinal);
+        foreach (var parameter in item.Parameters)
+        {
+            var value = inputs.GetProperty(parameter.Id);
+            if (value.ValueKind == JsonValueKind.Null)
+            {
+                result.Add(parameter.Id, null);
+                continue;
+            }
+            PhotonCadIndustrialCatalogInputValue converted = parameter.Kind switch
+            {
+                PhotonCadIndustrialParameterKind.Number when value.ValueKind == JsonValueKind.Number
+                    && value.TryGetDouble(out var number) && double.IsFinite(number) =>
+                    PhotonCadIndustrialCatalogInputValue.Number(number),
+                PhotonCadIndustrialParameterKind.Integer when value.ValueKind == JsonValueKind.Number
+                    && value.TryGetInt64(out var integer) => PhotonCadIndustrialCatalogInputValue.Integer(integer),
+                PhotonCadIndustrialParameterKind.Boolean when value.ValueKind is JsonValueKind.True or JsonValueKind.False =>
+                    PhotonCadIndustrialCatalogInputValue.Boolean(value.GetBoolean()),
+                PhotonCadIndustrialParameterKind.Choice when value.ValueKind == JsonValueKind.String
+                    && value.GetString() is { } token
+                    && parameter.Choices.Any(choice => StringComparer.Ordinal.Equals(choice.Token, token)) =>
+                    PhotonCadIndustrialCatalogInputValue.Choice(token),
+                _ => throw new ArgumentException("inputs_invalid", nameof(inputs)),
+            };
+            result.Add(parameter.Id, converted);
+        }
+        return result;
+    }
+
     private async ValueTask<IndustrialMutationBinding> CreateIndustrialBindingAsync(
         IndustrialMutationRequest request,
         CancellationToken cancellationToken)
@@ -623,11 +1305,66 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         if (_industrialBindingFactory is not null)
             return await _industrialBindingFactory(request, cancellationToken).ConfigureAwait(false);
         var runtime = await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false);
-        var bound = request.CapabilityId == CadPinnedCapabilityCatalog.BoxCapabilityId
-            ? runtime.BindBox(request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, request.EntityId,
-                request.Inputs["length"], request.Inputs["width"], request.Inputs["height"])
-            : runtime.BindCylinder(request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, request.EntityId,
-                request.Inputs["radius"], request.Inputs["height"]);
+        if (request.AssemblyInputs is { } assembly)
+        {
+            var parentOccurrenceId = assembly.ParentOccurrenceId ?? $"{assembly.SourceEntityId}.occ";
+            var boundAssembly = runtime.BindAssemblyPlace(
+                request.RequestId,
+                request.SessionId,
+                request.ProjectId,
+                request.BaseRevision,
+                request.EntityId,
+                assembly.SourceEntityId,
+                parentOccurrenceId,
+                assembly.Transform);
+            return new IndustrialMutationBinding(boundAssembly.Request, boundAssembly.Provider, boundAssembly.Compensator);
+        }
+        if (request.AssemblyTransform is { } transform)
+        {
+            var boundAssembly = runtime.BindAssemblyTransform(
+                request.RequestId,
+                request.SessionId,
+                request.ProjectId,
+                request.BaseRevision,
+                transform.OccurrenceId,
+                transform.SourceEntityId,
+                transform.Transform);
+            return new IndustrialMutationBinding(boundAssembly.Request, boundAssembly.Provider, boundAssembly.Compensator);
+        }
+        if (request.AssemblyRemoval is { } removal)
+        {
+            var boundAssembly = runtime.BindAssemblyRemove(
+                request.RequestId,
+                request.SessionId,
+                request.ProjectId,
+                request.BaseRevision,
+                removal.OccurrenceId,
+                removal.SourceEntityId);
+            return new IndustrialMutationBinding(boundAssembly.Request, boundAssembly.Provider, boundAssembly.Compensator);
+        }
+        PhotonCadIndustrialBoundMutation bound;
+        if (request.CapabilityId == CadPinnedCapabilityCatalog.BoxCapabilityId)
+        {
+            bound = runtime.BindBox(request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, request.EntityId,
+                request.NumericInputs["length"], request.NumericInputs["width"], request.NumericInputs["height"]);
+        }
+        else if (request.CapabilityId == CadPinnedCapabilityCatalog.CylinderCapabilityId)
+        {
+            bound = runtime.BindCylinder(request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, request.EntityId,
+                request.NumericInputs["radius"], request.NumericInputs["height"]);
+        }
+        else
+        {
+            bound = await runtime.BindCatalogItemAsync(
+                request.RequestId,
+                request.SessionId,
+                request.ProjectId,
+                request.BaseRevision,
+                request.EntityId,
+                request.CapabilityId,
+                request.CatalogInputs,
+                cancellationToken).ConfigureAwait(false);
+        }
         return new IndustrialMutationBinding(bound.Request, bound.Provider, bound.Compensator);
     }
 
@@ -702,22 +1439,41 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             throw new InvalidOperationException("industrial_exact_image_unavailable");
     }
 
-    private static CadRuntimeDescription IndustrialRendererDescription()
+    private static CadRuntimeDescription IndustrialRendererDescription(PhotonCadIndustrialCatalog providerCatalog)
     {
+        ArgumentNullException.ThrowIfNull(providerCatalog);
         var generated = DateTimeOffset.UtcNow;
         var pinned = CadPinnedCapabilityCatalog.Create(generated);
-        var capabilities = pinned.Capabilities
+        var primitiveCapabilities = pinned.Capabilities
             .Where(capability => capability.Id is CadPinnedCapabilityCatalog.BoxCapabilityId or CadPinnedCapabilityCatalog.CylinderCapabilityId)
             .Select(capability => new CadCapability(
                 capability.Id, capability.Backend, capability.Category, capability.Title, capability.Description,
                 capability.Operation, capability.Parameters, capability.Source, previewSupported: true, capability.Experimental))
             .ToArray();
+        var source = new CadSourceIdentity(
+            "bd-warehouse",
+            "0.2.0",
+            IndustrialImageSha256,
+            "redistribution-blocked");
+        var catalogCapabilities = providerCatalog.Items.Select(item => new CadCapability(
+            item.CapabilityId,
+            CadBackend.Assembly,
+            IndustrialCatalogCategory(item.Category),
+            item.Title,
+            "Create one exact catalog part from the verified industrial component library and persist its STEP, preview, occurrence, and BOM row.",
+            CadCapabilityOperationKind.Create,
+            item.Parameters.Select(IndustrialCatalogParameter),
+            source,
+            previewSupported: true,
+            experimental: false)).ToArray();
+        var capabilities = primitiveCapabilities.Concat(catalogCapabilities)
+            .Concat([AssemblyRendererCapability(), AssemblyTransformRendererCapability(), AssemblyRemoveRendererCapability()])
+            .ToArray();
         var catalog = new CadCapabilityCatalog(
-            pinned.CatalogRevision,
+            $"industrial-{providerCatalog.Digest[7..]}-assembly-v1",
             generated,
             capabilities,
-            new CadCatalogCoverage(6, capabilities.Length, 6 - capabilities.Length,
-                ["Only persisted box and cylinder creation with a sealed complete-project GLB preview is mounted."]));
+            new CadCatalogCoverage(capabilities.Length, capabilities.Length, 0));
         var digest = IndustrialImageSha256[7..];
         var receipt = "70969065e209b454e4149235ad2662686629d7a23c44d584938c8a672bb2edb4";
         var bundles = new CadRuntimeBundleSetIdentity(
@@ -727,6 +1483,113 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 "industrial-v1", "linux-amd64", receipt, generated),
             new CadRevision(0));
         return new CadRuntimeDescription(CadRuntimeAvailability.Ready, "ready", "The verified industrial CAD runtime is ready.", bundles, catalog);
+    }
+
+    private static string IndustrialCatalogCategory(string category)
+    {
+        if (StringComparer.Ordinal.Equals(category, "openbuilds")) return "Industrial OpenBuilds";
+        var words = category.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (words.Length == 0) return "Industrial components";
+        return "Industrial " + string.Join(' ', words);
+    }
+
+    internal static CadCapability AssemblyRendererCapability()
+    {
+        var zeroVector = new CadVectorInputValue(new CadVector3(0, 0, 0));
+        return new CadCapability(
+            PhotonCadAssemblyContract.PlaceCapabilityId,
+            CadBackend.Assembly,
+            "Assembly",
+            "Place occurrence",
+            "Place one existing canonical part occurrence and persist the complete assembly preview and derived bill of materials.",
+            CadCapabilityOperationKind.Assemble,
+            [
+                new CadParameterDefinition(
+                    "sourceEntityId", "Source part", "Existing canonical part entity to place.",
+                    CadParameterKind.Entity, required: true),
+                new CadParameterDefinition(
+                    "parentOccurrenceId", "Parent occurrence", "Optional existing occurrence parent; defaults to the source part's canonical occurrence.",
+                    CadParameterKind.Text, required: false, defaultValue: new CadNullInputValue(CadParameterKind.Text)),
+                new CadParameterDefinition(
+                    "translation", "Translation", "Finite millimeter translation bounded to the supported project workspace.",
+                    CadParameterKind.Vector3, required: true, CadParameterUnit.Length,
+                    minimum: -1_000_000, maximum: 1_000_000, defaultValue: zeroVector),
+                new CadParameterDefinition(
+                    "rotationDegrees", "Rotation", "Finite XYZ Euler rotation in degrees; the host derives the rigid transform.",
+                    CadParameterKind.Vector3, required: true, CadParameterUnit.Angle,
+                    minimum: -360, maximum: 360, defaultValue: zeroVector),
+            ],
+            new CadSourceIdentity("bd-warehouse", "0.2.0", IndustrialImageSha256, "redistribution-blocked"),
+            previewSupported: true,
+            experimental: false);
+    }
+
+    internal static CadCapability AssemblyRemoveRendererCapability() => new(
+        PhotonCadAssemblyContract.RemoveCapabilityId,
+        CadBackend.Assembly,
+        "Assembly",
+        "Remove occurrence",
+        "Remove the selected assembly occurrence and its descendants, persist the replacement preview and bill of materials, and retain source part definitions for reuse.",
+        CadCapabilityOperationKind.Assemble,
+        [],
+        new CadSourceIdentity("bd-warehouse", "0.2.0", IndustrialImageSha256, "redistribution-blocked"),
+        previewSupported: true,
+        experimental: false);
+
+    internal static CadCapability AssemblyTransformRendererCapability()
+    {
+        var zeroVector = new CadVectorInputValue(new CadVector3(0, 0, 0));
+        return new CadCapability(
+            PhotonCadAssemblyContract.TransformCapabilityId,
+            CadBackend.Assembly,
+            "Assembly",
+            "Move occurrence",
+            "Replace the selected occurrence's rigid transform, then persist the complete assembly preview and derived bill of materials.",
+            CadCapabilityOperationKind.Assemble,
+            [
+                new CadParameterDefinition(
+                    "translation", "Translation", "Finite millimeter translation bounded to the supported project workspace.",
+                    CadParameterKind.Vector3, required: true, CadParameterUnit.Length,
+                    minimum: -1_000_000, maximum: 1_000_000, defaultValue: zeroVector),
+                new CadParameterDefinition(
+                    "rotationDegrees", "Rotation", "Finite XYZ Euler rotation in degrees; the host derives the rigid transform.",
+                    CadParameterKind.Vector3, required: true, CadParameterUnit.Angle,
+                    minimum: -360, maximum: 360, defaultValue: zeroVector),
+            ],
+            new CadSourceIdentity("bd-warehouse", "0.2.0", IndustrialImageSha256, "redistribution-blocked"),
+            previewSupported: true,
+            experimental: false);
+    }
+
+    private static CadParameterDefinition IndustrialCatalogParameter(PhotonCadIndustrialCatalogParameter parameter)
+    {
+        var kind = parameter.Kind switch
+        {
+            PhotonCadIndustrialParameterKind.Number => CadParameterKind.Number,
+            PhotonCadIndustrialParameterKind.Integer => CadParameterKind.Integer,
+            PhotonCadIndustrialParameterKind.Boolean => CadParameterKind.Boolean,
+            PhotonCadIndustrialParameterKind.Choice => CadParameterKind.Choice,
+            _ => throw new InvalidOperationException("industrial_catalog_parameter_kind_invalid"),
+        };
+        var unit = parameter.Id switch
+        {
+            "pressure_angle" => CadParameterUnit.Angle,
+            "tooth_count" => CadParameterUnit.Count,
+            "module" or "thickness" or "addendum" or "dedendum" or "root_fillet" => CadParameterUnit.Length,
+            _ => (CadParameterUnit?)null,
+        };
+        return new CadParameterDefinition(
+            parameter.Id,
+            parameter.Label,
+            $"Verified {parameter.Label.ToLowerInvariant()} parameter from the exact pinned industrial catalog.",
+            kind,
+            parameter.Required,
+            unit,
+            parameter.Minimum,
+            parameter.Maximum,
+            kind == CadParameterKind.Integer ? 1 : null,
+            defaultValue: null,
+            parameter.Choices.Select(choice => new CadChoice(choice.Token, choice.Label)));
     }
 
     private PhotonCadPreviewContext CurrentPreviewContext(PhotonCadCanonicalProject project)
@@ -809,9 +1672,74 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         });
     }
 
+    private Task HydratePreviewAsync(JsonElement message)
+    {
+        if (!TryEnvelope(message, out var requestId)
+            || !TryIdentifier(message, "sessionId", out var sessionId)
+            || !TryIdentifier(message, "projectId", out var projectId)
+            || !TryRevision(message, "revision", out var revision))
+        {
+            if (TryWireEnvelope(message, out requestId)) PostPreviewHydrationUnavailable(requestId, "invalid_request");
+            return Task.CompletedTask;
+        }
+        return RunAsync(requestId, async cancellationToken =>
+        {
+            try
+            {
+                if (_projectHost is null) throw new InvalidOperationException("committed_project_host_unavailable");
+                var project = await _projectHost.ResolveCommittedProjectAsync(
+                    requestId, sessionId, projectId, revision, cancellationToken).ConfigureAwait(false);
+                var context = CurrentPreviewContext(project);
+                var receipt = _previewCustody.SealCommitted(new PhotonCadCommittedPreviewReadback(context, project));
+                lock (_previewLock)
+                {
+                    _previewReceipts[receipt.PreviewId] = receipt;
+                    foreach (var stale in _previewReceipts.Where(pair =>
+                            pair.Value.Context.RendererGeneration == receipt.Context.RendererGeneration
+                            && StringComparer.Ordinal.Equals(pair.Value.Context.RendererSessionId, receipt.Context.RendererSessionId)
+                            && StringComparer.Ordinal.Equals(pair.Value.Context.CadSessionId, receipt.Context.CadSessionId)
+                            && StringComparer.Ordinal.Equals(pair.Value.Context.ProjectId, receipt.Context.ProjectId)
+                            && !StringComparer.Ordinal.Equals(pair.Key, receipt.PreviewId))
+                        .Select(pair => pair.Key).ToArray())
+                        _previewReceipts.Remove(stale);
+                }
+                _post(new
+                {
+                    type = "photonCad.preview.hydrate.result",
+                    version = ProtocolVersion,
+                    value = new
+                    {
+                        contractVersion = ProtocolVersion,
+                        requestId,
+                        status = "available",
+                        preview = ExternalPreviewReceipt(receipt),
+                    },
+                });
+            }
+            catch (Exception exception) when (exception is PhotonCadPreviewException or PhotonCadProjectException
+                or InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                PostPreviewHydrationUnavailable(requestId, "preview_unavailable");
+            }
+        });
+    }
+
     private void PostPreviewUnavailable(string requestId, string reason) => _post(new
     {
         type = "photonCad.preview.resolve.result",
+        version = ProtocolVersion,
+        value = new
+        {
+            contractVersion = ProtocolVersion,
+            requestId,
+            status = "unavailable",
+            reason = SafeReason(reason),
+        },
+    });
+
+    private void PostPreviewHydrationUnavailable(string requestId, string reason) => _post(new
+    {
+        type = "photonCad.preview.hydrate.result",
         version = ProtocolVersion,
         value = new
         {
@@ -842,11 +1770,195 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         PhotonCadPreviewContext[] contexts;
         lock (_previewLock)
         {
-            contexts = _previewReceipts.Values.Select(value => value.Context).Distinct().ToArray();
+            contexts = _previewReceipts.Values.Select(value => value.Context)
+                .Concat(_pendingPreviewRefreshes.Values.Select(value => value.Context))
+                .Concat(_inflightPreviewRefreshes.Values.Select(value => value.Context))
+                .Distinct()
+                .ToArray();
             _previewReceipts.Clear();
             _previewResources.Clear();
+            _pendingPreviewRefreshes.Clear();
+            _inflightPreviewRefreshes.Clear();
         }
         foreach (var context in contexts) _previewCustody.RevokeProject(context);
+    }
+
+    private void RevokeProjectPreviews(string cadSessionId, string projectId)
+    {
+        PhotonCadPreviewContext[] contexts;
+        lock (_previewLock)
+        {
+            static bool Matches(PhotonCadPreviewContext context, string sessionId, string targetProjectId) =>
+                StringComparer.Ordinal.Equals(context.CadSessionId, sessionId)
+                && StringComparer.Ordinal.Equals(context.ProjectId, targetProjectId);
+
+            contexts = _previewReceipts.Values.Select(value => value.Context)
+                .Concat(_pendingPreviewRefreshes.Values.Select(value => value.Context))
+                .Concat(_inflightPreviewRefreshes.Values.Select(value => value.Context))
+                .Where(context => Matches(context, cadSessionId, projectId))
+                .Distinct()
+                .ToArray();
+            foreach (var previewId in _previewReceipts.Where(pair => Matches(pair.Value.Context, cadSessionId, projectId))
+                .Select(pair => pair.Key).ToArray())
+                _previewReceipts.Remove(previewId);
+            foreach (var resource in _previewResources.Where(pair => Matches(pair.Value, cadSessionId, projectId))
+                .Select(pair => pair.Key).ToArray())
+                _previewResources.Remove(resource);
+            foreach (var requestId in _pendingPreviewRefreshes.Where(pair => Matches(pair.Value.Context, cadSessionId, projectId))
+                .Select(pair => pair.Key).ToArray())
+                _pendingPreviewRefreshes.Remove(requestId);
+            foreach (var requestId in _inflightPreviewRefreshes.Where(pair => Matches(pair.Value.Context, cadSessionId, projectId))
+                .Select(pair => pair.Key).ToArray())
+                _inflightPreviewRefreshes.Remove(requestId);
+        }
+        foreach (var context in contexts) _previewCustody.RevokeProject(context);
+    }
+
+    private void TryCreatePreviewRefreshMarker(string refreshRequestId, PhotonCadPreviewContext context, string projectContentDigest)
+    {
+        var now = _previewRefreshTimeProvider.GetUtcNow();
+        foreach (var stale in _pendingPreviewRefreshes.Where(pair => pair.Value.ExpiresAtUtc <= now
+            || pair.Value.RendererGeneration == context.RendererGeneration
+                && StringComparer.Ordinal.Equals(pair.Value.RendererSessionId, context.RendererSessionId)
+                && StringComparer.Ordinal.Equals(pair.Value.CadSessionId, context.CadSessionId)
+                && StringComparer.Ordinal.Equals(pair.Value.ProjectId, context.ProjectId)).Select(pair => pair.Key).ToArray())
+            _pendingPreviewRefreshes.Remove(stale);
+        if (_pendingPreviewRefreshes.Count + _inflightPreviewRefreshes.Count >= MaximumPendingPreviewRefreshes
+            || _pendingPreviewRefreshes.ContainsKey(refreshRequestId)
+            || !IsSha256Digest(projectContentDigest)) return;
+        _pendingPreviewRefreshes.Add(refreshRequestId, new PendingPreviewRefreshMarker(
+            refreshRequestId, context.RendererGeneration, context.RendererSessionId, context.CadSessionId, context.ProjectId,
+            context.Revision, projectContentDigest.ToLowerInvariant(), now + PreviewRefreshMarkerTimeToLive));
+    }
+
+    private bool TryBeginPreviewRefresh(JsonElement message, out PendingPreviewRefreshMarker? marker)
+    {
+        marker = null;
+        if (!TryEnvelope(message, out var requestId)
+            || !TryIdentifier(message, "sessionId", out var cadSessionId)
+            || !TryIdentifier(message, "projectId", out var projectId)
+            || !TryRevision(message, "knownRevision", out var revision)) return false;
+        lock (_previewLock)
+        {
+            var now = _previewRefreshTimeProvider.GetUtcNow();
+            foreach (var expired in _pendingPreviewRefreshes.Where(pair => pair.Value.ExpiresAtUtc <= now).Select(pair => pair.Key).ToArray())
+                _pendingPreviewRefreshes.Remove(expired);
+            if (!_pendingPreviewRefreshes.Remove(requestId, out var found)) return false;
+            marker = found;
+            var matches = found.ExpiresAtUtc > now
+                && found.RendererGeneration == _rendererEpoch
+                && StringComparer.Ordinal.Equals(found.RendererSessionId, _rendererSessionId)
+                && StringComparer.Ordinal.Equals(found.CadSessionId, cadSessionId)
+                && StringComparer.Ordinal.Equals(found.ProjectId, projectId)
+                && found.Revision == revision
+                && IsSha256Digest(found.ProjectContentDigest)
+                && _previewReceipts.Values.Any(receipt => receipt.Context.RendererGeneration == found.RendererGeneration
+                && StringComparer.Ordinal.Equals(receipt.Context.RendererSessionId, found.RendererSessionId)
+                && StringComparer.Ordinal.Equals(receipt.Context.CadSessionId, found.CadSessionId)
+                && StringComparer.Ordinal.Equals(receipt.Context.ProjectId, found.ProjectId)
+                && receipt.Context.Revision == found.Revision);
+            if (!matches) return false;
+            _inflightPreviewRefreshes.Add(requestId, found);
+            return true;
+        }
+    }
+
+    private void ProcessProjectLifecycleResult(object message)
+    {
+        JsonElement frame;
+        try { frame = JsonSerializer.SerializeToElement(message); }
+        catch (Exception exception) when (exception is NotSupportedException or JsonException)
+        {
+            RevokeInflightPreviewRefreshes();
+            return;
+        }
+        if (!frame.TryGetProperty("type", out var typeElement) || typeElement.ValueKind != JsonValueKind.String
+            || !StringComparer.Ordinal.Equals(typeElement.GetString(), "photonCad.project.refresh.result")
+            || !frame.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.Object
+            || !TryIdentifier(value, "requestId", out var requestId)) return;
+
+        PendingPreviewRefreshMarker marker;
+        lock (_previewLock)
+        {
+            if (!_inflightPreviewRefreshes.Remove(requestId, out var found)) return;
+            marker = found;
+        }
+        if (!RefreshResultMatches(marker, value))
+        {
+            RevokeProjectPreviews(marker.CadSessionId, marker.ProjectId);
+            return;
+        }
+        PreserveExactProjectPreview(marker);
+    }
+
+    private bool RefreshResultMatches(PendingPreviewRefreshMarker marker, JsonElement value)
+    {
+        if (_previewRefreshTimeProvider.GetUtcNow() >= marker.ExpiresAtUtc
+            || marker.RendererGeneration != _rendererEpoch
+            || !StringComparer.Ordinal.Equals(marker.RendererSessionId, _rendererSessionId)
+            || !value.TryGetProperty("status", out var status) || status.ValueKind != JsonValueKind.String
+            || !StringComparer.Ordinal.Equals(status.GetString(), "opened")
+            || !value.TryGetProperty("document", out var document) || document.ValueKind != JsonValueKind.Object
+            || !document.TryGetProperty("contentDigest", out var digest) || digest.ValueKind != JsonValueKind.String
+            || !FixedDigestEquals(digest.GetString() ?? string.Empty, marker.ProjectContentDigest)
+            || !document.TryGetProperty("snapshot", out var snapshot) || snapshot.ValueKind != JsonValueKind.Object
+            || !TryIdentifier(snapshot, "sessionId", out var cadSessionId)
+            || !TryIdentifier(snapshot, "projectId", out var projectId)
+            || !TryRevision(snapshot, "revision", out var revision)) return false;
+        return StringComparer.Ordinal.Equals(cadSessionId, marker.CadSessionId)
+            && StringComparer.Ordinal.Equals(projectId, marker.ProjectId)
+            && revision == marker.Revision;
+    }
+
+    private void PreserveExactProjectPreview(PendingPreviewRefreshMarker marker)
+    {
+        PhotonCadPreviewContext[] staleContexts;
+        var retained = false;
+        lock (_previewLock)
+        {
+            static bool SameProject(PhotonCadPreviewContext context, PendingPreviewRefreshMarker value) =>
+                StringComparer.Ordinal.Equals(context.CadSessionId, value.CadSessionId)
+                && StringComparer.Ordinal.Equals(context.ProjectId, value.ProjectId);
+            static bool Exact(PhotonCadPreviewContext context, PendingPreviewRefreshMarker value) =>
+                SameProject(context, value)
+                && context.RendererGeneration == value.RendererGeneration
+                && StringComparer.Ordinal.Equals(context.RendererSessionId, value.RendererSessionId)
+                && context.Revision == value.Revision;
+
+            retained = _previewReceipts.Values.Any(receipt => Exact(receipt.Context, marker));
+            staleContexts = _previewReceipts.Values.Select(receipt => receipt.Context)
+                .Where(context => SameProject(context, marker) && !Exact(context, marker)).Distinct().ToArray();
+            foreach (var previewId in _previewReceipts.Where(pair => SameProject(pair.Value.Context, marker) && !Exact(pair.Value.Context, marker))
+                .Select(pair => pair.Key).ToArray())
+                _previewReceipts.Remove(previewId);
+            foreach (var resource in _previewResources.Where(pair => SameProject(pair.Value, marker) && !Exact(pair.Value, marker))
+                .Select(pair => pair.Key).ToArray())
+                _previewResources.Remove(resource);
+            foreach (var pending in _pendingPreviewRefreshes.Where(pair => SameProject(pair.Value.Context, marker))
+                .Select(pair => pair.Key).ToArray())
+                _pendingPreviewRefreshes.Remove(pending);
+        }
+        foreach (var context in staleContexts) _previewCustody.RevokeProject(context);
+        if (!retained) RevokeProjectPreviews(marker.CadSessionId, marker.ProjectId);
+    }
+
+    private void RevokeInflightPreviewRefreshes()
+    {
+        PendingPreviewRefreshMarker[] markers;
+        lock (_previewLock)
+        {
+            markers = _inflightPreviewRefreshes.Values.ToArray();
+            _inflightPreviewRefreshes.Clear();
+        }
+        foreach (var marker in markers) RevokeProjectPreviews(marker.CadSessionId, marker.ProjectId);
+    }
+
+    private static bool TryProjectBinding(JsonElement message, out string cadSessionId, out string projectId)
+    {
+        cadSessionId = string.Empty;
+        projectId = string.Empty;
+        return TryIdentifier(message, "sessionId", out cadSessionId)
+            && TryIdentifier(message, "projectId", out projectId);
     }
 
     private async Task<ICadRuntimeBroker> GetBrokerAsync(CancellationToken cancellationToken)
@@ -1148,102 +2260,30 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 message = issue.Message,
                 entityIds = issue.EntityIds.ToArray(),
             }).ToArray(),
-            snapshot = new
-            {
-                contractVersion = ProtocolVersion,
-                sessionId = state.SessionId,
-                projectId = state.ProjectId,
-                revision = state.Revision,
-                title = state.Title,
-                units = state.Units == PhotonCadProjectUnit.Millimeter ? "millimeter" : "inch",
-                mode = "canonical",
-                entities = ExternalCommittedEntities(state),
-                operations = state.Operations.Select(operation => new
-                {
-                    id = operation.Id,
-                    capabilityId = operation.CapabilityId,
-                    label = operation.Label,
-                    createdAtUtc = Utc(operation.CreatedAtUtc),
-                    state = operation.State.ToString().ToLowerInvariant(),
-                }).ToArray(),
-                issues = state.Issues.Select(issue => new
-                {
-                    code = issue.Code,
-                    severity = issue.Severity switch
-                    {
-                        PhotonCadIssueSeverityV1.Information => "info",
-                        PhotonCadIssueSeverityV1.Warning => "warning",
-                        PhotonCadIssueSeverityV1.Error => "error",
-                        _ => "error",
-                    },
-                    message = issue.Message,
-                    entityIds = issue.EntityIds.ToArray(),
-                }).ToArray(),
-                dirty = false,
-            },
+            snapshot = PhotonCadSnapshotWireProjection.Snapshot(state, ProtocolVersion),
         };
         if (preview is null) return projected;
         var extended = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var property in JsonSerializer.SerializeToElement(projected).EnumerateObject())
             extended[property.Name] = property.Value.Clone();
-        extended["preview"] = new
-        {
-            previewId = preview.PreviewId,
-            projectId = preview.Context.ProjectId,
-            revision = preview.Context.Revision,
-            contentDigest = preview.ContentDigest,
-            units = preview.Units == PhotonCadProjectUnit.Millimeter ? "millimeter" : "inch",
-            bounds = new
-            {
-                minimum = new { x = preview.Bounds.Minimum.X, y = preview.Bounds.Minimum.Y, z = preview.Bounds.Minimum.Z },
-                maximum = new { x = preview.Bounds.Maximum.X, y = preview.Bounds.Maximum.Y, z = preview.Bounds.Maximum.Z },
-            },
-            entityCount = preview.EntityCount,
-        };
+        extended["preview"] = ExternalPreviewReceipt(preview);
         return extended;
     }
 
-    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> ExternalCommittedEntities(
-        PhotonCadProjectStateV1 state)
+    private static object ExternalPreviewReceipt(PhotonCadPreviewReceipt preview) => new
     {
-        var projected = new List<IReadOnlyDictionary<string, object?>>(state.Entities.Count + state.Occurrences.Count);
-        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var sourceCapabilities = state.Entities.ToDictionary(
-            entity => entity.Id,
-            entity => entity.SourceCapabilityId,
-            StringComparer.Ordinal);
-        foreach (var entity in state.Entities)
+        previewId = preview.PreviewId,
+        projectId = preview.Context.ProjectId,
+        revision = preview.Context.Revision,
+        contentDigest = preview.ContentDigest,
+        units = preview.Units == PhotonCadProjectUnit.Millimeter ? "millimeter" : "inch",
+        bounds = new
         {
-            if (!ids.Add(entity.Id)) throw new InvalidOperationException("The canonical CAD inventory contains duplicate identifiers.");
-            projected.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["id"] = entity.Id,
-                ["parentId"] = entity.ParentId,
-                ["kind"] = entity.Kind.ToString().ToLowerInvariant(),
-                ["name"] = entity.Name,
-                ["visible"] = entity.Visible,
-                ["suppressed"] = entity.Suppressed,
-                ["sourceCapabilityId"] = entity.SourceCapabilityId,
-            });
-        }
-        foreach (var occurrence in state.Occurrences)
-        {
-            if (!ids.Add(occurrence.OccurrenceId)
-                || !sourceCapabilities.TryGetValue(occurrence.SourceEntityId, out var sourceCapabilityId))
-                throw new InvalidOperationException("The canonical CAD occurrence inventory is not bound to one exact source entity.");
-            projected.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["id"] = occurrence.OccurrenceId,
-                ["parentId"] = occurrence.ParentOccurrenceId,
-                ["kind"] = "occurrence",
-                ["name"] = occurrence.PartNumber,
-                ["visible"] = true,
-                ["suppressed"] = false,
-                ["sourceCapabilityId"] = sourceCapabilityId,
-            });
-        }
-        return projected;
-    }
+            minimum = new { x = preview.Bounds.Minimum.X, y = preview.Bounds.Minimum.Y, z = preview.Bounds.Minimum.Z },
+            maximum = new { x = preview.Bounds.Maximum.X, y = preview.Bounds.Maximum.Y, z = preview.Bounds.Maximum.Z },
+        },
+        entityCount = preview.EntityCount,
+    };
 
     private static object ExternalSnapshot(CadProjectSnapshot snapshot, ExternalRuntimeRequest external) => new
     {
@@ -1268,6 +2308,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             if (entity.SourceCapabilityId is not null) value["sourceCapabilityId"] = entity.SourceCapabilityId;
             return value;
         }).ToArray(),
+        occurrences = Array.Empty<object>(),
         operations = snapshot.Operations.Select(operation => new
         {
             id = operation.Id,
@@ -1324,6 +2365,35 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 status = "unavailable",
                 stale = false,
                 issues = new[] { new { code = SafeReason(reason), severity = "info", message = "The verified CAD runtime is unavailable.", entityIds = Array.Empty<string>() } },
+                measuredAtUtc = Utc(DateTimeOffset.UtcNow),
+            },
+        });
+    }
+
+    private void PostVerificationFailed(ExternalRuntimeRequest request, string reason)
+    {
+        _post(new
+        {
+            type = "photonCad.verify.result",
+            version = ProtocolVersion,
+            value = new
+            {
+                contractVersion = ProtocolVersion,
+                requestId = request.RequestId,
+                projectId = request.ProjectId,
+                revision = request.Revision,
+                status = "failed",
+                stale = false,
+                issues = new[]
+                {
+                    new
+                    {
+                        code = SafeReason(reason),
+                        severity = "error",
+                        message = "The committed CAD project failed canonical verification.",
+                        entityIds = Array.Empty<string>(),
+                    },
+                },
                 measuredAtUtc = Utc(DateTimeOffset.UtcNow),
             },
         });
@@ -1532,11 +2602,14 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         value = string.Empty;
         if (!message.TryGetProperty(name, out var element) || element.ValueKind != JsonValueKind.String) return false;
         var candidate = element.GetString();
-        if (string.IsNullOrEmpty(candidate) || candidate.Length > MaximumRequestCharacters || !char.IsAsciiLetterOrDigit(candidate[0])
-            || candidate.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-' and not '.' and not ':')) return false;
-        value = candidate;
+        if (!IsIdentifier(candidate)) return false;
+        value = candidate!;
         return true;
     }
+
+    private static bool IsIdentifier(string? candidate) =>
+        !string.IsNullOrEmpty(candidate) && candidate.Length <= MaximumRequestCharacters && char.IsAsciiLetterOrDigit(candidate[0])
+        && candidate.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.' or ':');
 
     private static bool TryRevision(JsonElement message, string name, out long revision)
     {
@@ -1567,6 +2640,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         {
             await _projects.DisposeAsync().ConfigureAwait(false);
             await _previewCustody.DisposeAsync().ConfigureAwait(false);
+            await _stepExportHost.DisposeAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -1721,6 +2795,371 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 throw new IOException("The industrial CAD workspace contains a link and cannot be deleted safely.");
         }
         Directory.Delete(full, recursive: true);
+    }
+
+    private static PhotonCadSealedArtifactDelta ValidateAssemblyMutationEnvelope(
+        PhotonCadRuntimeSyncRequest expected,
+        PhotonCadSealedMutationDelta mutation,
+        string capabilityId,
+        string shapeFailure,
+        string previewFailure)
+    {
+        if (mutation.BaseRevision != expected.BaseRevision
+            || mutation.ResultingRevision != checked(expected.BaseRevision + 2)
+            || mutation.Operations.Count != 2
+            || mutation.Operations[0].AppliedRevision != checked(expected.BaseRevision + 1)
+            || !StringComparer.Ordinal.Equals(mutation.Operations[0].CapabilityId, capabilityId)
+            || mutation.Operations[0].Mode != PhotonCadOperationModeV1.Scratch
+            || mutation.Operations[1].AppliedRevision != checked(expected.BaseRevision + 2)
+            || !StringComparer.Ordinal.Equals(mutation.Operations[1].CapabilityId, PhotonCadAssemblyContract.PreviewCapabilityId)
+            || mutation.Operations[1].Mode != PhotonCadOperationModeV1.Scratch
+            || mutation.Entities.Count != 0
+            || mutation.Issues.Count != 0
+            || mutation.OccurrenceMergeMode != PhotonCadCollectionMergeMode.ReplaceAll
+            || mutation.BomMergeMode != PhotonCadCollectionMergeMode.ReplaceAll
+            || mutation.Artifacts.Count != 1)
+            throw new InvalidOperationException(shapeFailure);
+        var artifact = mutation.Artifacts[0];
+        if (artifact.Role != PhotonCadArtifactRoleV1.ProjectPreview
+            || artifact.Kind != PhotonCadArtifactKindV1.Glb
+            || artifact.OwnerEntityId is not null
+            || artifact.Revision != mutation.ResultingRevision
+            || artifact.Bounds is null
+            || artifact.ReplacesContentDigest is null
+            || !StringComparer.Ordinal.Equals(artifact.MediaType, PhotonCadPreviewContract.MediaType)
+            || !StringComparer.Ordinal.Equals(artifact.OperationId, mutation.Operations[1].Id))
+            throw new InvalidOperationException(previewFailure);
+        return artifact;
+    }
+
+    private sealed class AssemblyPlacementGuardProvider : IPhotonCadSealedMutationProvider, IPhotonCadSealedMutationCompensator
+    {
+        private readonly PhotonCadRuntimeSyncRequest _expected;
+        private readonly AssemblyPlacementInputs _inputs;
+        private readonly IPhotonCadSealedMutationProvider _provider;
+        private readonly IPhotonCadSealedMutationCompensator _compensator;
+
+        internal AssemblyPlacementGuardProvider(
+            PhotonCadRuntimeSyncRequest expected,
+            AssemblyPlacementInputs inputs,
+            IPhotonCadSealedMutationProvider provider,
+            IPhotonCadSealedMutationCompensator compensator)
+        {
+            _expected = expected;
+            _inputs = inputs;
+            _provider = provider;
+            _compensator = compensator;
+        }
+
+        public async ValueTask<PhotonCadSealedMutationDelta> ApplyAsync(
+            PhotonCadSealedMutationProviderRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var mutation = await _provider.ApplyAsync(request, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                Validate(request, mutation);
+                return mutation;
+            }
+            catch (Exception validationFailure)
+            {
+                try
+                {
+                    await _compensator.CompensateAsync(
+                        mutation,
+                        SafeDiagnosticToken(validationFailure.Message) ?? "assembly_host_result_rejected",
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception compensationFailure)
+                {
+                    throw new AggregateException(
+                        "assembly_host_result_rejected_compensation_failed",
+                        validationFailure,
+                        compensationFailure);
+                }
+                throw;
+            }
+        }
+
+        public ValueTask CompensateAsync(
+            PhotonCadSealedMutationDelta mutation,
+            string reason,
+            CancellationToken cancellationToken = default) =>
+            _compensator.CompensateAsync(mutation, reason, cancellationToken);
+
+        private void Validate(
+            PhotonCadSealedMutationProviderRequest request,
+            PhotonCadSealedMutationDelta mutation)
+        {
+            if (!ReferenceEquals(request.Request, _expected))
+                throw new InvalidOperationException("assembly_host_result_shape_rejected");
+            _ = ValidateAssemblyMutationEnvelope(
+                _expected,
+                mutation,
+                PhotonCadAssemblyContract.PlaceCapabilityId,
+                "assembly_host_result_shape_rejected",
+                "assembly_host_preview_rejected");
+
+            if (!request.BaseEntities.Any(value => StringComparer.Ordinal.Equals(value.Id, _inputs.SourceEntityId)))
+                throw new InvalidOperationException("assembly_host_source_rejected");
+            var expectedParent = _inputs.ParentOccurrenceId ?? $"{_inputs.SourceEntityId}.occ";
+            if (!request.BaseOccurrences.Any(value => StringComparer.Ordinal.Equals(value.OccurrenceId, expectedParent)))
+                throw new InvalidOperationException("assembly_host_parent_rejected");
+            if (mutation.Occurrences.Count != request.BaseOccurrences.Count + 1)
+                throw new InvalidOperationException("assembly_host_occurrence_count_rejected");
+            foreach (var existing in request.BaseOccurrences)
+            {
+                var preserved = mutation.Occurrences.SingleOrDefault(value =>
+                    StringComparer.Ordinal.Equals(value.OccurrenceId, existing.OccurrenceId));
+                if (preserved is null
+                    || !StringComparer.Ordinal.Equals(preserved.ParentOccurrenceId, existing.ParentOccurrenceId)
+                    || !StringComparer.Ordinal.Equals(preserved.PartNumber, existing.PartNumber)
+                    || !StringComparer.Ordinal.Equals(preserved.SourceEntityId, existing.SourceEntityId)
+                    || !SameTransform(preserved.Transform, existing.Transform))
+                    throw new InvalidOperationException("assembly_host_base_occurrence_changed");
+            }
+            var added = mutation.Occurrences.Where(value =>
+                !request.BaseOccurrences.Any(existing => StringComparer.Ordinal.Equals(existing.OccurrenceId, value.OccurrenceId))).ToArray();
+            if (added.Length != 1) throw new InvalidOperationException("assembly_host_new_occurrence_count_rejected");
+            if (!StringComparer.Ordinal.Equals(added[0].SourceEntityId, _inputs.SourceEntityId))
+                throw new InvalidOperationException("assembly_host_new_occurrence_source_rejected");
+            if (!StringComparer.Ordinal.Equals(added[0].ParentOccurrenceId, expectedParent))
+                throw new InvalidOperationException("assembly_host_new_occurrence_parent_rejected");
+            if (!SameTransform(added[0].Transform, _inputs.Transform))
+                throw new InvalidOperationException("assembly_host_new_occurrence_transform_rejected");
+
+            var expectedQuantities = mutation.Occurrences
+                .GroupBy(value => value.SourceEntityId, StringComparer.Ordinal)
+                .ToDictionary(value => value.Key, value => (double)value.Count(), StringComparer.Ordinal);
+            if (mutation.Bom.Count != expectedQuantities.Count
+                || mutation.Bom.Any(value => !expectedQuantities.TryGetValue(value.SourceEntityId, out var quantity)
+                    || value.Quantity != quantity || value.Unit != PhotonCadBomUnit.Each))
+                throw new InvalidOperationException("assembly_host_bom_rejected");
+        }
+
+        private static bool SameTransform(IReadOnlyList<double> left, IReadOnlyList<double> right) =>
+            left.Count == right.Count && left.Select(NormalizedBits)
+                .SequenceEqual(right.Select(NormalizedBits));
+
+        private static long NormalizedBits(double value) => BitConverter.DoubleToInt64Bits(value == 0d ? 0d : value);
+    }
+
+    private sealed class AssemblyTransformGuardProvider : IPhotonCadSealedMutationProvider, IPhotonCadSealedMutationCompensator
+    {
+        private readonly PhotonCadRuntimeSyncRequest _expected;
+        private readonly AssemblyTransformInputs _inputs;
+        private readonly IPhotonCadSealedMutationProvider _provider;
+        private readonly IPhotonCadSealedMutationCompensator _compensator;
+
+        internal AssemblyTransformGuardProvider(
+            PhotonCadRuntimeSyncRequest expected,
+            AssemblyTransformInputs inputs,
+            IPhotonCadSealedMutationProvider provider,
+            IPhotonCadSealedMutationCompensator compensator)
+        {
+            _expected = expected;
+            _inputs = inputs;
+            _provider = provider;
+            _compensator = compensator;
+        }
+
+        public async ValueTask<PhotonCadSealedMutationDelta> ApplyAsync(
+            PhotonCadSealedMutationProviderRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var mutation = await _provider.ApplyAsync(request, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                Validate(request, mutation);
+                return mutation;
+            }
+            catch (Exception validationFailure)
+            {
+                try
+                {
+                    await _compensator.CompensateAsync(
+                        mutation,
+                        SafeDiagnosticToken(validationFailure.Message) ?? "assembly_transform_host_result_rejected",
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception compensationFailure)
+                {
+                    throw new AggregateException(
+                        "assembly_transform_host_result_rejected_compensation_failed",
+                        validationFailure,
+                        compensationFailure);
+                }
+                throw;
+            }
+        }
+
+        public ValueTask CompensateAsync(
+            PhotonCadSealedMutationDelta mutation,
+            string reason,
+            CancellationToken cancellationToken = default) =>
+            _compensator.CompensateAsync(mutation, reason, cancellationToken);
+
+        private void Validate(
+            PhotonCadSealedMutationProviderRequest request,
+            PhotonCadSealedMutationDelta mutation)
+        {
+            if (!ReferenceEquals(request.Request, _expected))
+                throw new InvalidOperationException("assembly_transform_host_result_shape_rejected");
+            _ = ValidateAssemblyMutationEnvelope(
+                _expected,
+                mutation,
+                PhotonCadAssemblyContract.TransformCapabilityId,
+                "assembly_transform_host_result_shape_rejected",
+                "assembly_transform_host_preview_rejected");
+
+            var target = request.BaseOccurrences.SingleOrDefault(value =>
+                StringComparer.Ordinal.Equals(value.OccurrenceId, _inputs.OccurrenceId));
+            if (target is null || !StringComparer.Ordinal.Equals(target.SourceEntityId, _inputs.SourceEntityId)
+                || mutation.Occurrences.Count != request.BaseOccurrences.Count)
+                throw new InvalidOperationException("assembly_transform_host_target_rejected");
+            foreach (var existing in request.BaseOccurrences)
+            {
+                var updated = mutation.Occurrences.SingleOrDefault(value =>
+                    StringComparer.Ordinal.Equals(value.OccurrenceId, existing.OccurrenceId));
+                var expectedTransform = StringComparer.Ordinal.Equals(existing.OccurrenceId, _inputs.OccurrenceId)
+                    ? _inputs.Transform
+                    : existing.Transform;
+                if (updated is null
+                    || !StringComparer.Ordinal.Equals(updated.ParentOccurrenceId, existing.ParentOccurrenceId)
+                    || !StringComparer.Ordinal.Equals(updated.PartNumber, existing.PartNumber)
+                    || !StringComparer.Ordinal.Equals(updated.SourceEntityId, existing.SourceEntityId)
+                    || !SameTransform(updated.Transform, expectedTransform))
+                    throw new InvalidOperationException("assembly_transform_host_occurrence_rejected");
+            }
+
+            var expectedQuantities = mutation.Occurrences
+                .GroupBy(value => value.SourceEntityId, StringComparer.Ordinal)
+                .ToDictionary(value => value.Key, value => (double)value.Count(), StringComparer.Ordinal);
+            if (mutation.Bom.Count != expectedQuantities.Count
+                || mutation.Bom.Any(value => !expectedQuantities.TryGetValue(value.SourceEntityId, out var quantity)
+                    || value.Quantity != quantity || value.Unit != PhotonCadBomUnit.Each))
+                throw new InvalidOperationException("assembly_transform_host_bom_rejected");
+        }
+
+        private static bool SameTransform(IReadOnlyList<double> left, IReadOnlyList<double> right) =>
+            left.Count == right.Count && left.Select(NormalizedBits).SequenceEqual(right.Select(NormalizedBits));
+
+        private static long NormalizedBits(double value) => BitConverter.DoubleToInt64Bits(value == 0d ? 0d : value);
+    }
+
+    private sealed class AssemblyRemovalGuardProvider : IPhotonCadSealedMutationProvider, IPhotonCadSealedMutationCompensator
+    {
+        private readonly PhotonCadRuntimeSyncRequest _expected;
+        private readonly AssemblyRemovalInputs _inputs;
+        private readonly IPhotonCadSealedMutationProvider _provider;
+        private readonly IPhotonCadSealedMutationCompensator _compensator;
+
+        internal AssemblyRemovalGuardProvider(
+            PhotonCadRuntimeSyncRequest expected,
+            AssemblyRemovalInputs inputs,
+            IPhotonCadSealedMutationProvider provider,
+            IPhotonCadSealedMutationCompensator compensator)
+        {
+            _expected = expected;
+            _inputs = inputs;
+            _provider = provider;
+            _compensator = compensator;
+        }
+
+        public async ValueTask<PhotonCadSealedMutationDelta> ApplyAsync(
+            PhotonCadSealedMutationProviderRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var mutation = await _provider.ApplyAsync(request, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                Validate(request, mutation);
+                return mutation;
+            }
+            catch (Exception validationFailure)
+            {
+                try
+                {
+                    await _compensator.CompensateAsync(
+                        mutation,
+                        SafeDiagnosticToken(validationFailure.Message) ?? "assembly_remove_host_result_rejected",
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception compensationFailure)
+                {
+                    throw new AggregateException(
+                        "assembly_remove_host_result_rejected_compensation_failed",
+                        validationFailure,
+                        compensationFailure);
+                }
+                throw;
+            }
+        }
+
+        public ValueTask CompensateAsync(
+            PhotonCadSealedMutationDelta mutation,
+            string reason,
+            CancellationToken cancellationToken = default) =>
+            _compensator.CompensateAsync(mutation, reason, cancellationToken);
+
+        private void Validate(
+            PhotonCadSealedMutationProviderRequest request,
+            PhotonCadSealedMutationDelta mutation)
+        {
+            if (!ReferenceEquals(request.Request, _expected))
+                throw new InvalidOperationException("assembly_remove_host_result_shape_rejected");
+            _ = ValidateAssemblyMutationEnvelope(
+                _expected,
+                mutation,
+                PhotonCadAssemblyContract.RemoveCapabilityId,
+                "assembly_remove_host_result_shape_rejected",
+                "assembly_remove_host_preview_rejected");
+
+            var target = request.BaseOccurrences.SingleOrDefault(value =>
+                StringComparer.Ordinal.Equals(value.OccurrenceId, _inputs.OccurrenceId));
+            if (target is null || !StringComparer.Ordinal.Equals(target.SourceEntityId, _inputs.SourceEntityId))
+                throw new InvalidOperationException("assembly_remove_host_target_rejected");
+            var removed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { target.OccurrenceId };
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (var occurrence in request.BaseOccurrences)
+                {
+                    if (occurrence.ParentOccurrenceId is not null
+                        && removed.Contains(occurrence.ParentOccurrenceId)
+                        && removed.Add(occurrence.OccurrenceId))
+                        changed = true;
+                }
+            } while (changed);
+            var expectedOccurrences = request.BaseOccurrences.Where(value => !removed.Contains(value.OccurrenceId)).ToArray();
+            if (expectedOccurrences.Length == 0 || mutation.Occurrences.Count != expectedOccurrences.Length)
+                throw new InvalidOperationException("assembly_remove_host_occurrence_count_rejected");
+            foreach (var expected in expectedOccurrences)
+            {
+                var actual = mutation.Occurrences.SingleOrDefault(value =>
+                    StringComparer.Ordinal.Equals(value.OccurrenceId, expected.OccurrenceId));
+                if (actual is null
+                    || !StringComparer.Ordinal.Equals(actual.ParentOccurrenceId, expected.ParentOccurrenceId)
+                    || !StringComparer.Ordinal.Equals(actual.PartNumber, expected.PartNumber)
+                    || !StringComparer.Ordinal.Equals(actual.SourceEntityId, expected.SourceEntityId)
+                    || !SameTransform(actual.Transform, expected.Transform))
+                    throw new InvalidOperationException("assembly_remove_host_base_occurrence_changed");
+            }
+
+            var expectedQuantities = expectedOccurrences
+                .GroupBy(value => value.SourceEntityId, StringComparer.Ordinal)
+                .ToDictionary(value => value.Key, value => (double)value.Count(), StringComparer.Ordinal);
+            if (mutation.Bom.Count != expectedQuantities.Count
+                || mutation.Bom.Any(value => !expectedQuantities.TryGetValue(value.SourceEntityId, out var quantity)
+                    || value.Quantity != quantity || value.Unit != PhotonCadBomUnit.Each))
+                throw new InvalidOperationException("assembly_remove_host_bom_rejected");
+        }
+
+        private static bool SameTransform(IReadOnlyList<double> left, IReadOnlyList<double> right) =>
+            left.Count == right.Count && left.Select(NormalizedBits).SequenceEqual(right.Select(NormalizedBits));
+
+        private static long NormalizedBits(double value) => BitConverter.DoubleToInt64Bits(value == 0d ? 0d : value);
     }
 
     private sealed class GeometryRuntimeMutationProvider : IPhotonCadSealedMutationProvider, IPhotonCadSealedMutationCompensator
@@ -2153,5 +3592,22 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             && CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 
+    private static bool IsSha256Digest(string value) =>
+        value.Length == 71 && value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)
+        && value.AsSpan(7).ToArray().All(Uri.IsHexDigit);
+
     private sealed record ExternalRuntimeRequest(string RequestId, string SessionId, string ProjectId, long Revision);
+    private sealed record PendingPreviewRefreshMarker(
+        string RequestId,
+        long RendererGeneration,
+        string RendererSessionId,
+        string CadSessionId,
+        string ProjectId,
+        long Revision,
+        string ProjectContentDigest,
+        DateTimeOffset ExpiresAtUtc)
+    {
+        internal PhotonCadPreviewContext Context => new(
+            RendererGeneration, RendererSessionId, CadSessionId, ProjectId, Revision);
+    }
 }

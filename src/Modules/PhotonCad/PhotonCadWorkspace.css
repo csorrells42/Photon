@@ -4,7 +4,7 @@
   min-height: 0;
   container-type: inline-size;
   display: grid;
-  grid-template-rows: 32px 34px auto 45px minmax(0, 1fr) 24px;
+  grid-template-rows: auto 45px minmax(0, 1fr) 24px;
   overflow: hidden;
   border-right: 1px solid var(--line, rgba(255, 255, 255, .075));
   background:
@@ -44,6 +44,7 @@
 }
 
 .pcad-document-tabs {
+  grid-row: 1;
   min-width: 0;
   display: flex;
   align-items: stretch;
@@ -109,6 +110,7 @@
 .pcad-runtime-chip.checking { color: #c7a060; }
 
 .pcad-context-bar {
+  grid-row: 2;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -165,6 +167,7 @@
 }
 
 .pcad-fixture-banner {
+  grid-row: 1;
   min-height: 30px;
   display: flex;
   align-items: center;
@@ -180,6 +183,7 @@
 .pcad-fixture-banner > strong { color: #d0b482; }
 
 .pcad-workflow-tabs {
+  grid-row: 2;
   min-width: 0;
   display: flex;
   overflow-x: auto;
@@ -214,11 +218,13 @@
 .pcad-workflow-tabs > button.active small { color: #716899; }
 
 .pcad-stage {
+  grid-row: 3;
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(155px, .72fr) minmax(230px, 1.5fr) minmax(185px, .86fr);
-  grid-template-areas: "context viewer inspector";
+  grid-template-columns: var(--pcad-context-width, 260px) 5px minmax(230px, 1fr) 5px var(--pcad-inspector-width, 300px);
+  grid-template-areas: "context context-resizer viewer inspector-resizer inspector";
   overflow: hidden;
 }
 
@@ -239,6 +245,23 @@
 
 .pcad-context-pane { grid-area: context; border-right: 1px solid var(--line, rgba(255, 255, 255, .075)); }
 .pcad-inspector-pane { grid-area: inspector; border-left: 1px solid var(--line, rgba(255, 255, 255, .075)); }
+.pcad-stage.context-collapsed .pcad-context-pane,
+.pcad-stage.inspector-collapsed .pcad-inspector-pane { visibility: hidden; pointer-events: none; }
+
+.pcad-pane-resizer { position: relative; z-index: 5; min-width: 5px; touch-action: none; cursor: col-resize; background: #0a0d14; }
+.pcad-pane-resizer::after { content: ""; position: absolute; left: 2px; top: 0; bottom: 0; width: 1px; background: rgba(255, 255, 255, .055); }
+.pcad-pane-resizer:hover::after,
+.pcad-pane-resizer:focus-visible::after { background: #8e74f8; box-shadow: 0 0 8px rgba(142, 116, 248, .55); }
+.pcad-pane-resizer:focus-visible { outline: 0; }
+.pcad-pane-resizer--context { grid-area: context-resizer; }
+.pcad-pane-resizer--inspector { grid-area: inspector-resizer; }
+
+.pcad-pane-layout-controls { position: absolute; z-index: 8; top: 4px; left: 50%; display: flex; gap: 3px; transform: translateX(-50%); }
+.pcad-pane-layout-controls button { height: 25px; display: flex; align-items: center; gap: 4px; border: 1px solid rgba(255, 255, 255, .07); border-radius: 5px; background: rgba(10, 13, 20, .92); padding: 0 6px; color: #697487; font-size: 7px; }
+.pcad-pane-layout-controls button:hover,
+.pcad-pane-layout-controls button:focus-visible { border-color: rgba(142, 116, 248, .34); color: #c7bdf2; outline: 0; }
+.pcad-pane-layout-controls button[aria-pressed=false] { border-color: rgba(91, 197, 170, .26); color: #81d3bd; }
+.pcad-pane-layout-controls button[aria-pressed=false] svg { transform: rotate(180deg); }
 
 .pcad-pane-header {
   min-height: 35px;
@@ -280,23 +303,7 @@
 .pcad-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: #c5ccd8; font-size: 8px; }
 .pcad-search input::placeholder { color: #4f596b; }
 
-.pcad-coverage {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 0 0 auto;
-  margin: 3px 7px 5px;
-  border: 1px solid rgba(85, 192, 163, .1);
-  border-radius: 6px;
-  background: rgba(47, 129, 108, .05);
-  padding: 6px 7px;
-}
-
-.pcad-coverage strong { color: #8fcab9; font-size: 7.5px; }
-.pcad-coverage span { color: #718b85; font-size: 7px; }
-.pcad-coverage small { color: #536b67; font-size: 6.5px; line-height: 1.35; }
-
-.pcad-catalog-list,
+.pcad-catalog-tree,
 .pcad-model-tree,
 .pcad-inspector-scroll,
 .pcad-table-scroll {
@@ -306,9 +313,50 @@
   scrollbar-color: #32294f transparent;
 }
 
-.pcad-catalog-list { flex: 1; padding: 2px 5px 8px; }
+.pcad-catalog-tree { flex: 1; padding: 2px 6px 8px; }
+.pcad-catalog-group { margin-bottom: 4px; border: 1px solid rgba(255, 255, 255, .055); border-radius: 6px; background: rgba(255, 255, 255, .012); overflow: hidden; }
+.pcad-catalog-group[open] { border-color: rgba(125, 101, 211, .16); background: rgba(73, 54, 132, .025); }
+.pcad-catalog-group.project[open] { border-color: rgba(83, 188, 159, .16); background: rgba(43, 116, 98, .035); }
+.pcad-catalog-group > summary { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 6px; cursor: pointer; list-style: none; padding: 4px 7px; color: #939caf; }
+.pcad-catalog-group > summary::-webkit-details-marker { display: none; }
+.pcad-catalog-group > summary::after { content: '›'; order: 3; color: #596479; font-size: 13px; transform: rotate(0deg); transition: transform .12s ease; }
+.pcad-catalog-group[open] > summary::after { transform: rotate(90deg); }
+.pcad-catalog-group > summary > span { min-width: 0; display: grid; grid-template-columns: 15px minmax(0, 1fr); align-items: center; column-gap: 5px; }
+.pcad-catalog-group > summary strong { overflow: hidden; text-overflow: ellipsis; color: #aeb6c6; font-size: 7.5px; font-weight: 600; white-space: nowrap; }
+.pcad-catalog-group > summary small { grid-column: 2; color: #586478; font-size: 6px; }
+.pcad-catalog-group > summary b { min-width: 22px; border-radius: 8px; background: rgba(123, 99, 207, .08); padding: 2px 5px; color: #71658f; font-size: 6px; font-weight: 600; text-align: center; }
+.pcad-catalog-group[data-library=bd-warehouse] > summary svg { color: #9481dd; }
+.pcad-catalog-group[data-library=build123d] > summary svg,
+.pcad-catalog-group.project > summary svg { color: #72bba7; }
+.pcad-catalog-group-body { display: grid; gap: 3px; border-top: 1px solid rgba(255, 255, 255, .045); padding: 4px; }
+.pcad-catalog-more { width: 100%; min-height: 34px; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px; border: 1px dashed rgba(142, 116, 248, .18); border-radius: 6px; background: rgba(142, 116, 248, .025); color: #9186bd; font-size: 7px; }
+.pcad-catalog-more:hover,
+.pcad-catalog-more:focus-visible { border-color: rgba(142, 116, 248, .38); background: rgba(142, 116, 248, .07); outline: 0; }
+.pcad-catalog-more span { color: #566176; }
 
-.pcad-catalog-list > button {
+.pcad-manual-design { flex: 0 0 auto; border-bottom: 1px solid rgba(255, 255, 255, .055); padding-bottom: 5px; }
+.pcad-manual-design > p { margin: 0 8px 5px; color: #596578; font-size: 6.5px; line-height: 1.4; }
+.pcad-manual-design > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 0 7px; }
+.pcad-manual-design > div > button { min-width: 0; min-height: 38px; display: flex; align-items: center; gap: 5px; border: 1px solid rgba(96, 204, 176, .1); border-radius: 6px; background: rgba(55, 142, 118, .035); padding: 5px; color: #718176; text-align: left; }
+.pcad-manual-design > div > button:hover,
+.pcad-manual-design > div > button:focus-visible,
+.pcad-manual-design > div > button.selected { border-color: rgba(96, 204, 176, .32); background: rgba(55, 142, 118, .1); color: #9cd4c5; outline: 0; }
+.pcad-manual-design > div > button span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pcad-manual-design > div > button strong { overflow: hidden; text-overflow: ellipsis; font-size: 7.5px; white-space: nowrap; }
+.pcad-manual-design > div > button small,
+.pcad-manual-design > small { color: #53645f; font-size: 6px; }
+.pcad-manual-design > small { display: block; padding: 0 8px; }
+
+.pcad-project-parts { border-top-color: rgba(93, 203, 174, .08); }
+.pcad-project-parts > p { margin: 0 3px 4px; color: #536b66; font-size: 6.5px; line-height: 1.35; }
+.pcad-project-part { min-height: 42px; display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; align-items: center; gap: 7px; border-radius: 6px; padding: 4px; }
+.pcad-project-part:hover { background: rgba(255, 255, 255, .025); }
+.pcad-project-part > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pcad-project-part strong { overflow: hidden; text-overflow: ellipsis; color: #b7bfcd; font-size: 8px; font-weight: 500; white-space: nowrap; }
+.pcad-project-part small { color: #596578; font-size: 6.5px; text-transform: capitalize; }
+.pcad-project-part > i { border-radius: 8px; background: rgba(57, 143, 118, .09); padding: 2px 4px; color: #6fae9c; font-size: 5.5px; font-style: normal; }
+
+.pcad-catalog-group-body > button {
   width: 100%;
   min-height: 47px;
   display: grid;
@@ -323,13 +371,13 @@
   text-align: left;
 }
 
-.pcad-catalog-list > button:hover { background: rgba(255, 255, 255, .03); }
-.pcad-catalog-list > button.selected { border-color: rgba(139, 112, 237, .2); background: linear-gradient(90deg, rgba(113, 84, 217, .13), rgba(43, 137, 115, .04)); }
+.pcad-catalog-group-body > button:hover { background: rgba(255, 255, 255, .03); }
+.pcad-catalog-group-body > button.selected { border-color: rgba(139, 112, 237, .2); background: linear-gradient(90deg, rgba(113, 84, 217, .13), rgba(43, 137, 115, .04)); }
 .pcad-capability-icon { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 7px; background: rgba(117, 89, 225, .1); color: #9583dd; }
-.pcad-catalog-list > button > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.pcad-catalog-list > button strong { overflow: hidden; text-overflow: ellipsis; color: #b7bfcd; font-size: 8px; font-weight: 500; white-space: nowrap; }
-.pcad-catalog-list > button small { overflow: hidden; text-overflow: ellipsis; color: #596578; font-size: 6.5px; text-transform: capitalize; white-space: nowrap; }
-.pcad-catalog-list > button > i { border-radius: 8px; background: rgba(209, 156, 72, .09); padding: 2px 4px; color: #a78450; font-size: 5.5px; font-style: normal; }
+.pcad-catalog-group-body > button > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pcad-catalog-group-body > button strong { overflow: hidden; text-overflow: ellipsis; color: #b7bfcd; font-size: 8px; font-weight: 500; white-space: nowrap; }
+.pcad-catalog-group-body > button small { overflow: hidden; text-overflow: ellipsis; color: #596578; font-size: 6.5px; text-transform: capitalize; white-space: nowrap; }
+.pcad-catalog-group-body > button > i { border-radius: 8px; background: rgba(209, 156, 72, .09); padding: 2px 4px; color: #a78450; font-size: 5.5px; font-style: normal; }
 
 .pcad-model-tree { flex: 1; padding: 4px 4px 8px; }
 .pcad-model-tree > button {
@@ -696,6 +744,7 @@
 .pcad-empty p { max-width: 220px; margin: 0; color: #566275; font-size: 6.8px; line-height: 1.45; }
 
 .pcad-statusbar {
+  grid-row: 4;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -712,6 +761,7 @@
 .pcad-statusbar > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pcad-statusbar > strong { max-width: 45%; color: #88cdbb; font-weight: 500; }
 .pcad-statusbar > strong.error { color: #d58a98; }
+.pcad-statusbar > .pcad-unsaved-status { color: #d2a35d; }
 .pcad-status-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #667084; }
 .pcad-status-dot.available { background: #55c6a8; box-shadow: 0 0 6px rgba(85, 198, 168, .55); }
 .pcad-status-dot.checking { background: #d0a34f; }
@@ -846,6 +896,10 @@
 }
 
 @container (max-width: 760px) {
+  .pcad-pane-resizer,
+  .pcad-pane-layout-controls { display: none; }
+  .pcad-stage.context-collapsed .pcad-context-pane,
+  .pcad-stage.inspector-collapsed .pcad-inspector-pane { visibility: visible; pointer-events: auto; }
   .pcad-stage {
     grid-template-columns: minmax(145px, .72fr) minmax(220px, 1.28fr);
     grid-template-rows: minmax(230px, 1fr) minmax(170px, .72fr);
@@ -865,8 +919,7 @@
 }
 
 @container (max-width: 520px) {
-  .photon-cad-workspace { grid-template-rows: 32px 34px auto 43px minmax(0, 1fr) 24px; }
-  .pcad-document-meta > span:not(:first-child) { display: none; }
+  .photon-cad-workspace { grid-template-rows: auto 43px minmax(0, 1fr) 24px; }
   .pcad-workflow-tabs > button { min-width: 82px; flex-basis: 82px; gap: 4px; }
   .pcad-workflow-tabs > button small { display: none; }
   .pcad-stage {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import {
   Bot,
   Box,
@@ -53,6 +54,16 @@ import { DockGroup } from '../Modules/WorkbenchDocking/DockGroup'
 import type { DockPanelRegistration } from '../Modules/WorkbenchDocking/DockGroup'
 import { loadDockGroupLayout, saveDockGroupLayout } from '../Modules/WorkbenchDocking/DockGroupLayout'
 import type { DockGroupLayout } from '../Modules/WorkbenchDocking/DockGroupLayout'
+import {
+  CAD_WORKBENCH_BOUNDS,
+  enterCadWorkbenchLayout,
+  keyboardCadWorkbenchPaneWidth,
+  loadCadWorkbenchLayout,
+  resizeCadWorkbenchPane,
+  saveCadWorkbenchLayout,
+  toggleCadWorkbenchPane,
+  type CadWorkbenchPane,
+} from './CadWorkbenchLayout'
 import { announceHermesAuthChanged } from '../Modules/HermesSystem/HermesAuthEvents'
 import {
   applyUiScale,
@@ -124,7 +135,7 @@ function Explorer() {
   return (
     <aside className="explorer">
       <div className="panel-label">EXPLORER <span>•••</span></div>
-      <div className="tree-heading"><ChevronDown size={14} /> HERMESAGENT</div>
+      <div className="tree-heading"><ChevronDown size={14} /> HERMES</div>
       <div className="tree">
         <div><ChevronDown size={14} /><span className="folder">src</span></div>
         <div className="indent-1"><ChevronDown size={14} /><span className="folder">Modules</span></div>
@@ -205,10 +216,12 @@ export function App() {
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
   const [commandQuery, setCommandQuery] = useState('')
   const [agentDockLayout, setAgentDockLayout] = useState(() => loadDockGroupLayout(AGENT_DOCK_STORAGE_KEY, AGENT_PANEL_IDS, DEFAULT_AGENT_DOCK_LAYOUT))
+  const [cadWorkbenchLayout, setCadWorkbenchLayout] = useState(loadCadWorkbenchLayout)
   const [photonCadProjectsAvailable, setPhotonCadProjectsAvailable] = useState(desktopPhotonCadProjectsAvailable)
   const menuBarRef = useRef<HTMLElement>(null)
   const activeEditTargetRef = useRef<HTMLElement | null>(null)
   const browserOpenNonceRef = useRef(0)
+  const cadResizeRef = useRef<{ pane: CadWorkbenchPane; pointerId: number; startX: number; startWidth: number } | null>(null)
   const showBuildOutput = useCallback(() => setTerminalOpen(true), [])
   const developerBuild = useDeveloperBuild(showBuildOutput)
   const workspaceSearchProviders = useMemo(() => createDesktopWorkspaceSearchProviders(), [])
@@ -237,6 +250,25 @@ export function App() {
     window.addEventListener('hermes-desktop-ready', refresh)
     refresh()
     return () => window.removeEventListener('hermes-desktop-ready', refresh)
+  }, [])
+
+  useEffect(() => {
+    const navigate = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail
+      if (!detail || typeof detail !== 'object') return
+      const candidate = detail as { path?: unknown; line?: unknown; column?: unknown }
+      if (typeof candidate.path !== 'string' || !candidate.path || candidate.path.length > 2_048
+        || candidate.path.includes('\0') || candidate.path.replaceAll('\\', '/').split('/').some((part) => !part || part === '.' || part === '..')
+        || typeof candidate.line !== 'number' || !Number.isInteger(candidate.line) || candidate.line < 1
+        || typeof candidate.column !== 'number' || !Number.isInteger(candidate.column) || candidate.column < 1) return
+      const path = candidate.path.replaceAll('\\', '/')
+      setSelectedWorkspacePath(path)
+      setWorkspaceSelection({ path, line: candidate.line, column: candidate.column, nonce: Date.now() })
+      setLayout('code')
+      setLeftPanel('explorer')
+    }
+    window.addEventListener('hermes-workspace-navigate', navigate)
+    return () => window.removeEventListener('hermes-workspace-navigate', navigate)
   }, [])
 
   function chooseUiScale(scale: number) {
@@ -292,6 +324,12 @@ export function App() {
     setTerminalOpen(true)
   }
 
+  const openPhotonCad = useCallback(() => {
+    setCadWorkbenchLayout(enterCadWorkbenchLayout)
+    setLayout('code')
+    setLeftPanel('cad')
+  }, [])
+
   const commandItems = useMemo(() => [
     { label: 'Open File…', detail: 'File', run: () => void openFile() },
     { label: 'Save File', detail: 'File', run: () => runFileCommand('save') },
@@ -302,7 +340,7 @@ export function App() {
     { label: 'Show Explorer', detail: 'View', run: () => { setLayout('code'); setLeftPanel('explorer') } },
     { label: 'Show Workspace Search', detail: 'View', run: () => { setLayout('code'); setLeftPanel('search') } },
     { label: 'Show Docker Control Center', detail: 'View', run: () => { setLayout('code'); setLeftPanel('containers') } },
-    { label: 'Open Photon CAD', detail: 'View', run: () => { setLayout('code'); setLeftPanel('cad') } },
+    { label: 'Open Photon CAD', detail: 'View', run: openPhotonCad },
     { label: 'Show Source Control', detail: 'View', run: () => { setLayout('code'); setLeftPanel('sourceControl') } },
     { label: 'Show Run and Debug', detail: 'View', run: () => { setLayout('code'); setLeftPanel('run') } },
     { label: 'Show Usage Intelligence', detail: 'View', run: () => { setLayout('code'); setLeftPanel('usage') } },
@@ -311,7 +349,7 @@ export function App() {
     { label: `Focus ${assistantName}`, detail: 'Layout', run: () => setLayout('chat') },
     { label: `Show ${assistantName} and Codex`, detail: 'Layout', run: () => setLayout('split') },
     { label: terminalVisible ? 'Hide Terminal' : 'Show Terminal', detail: 'View', run: toggleTerminal },
-  ], [assistantName, fileCommandsAvailable, terminalVisible])
+  ], [assistantName, fileCommandsAvailable, openPhotonCad, terminalVisible])
   const filteredCommandItems = commandItems.filter((command) => (
     (fileCommandsAvailable || command.detail !== 'File' || command.label.startsWith('Open File'))
     && `${command.label} ${command.detail}`.toLocaleLowerCase().includes(commandQuery.trim().toLocaleLowerCase())
@@ -383,6 +421,10 @@ export function App() {
   }, [agentDockLayout])
 
   useEffect(() => {
+    saveCadWorkbenchLayout(cadWorkbenchLayout)
+  }, [cadWorkbenchLayout])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return
       if (event.key === '+' || event.key === '=') {
@@ -438,8 +480,51 @@ export function App() {
     }
   }, [openMenu])
 
+  const cadWorkbenchStyle = leftPanel === 'cad' ? ({
+    '--cad-explorer-width': cadWorkbenchLayout.explorerCollapsed ? '0px' : `${cadWorkbenchLayout.explorerWidth}px`,
+    '--cad-photon-width': cadWorkbenchLayout.photonCollapsed ? '0px' : `${cadWorkbenchLayout.photonWidth}px`,
+  } as CSSProperties) : undefined
+
+  function beginCadPaneResize(pane: CadWorkbenchPane, event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    cadResizeRef.current = {
+      pane,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: pane === 'explorer' ? cadWorkbenchLayout.explorerWidth : cadWorkbenchLayout.photonWidth,
+    }
+  }
+
+  function moveCadPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const active = cadResizeRef.current
+    if (!active || active.pointerId !== event.pointerId) return
+    const direction = active.pane === 'explorer' ? 1 : -1
+    const next = active.startWidth + ((event.clientX - active.startX) / uiScale) * direction
+    setCadWorkbenchLayout((current) => resizeCadWorkbenchPane(current, active.pane, next))
+  }
+
+  function endCadPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const active = cadResizeRef.current
+    if (!active || active.pointerId !== event.pointerId) return
+    cadResizeRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  function resizeCadPaneWithKeyboard(pane: CadWorkbenchPane, event: ReactKeyboardEvent<HTMLDivElement>) {
+    const current = pane === 'explorer' ? cadWorkbenchLayout.explorerWidth : cadWorkbenchLayout.photonWidth
+    const next = keyboardCadWorkbenchPaneWidth(pane, current, event.key, event.shiftKey)
+    if (next === null) return
+    event.preventDefault()
+    setCadWorkbenchLayout((layoutState) => resizeCadWorkbenchPane(layoutState, pane, next))
+  }
+
   return (
-    <div className={`workbench layout-${layout} panel-${leftPanel} ${terminalOpen ? '' : 'terminal-closed'}`}>
+    <div
+      className={`workbench layout-${layout} panel-${leftPanel} ${terminalOpen ? '' : 'terminal-closed'} ${cadWorkbenchLayout.explorerCollapsed ? 'cad-explorer-collapsed' : ''} ${cadWorkbenchLayout.photonCollapsed ? 'cad-photon-collapsed' : ''}`}
+      style={cadWorkbenchStyle}
+    >
       <header className="titlebar">
         <div className="brand" title="Phos Agape Aphthartos"><span className="brand-mark"><img src="/app/assets/photon-mark.png" alt="" /></span><strong>Phos Agape Aphthartos</strong></div>
         <nav ref={menuBarRef} aria-label="Application menu">
@@ -497,6 +582,22 @@ export function App() {
           </div>
           <button onClick={() => { setLayout('code'); setLeftPanel('run') }}>Run</button><button onClick={toggleTerminal}>Terminal</button>
         </nav>
+        {layout !== 'chat' && leftPanel === 'cad' ? (
+          <div className="cad-layout-controls" role="group" aria-label="Photon CAD pane visibility">
+            <button
+              type="button"
+              aria-pressed={!cadWorkbenchLayout.explorerCollapsed}
+              title={cadWorkbenchLayout.explorerCollapsed ? 'Restore Workspace Explorer' : 'Collapse Workspace Explorer'}
+              onClick={() => setCadWorkbenchLayout((current) => toggleCadWorkbenchPane(current, 'explorer'))}
+            ><PanelLeftClose size={14} /><span>Explorer</span></button>
+            <button
+              type="button"
+              aria-pressed={!cadWorkbenchLayout.photonCollapsed}
+              title={cadWorkbenchLayout.photonCollapsed ? 'Restore Photon' : 'Collapse Photon'}
+              onClick={() => setCadWorkbenchLayout((current) => toggleCadWorkbenchPane(current, 'photon'))}
+            ><PanelRightClose size={14} /><span>Photon</span></button>
+          </div>
+        ) : null}
         <div className="command-center-shell">
           <button className="command-center" aria-expanded={commandCenterOpen} aria-haspopup="dialog" onClick={() => { setCommandCenterOpen(true); setCommandQuery('') }} title="Open Command Center"><Search size={14} /><span>Phos Agape Aphthartos</span><small>Ctrl K</small></button>
           {commandCenterOpen && <section className="command-palette" role="dialog" aria-label="Command Center">
@@ -529,13 +630,48 @@ export function App() {
           <button aria-label="Source control" className={leftPanel === 'sourceControl' ? 'active' : ''} onClick={() => setLeftPanel('sourceControl')}><GitBranch size={22} /></button>
           <button aria-label="Run" className={leftPanel === 'run' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('run') }}><Play size={22} /></button>
           <button aria-label="Docker Control Center" className={leftPanel === 'containers' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('containers') }}><Box size={22} /></button>
-          <button aria-label="Photon CAD" className={leftPanel === 'cad' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('cad') }}><DraftingCompass size={22} /></button>
+          <button aria-label="Photon CAD" className={leftPanel === 'cad' ? 'active' : ''} onClick={openPhotonCad}><DraftingCompass size={22} /></button>
           <button aria-label={`${assistantName} sessions`} className={leftPanel === 'sessions' ? 'active' : ''} onClick={() => setLeftPanel('sessions')}><Bot size={22} /></button>
           <button aria-label="Usage intelligence" className={leftPanel === 'usage' ? 'active' : ''} onClick={() => setLeftPanel('usage')}><ChartNoAxesCombined size={22} /></button>
           <button aria-label="Browser" className={leftPanel === 'browser' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('browser') }}><Globe2 size={22} /></button>
         </div>
         <div><button aria-label="Settings" className={leftPanel === 'system' ? 'active' : ''} onClick={() => setLeftPanel('system')}><Settings size={22} /></button></div>
       </aside>
+
+      {layout !== 'chat' && leftPanel === 'cad' && !cadWorkbenchLayout.explorerCollapsed ? (
+        <div
+          className="cad-workbench-resizer cad-workbench-resizer--explorer"
+          role="separator"
+          aria-label="Resize Workspace Explorer"
+          aria-orientation="vertical"
+          aria-valuemin={CAD_WORKBENCH_BOUNDS.explorer.minimum}
+          aria-valuemax={CAD_WORKBENCH_BOUNDS.explorer.maximum}
+          aria-valuenow={cadWorkbenchLayout.explorerWidth}
+          tabIndex={0}
+          onPointerDown={(event) => beginCadPaneResize('explorer', event)}
+          onPointerMove={moveCadPaneResize}
+          onPointerUp={endCadPaneResize}
+          onPointerCancel={endCadPaneResize}
+          onKeyDown={(event) => resizeCadPaneWithKeyboard('explorer', event)}
+        />
+      ) : null}
+      {layout !== 'chat' && leftPanel === 'cad' && !cadWorkbenchLayout.photonCollapsed ? (
+        <div
+          className="cad-workbench-resizer cad-workbench-resizer--photon"
+          role="separator"
+          aria-label="Resize Photon pane"
+          aria-orientation="vertical"
+          aria-valuemin={CAD_WORKBENCH_BOUNDS.photon.minimum}
+          aria-valuemax={CAD_WORKBENCH_BOUNDS.photon.maximum}
+          aria-valuenow={cadWorkbenchLayout.photonWidth}
+          tabIndex={0}
+          onPointerDown={(event) => beginCadPaneResize('photon', event)}
+          onPointerMove={moveCadPaneResize}
+          onPointerUp={endCadPaneResize}
+          onPointerCancel={endCadPaneResize}
+          onKeyDown={(event) => resizeCadPaneWithKeyboard('photon', event)}
+        />
+      ) : null}
 
       {layout !== 'chat' && (leftPanel === 'system' ? <HermesSystemWorkspace accountRequest={accountRequest} /> : leftPanel === 'usage' ? <UsageIntelligenceDashboard /> : leftPanel === 'browser' ? <BrowserWorkspace openRequest={browserOpenRequests[0] ?? null} onOpenRequestHandled={(nonce) => setBrowserOpenRequests((current) => current.filter((request) => request.nonce !== nonce))} /> : leftPanel === 'sourceControl' ? sourceControlPath ? <SourceControlWorkspace workspaceRelativePath={sourceControlPath} /> : <aside className="source-control-closed"><GitBranch size={28} /><strong>No Git repository open</strong><button onClick={() => void openGitRepository()}>Open Git Repository…</button></aside> : leftPanel === 'search' ? <>
         <WorkspaceExplorer selectedPath={selectedWorkspacePath} onOpen={(entry) => { setWorkspaceSelection(null); setSelectedWorkspacePath(entry.path) }} />

@@ -84,6 +84,45 @@
       },
       "required": ["schema", "ok", "operation", "artifact", "entityCount", "sourceCount", "bounds", "units", "provenance"],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.response/v1" },
+        "ok": { "const": true },
+        "operation": { "const": "manualSketchExtrudeAdd" },
+        "artifact": { "$ref": "#/$defs/stepArtifact" },
+        "measurement": { "$ref": "#/$defs/measurement" },
+        "provenance": { "$ref": "#/$defs/manualAddProvenance" }
+      },
+      "required": ["schema", "ok", "operation", "artifact", "measurement", "provenance"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.response/v1" },
+        "ok": { "const": true },
+        "operation": { "const": "manualSketchExtrudeCut" },
+        "artifact": { "$ref": "#/$defs/stepArtifact" },
+        "measurement": { "$ref": "#/$defs/measurement" },
+        "provenance": { "$ref": "#/$defs/manualCutProvenance" }
+      },
+      "required": ["schema", "ok", "operation", "artifact", "measurement", "provenance"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.response/v1" },
+        "ok": { "const": true },
+        "operation": { "const": "manualHoleCut" },
+        "artifact": { "$ref": "#/$defs/stepArtifact" },
+        "measurement": { "$ref": "#/$defs/measurement" },
+        "provenance": { "$ref": "#/$defs/manualHoleProvenance" }
+      },
+      "required": ["schema", "ok", "operation", "artifact", "measurement", "provenance"],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -190,6 +229,76 @@
         }
       },
       "required": ["generator", "catalogDigest", "itemId", "parameters"],
+      "additionalProperties": false
+    },
+    "manualProfile": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "rectangle" },
+            "plane": { "const": "xy" },
+            "widthMm": { "type": "number", "exclusiveMinimum": 0 },
+            "heightMm": { "type": "number", "exclusiveMinimum": 0 }
+          },
+          "required": ["kind", "plane", "widthMm", "heightMm"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "circle" },
+            "plane": { "const": "xy" },
+            "radiusMm": { "type": "number", "exclusiveMinimum": 0 }
+          },
+          "required": ["kind", "plane", "radiusMm"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "manualAddProvenance": {
+      "type": "object",
+      "properties": {
+        "generator": { "const": "manual" },
+        "kind": { "const": "sketchExtrudeAdd" },
+        "profile": { "$ref": "#/$defs/manualProfile" },
+        "depthMm": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "required": ["generator", "kind", "profile", "depthMm"],
+      "additionalProperties": false
+    },
+    "manualCutProvenance": {
+      "type": "object",
+      "properties": {
+        "generator": { "const": "manual" },
+        "kind": { "const": "sketchExtrudeCut" },
+        "profile": { "$ref": "#/$defs/manualProfile" },
+        "depthMm": { "type": "number", "exclusiveMinimum": 0 },
+        "sourceVolumeMm3": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "required": ["generator", "kind", "profile", "depthMm", "sourceVolumeMm3"],
+      "additionalProperties": false
+    },
+    "manualHoleProvenance": {
+      "type": "object",
+      "properties": {
+        "generator": { "const": "manual" },
+        "kind": { "const": "holeCut" },
+        "hole": {
+          "type": "object",
+          "properties": {
+            "depthMm": { "type": "number", "exclusiveMinimum": 0 },
+            "radiusMm": { "type": "number", "exclusiveMinimum": 0 },
+            "xMm": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+            "yMm": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+            "zMm": { "type": "number", "minimum": -1000000, "maximum": 1000000 }
+          },
+          "required": ["depthMm", "radiusMm", "xMm", "yMm", "zMm"],
+          "additionalProperties": false
+        },
+        "sourceVolumeMm3": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "required": ["generator", "kind", "hole", "sourceVolumeMm3"],
       "additionalProperties": false
     },
     "previewProvenance": {

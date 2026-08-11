@@ -10,10 +10,22 @@ internal static class ConcreteOperationHandlersSmoke
         var workspace = Path.Combine(Path.GetTempPath(), $"HermesConcreteHandlers-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(workspace, "native"));
         Directory.CreateDirectory(Path.Combine(workspace, "Blink"));
+        Directory.CreateDirectory(Path.Combine(workspace, "dotnet"));
         try
         {
             File.WriteAllText(Path.Combine(workspace, "native", "main.c"), "int main(void) { return 0; }");
             File.WriteAllText(Path.Combine(workspace, "Blink", "Blink.ino"), "void setup() {} void loop() {}");
+            File.WriteAllText(Path.Combine(workspace, "dotnet", "Dragon.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(workspace, "dotnet", "Program.cs"), "Console.WriteLine(\"dragon\");");
+
+            var dotnet = new DotnetLanguageToolingOperationHandler(workspace);
+            var dotnetBuild = await dotnet.ExecuteAsync(new CompileLanguageToolingRequest(
+                1, "dotnet:compile:1", "workspace:1", "dotnet", "dotnet/Dragon.csproj", "release"), CancellationToken.None);
+            Require(dotnetBuild.Succeeded, $"Concrete .NET handler did not complete the fixed build operation ({dotnetBuild.Code}: {dotnetBuild.SafeMessage}).");
+            var dotnetTests = await dotnet.ExecuteAsync(new RunLanguageToolingTestsRequest(
+                1, "dotnet:tests:1", "workspace:1", "dotnet", "dotnet/Dragon.csproj"), CancellationToken.None);
+            Require(dotnetTests.Succeeded, $"Concrete .NET handler did not complete the fixed test operation ({dotnetTests.Code}: {dotnetTests.SafeMessage}).");
 
             var gccAuthority = new FakeGccAuthority();
             var gcc = new GccLanguageToolingOperationHandler(gccAuthority, workspace);

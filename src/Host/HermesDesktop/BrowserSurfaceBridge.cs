@@ -18,6 +18,7 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
     private readonly Dictionary<string, BrowserTabState> _tabs = new(StringComparer.Ordinal);
     private readonly Dictionary<ulong, BrowserNavigationContext> _navigations = new();
     private readonly Queue<BrowserNavigationContext> _navigationQueue = new();
+    private readonly BrowserSurfaceRequestGate _surfaceRequests = new();
     private BrowserNavigationContext? _startingNavigation;
     private string _displayedTabId = string.Empty;
     private readonly Dictionary<string, (Uri Uri, DateTimeOffset ExpiresAt)> _pendingOpenRequests = new();
@@ -31,7 +32,9 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
 
     internal async Task ShowAsync(int x, int y, int width, int height, string? tabId, string? address)
     {
+        var surfaceRequest = _surfaceRequests.Begin();
         if (!await EnsureInitializedAsync()) return;
+        if (!_surfaceRequests.IsCurrent(surfaceRequest)) return;
         if (width < 80 || height < 80 || x < 0 || y < 0) return;
         var availableWidth = Math.Max(0, _window.ActualWidth - x);
         var availableHeight = Math.Max(0, _window.ActualHeight - y);
@@ -58,7 +61,11 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
         PostState();
     }
 
-    internal void Hide() => _view.Visibility = Visibility.Collapsed;
+    internal void Hide()
+    {
+        _surfaceRequests.Invalidate();
+        _view.Visibility = Visibility.Collapsed;
+    }
 
     internal void Navigate(string? tabId, string? address)
     {
@@ -129,68 +136,68 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
             }
             var core = _view.CoreWebView2
                 ?? throw new InvalidOperationException("The native browser did not initialize.");
-        core.Settings.AreHostObjectsAllowed = false;
-        core.Settings.IsWebMessageEnabled = false;
-        core.Settings.AreDevToolsEnabled = true;
-        core.Settings.AreDefaultContextMenusEnabled = true;
-        core.Settings.AreDefaultScriptDialogsEnabled = true;
-        core.Settings.IsStatusBarEnabled = true;
-        core.NavigationStarting += (_, eventArgs) =>
-        {
-            if (!TryNormalizeAddress(eventArgs.Uri, out var navigationUri))
+            core.Settings.AreHostObjectsAllowed = false;
+            core.Settings.IsWebMessageEnabled = false;
+            core.Settings.AreDevToolsEnabled = true;
+            core.Settings.AreDefaultContextMenusEnabled = true;
+            core.Settings.AreDefaultScriptDialogsEnabled = true;
+            core.Settings.IsStatusBarEnabled = true;
+            core.NavigationStarting += (_, eventArgs) =>
+            {
+                if (!TryNormalizeAddress(eventArgs.Uri, out var navigationUri))
+                {
+                    eventArgs.Cancel = true;
+                    PostError("The browser blocked a non-HTTP navigation.");
+                    return;
+                }
+                BrowserNavigationContext context;
+                if (_navigations.TryGetValue(eventArgs.NavigationId, out var redirect))
+                {
+                    context = redirect with { Uri = navigationUri };
+                }
+                else if (_startingNavigation is not null)
+                {
+                    context = _startingNavigation with { Uri = navigationUri };
+                    _startingNavigation = null;
+                }
+                else
+                {
+                    context = new BrowserNavigationContext(_tabId, navigationUri, ReplaceCurrent: false);
+                }
+                _navigations[eventArgs.NavigationId] = context;
+                PostState();
+            };
+            core.NavigationCompleted += (_, eventArgs) =>
+            {
+                if (_navigations.Remove(eventArgs.NavigationId, out var context))
+                {
+                    ApplyNavigationCompletion(_tabs, context, eventArgs.IsSuccess);
+                    if (eventArgs.IsSuccess) _displayedTabId = context.TabId;
+                }
+                StartNextNavigation();
+                PostState();
+            };
+            core.SourceChanged += (_, _) => PostState();
+            core.DocumentTitleChanged += (_, _) => PostState();
+            core.HistoryChanged += (_, _) => PostState();
+            core.NewWindowRequested += (_, eventArgs) =>
+            {
+                eventArgs.Handled = true;
+                if (TryNormalizeAddress(eventArgs.Uri, out var uri))
+                {
+                    PurgeOpenRequests();
+                    while (_pendingOpenRequests.Count >= 32) _pendingOpenRequests.Remove(_pendingOpenRequests.Keys.First());
+                    var requestId = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+                    _pendingOpenRequests[requestId] = (uri, DateTimeOffset.UtcNow.AddMinutes(2));
+                    _postMessage(new { type = "browser.openRequested", version = ProtocolVersion, requestId, url = RendererSafeDisplayUrl(uri) });
+                }
+            };
+            core.PermissionRequested += (_, eventArgs) => eventArgs.State = CoreWebView2PermissionState.Deny;
+            core.DownloadStarting += (_, eventArgs) =>
             {
                 eventArgs.Cancel = true;
-                PostError("The browser blocked a non-HTTP navigation.");
-                return;
-            }
-            BrowserNavigationContext context;
-            if (_navigations.TryGetValue(eventArgs.NavigationId, out var redirect))
-            {
-                context = redirect with { Uri = navigationUri };
-            }
-            else if (_startingNavigation is not null)
-            {
-                context = _startingNavigation with { Uri = navigationUri };
-                _startingNavigation = null;
-            }
-            else
-            {
-                context = new BrowserNavigationContext(_tabId, navigationUri, ReplaceCurrent: false);
-            }
-            _navigations[eventArgs.NavigationId] = context;
-            PostState();
-        };
-        core.NavigationCompleted += (_, eventArgs) =>
-        {
-            if (_navigations.Remove(eventArgs.NavigationId, out var context))
-            {
-                ApplyNavigationCompletion(_tabs, context, eventArgs.IsSuccess);
-                if (eventArgs.IsSuccess) _displayedTabId = context.TabId;
-            }
-            StartNextNavigation();
-            PostState();
-        };
-        core.SourceChanged += (_, _) => PostState();
-        core.DocumentTitleChanged += (_, _) => PostState();
-        core.HistoryChanged += (_, _) => PostState();
-        core.NewWindowRequested += (_, eventArgs) =>
-        {
-            eventArgs.Handled = true;
-            if (TryNormalizeAddress(eventArgs.Uri, out var uri))
-            {
-                PurgeOpenRequests();
-                while (_pendingOpenRequests.Count >= 32) _pendingOpenRequests.Remove(_pendingOpenRequests.Keys.First());
-                var requestId = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
-                _pendingOpenRequests[requestId] = (uri, DateTimeOffset.UtcNow.AddMinutes(2));
-                _postMessage(new { type = "browser.openRequested", version = ProtocolVersion, requestId, url = RendererSafeDisplayUrl(uri) });
-            }
-        };
-        core.PermissionRequested += (_, eventArgs) => eventArgs.State = CoreWebView2PermissionState.Deny;
-        core.DownloadStarting += (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            PostError("Downloads are blocked until the Workbench download review is available.");
-        };
+                PostError("Downloads are blocked until the Workbench download review is available.");
+            };
             _initialized = true;
             return true;
         }
@@ -344,9 +351,21 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
+        _surfaceRequests.Invalidate();
         _view.Dispose();
         return ValueTask.CompletedTask;
     }
+}
+
+internal sealed class BrowserSurfaceRequestGate
+{
+    private long _generation;
+
+    internal long Begin() => Interlocked.Increment(ref _generation);
+
+    internal void Invalidate() => Interlocked.Increment(ref _generation);
+
+    internal bool IsCurrent(long generation) => generation == Volatile.Read(ref _generation);
 }
 
 internal sealed record BrowserNavigationContext(string TabId, Uri Uri, bool ReplaceCurrent);

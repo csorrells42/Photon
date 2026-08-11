@@ -1,0 +1,26 @@
+.message-actions.hermes-natural-voice-actions {
+  align-items: center;
+}
+
+.hermes-natural-voice-actions button[data-active='true'] {
+  background: rgba(142, 116, 248, 0.12);
+  color: #b7a7ff;
+  opacity: 1;
+}
+
+.hermes-natural-voice-actions .hermes-natural-voice-spinner {
+  animation: hermes-natural-voice-spin 0.8s linear infinite;
+}
+
+.hermes-natural-voice-error {
+  color: #c98d95;
+  font-size: 8px;
+}
+
+@keyframes hermes-natural-voice-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hermes-natural-voice-actions .hermes-natural-voice-spinner { animation: none; }
+}

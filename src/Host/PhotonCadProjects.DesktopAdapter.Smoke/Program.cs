@@ -17,6 +17,7 @@ internal static class Program
             ("reset-reuse-and-unavailable", ResetReuseAndUnavailableAsync),
             ("malformed-path-frame-fails-closed", MalformedPathFrameAsync),
             ("existing-target-requires-explicit-overwrite", ExistingTargetRequiresExplicitOverwriteAsync),
+            ("occurrence-transform-wire-parity", OccurrenceTransformWireParityAsync),
         };
         foreach (var test in tests)
         {
@@ -35,6 +36,49 @@ internal static class Program
                 "target"));
         Assert(mapped.Code == "target-exists-overwrite-confirmation-required", "exact existing-target reason");
         Assert(!mapped.Retryable && !mapped.Unavailable, "existing target stays a rejected user decision");
+        return Task.CompletedTask;
+    }
+
+    private static Task OccurrenceTransformWireParityAsync()
+    {
+        double[] transform =
+        [
+            0, -1, 0, 125,
+            1, 0, 0, -30,
+            0, 0, 1, 8,
+            0, 0, 0, 1,
+        ];
+        var state = new PhotonCadProjectStateV1(
+            "session:projection",
+            "project:projection",
+            0,
+            "Projection",
+            PhotonCadProjectUnit.Millimeter,
+            [new PhotonCadEntityV1("datum:shaft", null, PhotonCadEntityKindV1.Datum, "Shaft datum", true, false, "fixture:source")],
+            [],
+            [new PhotonCadOccurrenceV1("occurrence:shaft", null, "SHAFT-001", "datum:shaft", transform)],
+            [],
+            [],
+            [],
+            dirty: false);
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(PhotonCadSnapshotWireProjection.Snapshot(state, 1)));
+        var root = document.RootElement;
+        var entities = root.GetProperty("entities");
+        var occurrences = root.GetProperty("occurrences");
+        Assert(entities.GetArrayLength() == 2, "canonical entity and occurrence pseudo-entity projected");
+        Assert(occurrences.GetArrayLength() == 1, "explicit occurrence projected exactly once");
+
+        var occurrence = occurrences[0];
+        Assert(occurrence.GetProperty("occurrenceId").GetString() == "occurrence:shaft", "occurrence identity projected");
+        Assert(occurrence.GetProperty("parentOccurrenceId").ValueKind == JsonValueKind.Null, "root occurrence parent remains explicit null");
+        Assert(occurrence.GetProperty("transform").EnumerateArray().Select(value => value.GetDouble()).SequenceEqual(transform), "ordered rigid transform preserved exactly");
+
+        var pseudo = entities[1];
+        Assert(pseudo.GetProperty("id").GetString() == "occurrence:shaft", "pseudo-entity identity matches occurrence");
+        Assert(pseudo.GetProperty("kind").GetString() == "occurrence", "pseudo-entity kind is occurrence");
+        Assert(pseudo.GetProperty("name").GetString() == "SHAFT-001", "pseudo-entity name matches part number");
+        Assert(pseudo.GetProperty("sourceCapabilityId").GetString() == "fixture:source", "pseudo-entity capability follows trusted source entity");
         return Task.CompletedTask;
     }
 

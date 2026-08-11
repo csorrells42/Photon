@@ -62,6 +62,7 @@ import {
   liveHermesSessionAdminAdapter,
 } from '../HermesSessionAdmin'
 import { HermesConnectionsWorkspace, type ConnectionCatalogEntry } from '../HermesConnections'
+import { HermesRuntimeConfigurationWorkspace } from '../HermesRuntimeConfiguration'
 import './HermesSystemWorkspace.css'
 
 type Section = 'overview' | 'account' | 'connections' | 'runtime' | 'integrations' | 'mcp' | 'skills' | 'extensions' | 'profiles' | 'session-admin'
@@ -255,7 +256,7 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
       : section === 'connections'
         ? 'Connections & credentials'
         : section === 'runtime'
-        ? 'Runtime telemetry'
+        ? 'Runtime & model providers'
         : section === 'integrations'
           ? 'Serena integration'
           : section === 'mcp'
@@ -317,7 +318,7 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
           <button type="button" className={section === 'overview' ? 'active' : ''} onClick={() => setSection('overview')}><Activity size={15} /><span><strong>Overview</strong><small>Health and services</small></span></button>
           <button type="button" className={section === 'account' ? 'active' : ''} onClick={() => setSection('account')}><UserRound size={15} /><span><strong>Account</strong><small>{accountLabel}</small></span></button>
           <button type="button" className={section === 'connections' ? 'active' : ''} onClick={() => setSection('connections')}><KeyRound size={15} /><span><strong>Connections</strong><small>Native credential vault</small></span></button>
-          <button type="button" className={section === 'runtime' ? 'active' : ''} onClick={() => setSection('runtime')}><Gauge size={15} /><span><strong>Runtime</strong><small>Host resources</small></span></button>
+          <button type="button" className={section === 'runtime' ? 'active' : ''} onClick={() => setSection('runtime')}><Gauge size={15} /><span><strong>Runtime</strong><small>Models and endpoints</small></span></button>
           <button type="button" className={section === 'integrations' ? 'active' : ''} onClick={() => setSection('integrations')}><Cable size={15} /><span><strong>Integrations</strong><small>{serenaTitle(serena)}</small></span></button>
           <button type="button" className={section === 'mcp' ? 'active' : ''} onClick={() => setSection('mcp')}><Package size={15} /><span><strong>MCP & tools</strong><small>Nous catalog and servers</small></span></button>
           <button type="button" className={section === 'skills' ? 'active' : ''} onClick={() => setSection('skills')}><LibraryBig size={15} /><span><strong>Skills</strong><small>Preview and security scan</small></span></button>
@@ -384,6 +385,7 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
                 <article><header><span><HardDrive size={14} /> Storage</span><strong>{stats.disk ? `${Math.round(stats.disk.percent)}%` : '—'}</strong></header><div><i style={{ width: `${percent(stats.disk?.percent)}%` }} /></div><small>{formatBytes(stats.disk?.free)} free</small></article>
               </div>
               <div className="runtime-details"><div><small>Uptime</small><strong>{formatUptime(stats.uptimeSeconds)}</strong></div><div><small>Process memory</small><strong>{formatBytes(stats.process?.rss)}</strong></div><div><small>Process threads</small><strong>{stats.process?.threads ?? '—'}</strong></div><div><small>Hermes runtime</small><strong>{stats.hermesVersion || status.version}</strong></div></div>
+              <HermesRuntimeConfigurationWorkspace onOpenConnections={() => setSection('connections')} />
             </>}
           </section>}
 

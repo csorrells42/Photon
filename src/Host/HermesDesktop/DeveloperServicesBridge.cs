@@ -1,5 +1,6 @@
 using HermesDeveloperServices;
 using HermesDeveloperServices.LanguageTooling;
+using HermesDeveloperServices.LanguageTooling.Gcc;
 using HermesDeveloperServices.LanguageTooling.Java;
 using HermesDeveloperServices.LanguageTooling.Operations;
 using HermesDeveloperServices.LanguageTooling.Python;
@@ -14,6 +15,7 @@ namespace HermesDesktop;
 
 internal sealed class DeveloperServicesBridge : IAsyncDisposable
 {
+    private static readonly JsonSerializerOptions DebugJsonOptions = new(JsonSerializerDefaults.Web);
     public const int ProtocolVersion = 2;
     private const int MaximumRequestIdLength = 128;
     private const int MaximumTargetPathLength = 2_048;
@@ -21,6 +23,7 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
     private const int MaximumDiagnosticTextLength = 2_048;
     private const int MaximumRoslynReceiptBytes = 16 * 1024;
     private const int MaximumLanguageDocuments = 32;
+    private const int MaximumDebugTargets = 128;
 
     private readonly string _workspaceRoot;
     private readonly Action<object> _postMessage;
@@ -29,16 +32,19 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
     private readonly LanguageToolingTrustedRegistry _languageTooling;
     private readonly LanguageToolingHostBridge _languageToolingHost;
     private readonly IDeveloperRoslynHost _roslynHost;
+    private readonly IDeveloperDebugHost _debugHost;
     private readonly object _gate = new();
     private readonly Dictionary<string, CancellationTokenSource> _activeOperations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CancellationTokenSource> _languageToolingOperations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CancellationTokenSource> _languageOperations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CancellationTokenSource> _debugOperations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LanguageDocument> _languageDocuments = new(StringComparer.Ordinal);
     private string? _latestRequestId;
     private int _latestRevision;
     private bool _disposed;
 
     public DeveloperServicesBridge(string workspaceRoot, string applicationInstallRoot, Action<object> postMessage)
-        : this(workspaceRoot, applicationInstallRoot, postMessage, null)
+        : this(workspaceRoot, applicationInstallRoot, postMessage, null, null)
     {
     }
 
@@ -46,16 +52,16 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         string workspaceRoot,
         string applicationInstallRoot,
         Action<object> postMessage,
-        IDeveloperRoslynHost? roslynHost)
+        IDeveloperRoslynHost? roslynHost,
+        IDeveloperDebugHost? debugHost = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _postMessage = postMessage;
         var installRoot = Path.GetFullPath(applicationInstallRoot);
         var dotnet = new DotnetToolchainProvider();
         var roslyn = CreateRoslynProvider(installRoot);
-        var debugger = new HermesDotNetDebuggerProvider(
-            installRoot,
-            new DenyUnreviewedDebugAuthorizationPolicy());
+        var debugAuthorization = new DeveloperDebugAuthorizationPolicy();
+        var debugger = new HermesDotNetDebuggerProvider(installRoot, debugAuthorization);
         var gcc = new GccToolchainProvider(new GccToolchainProviderOptions
         {
             WorkbenchRoot = installRoot,
@@ -66,29 +72,38 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         _providers.Register(gcc);
         _roslynHost = roslynHost ?? new DeveloperRoslynHost(roslyn);
         _roslynHost.DiagnosticsPublished += HandleRoslynDiagnostics;
+        _debugHost = debugHost ?? new DeveloperDotNetDebugHost(_workspaceRoot, debugger, debugAuthorization);
+        _debugHost.EventReceived += HandleDebugEvent;
         var arduinoOptions = new ArduinoProviderOptions(
             installRoot,
             "toolchains/arduino",
             "hermes-toolchain-receipt.json",
             "arduino-config.json",
             "developer-services/arduino-state");
-        var java = JavaJdtLanguageToolingProvider.CreateUnprovisioned(_workspaceRoot);
-        var python = PythonLanguageToolingProvider.CreateFailClosed(_workspaceRoot);
+        var java = CreateJavaProvider(_workspaceRoot, installRoot);
+        var python = CreatePythonProvider(_workspaceRoot);
+        var pythonLanguage = new SerenaPythonLanguageToolingProvider(_workspaceRoot);
+        var gccTooling = CreateGccProvider(_workspaceRoot, gcc);
+        var dotnetTooling = DotnetLanguageToolingProvider.Create(dotnet, _workspaceRoot);
         _languageTooling = LanguageToolingRegistryFactory.Create(
             _workspaceRoot,
             [
+                dotnetTooling.EvidenceSource,
                 KnownPinnedToolchainEvidenceSource.Create(roslyn, ownsProvider: false),
                 KnownPinnedToolchainEvidenceSource.Create(debugger, ownsProvider: false),
-                KnownPinnedToolchainEvidenceSource.Create(gcc, ownsProvider: false),
+                gccTooling.EvidenceSource,
                 new ArduinoPinnedEvidenceSource(arduinoOptions),
                 java,
                 python.EvidenceSource,
+                pythonLanguage,
             ],
             [
-                new GccLanguageToolingOperationHandler(gcc, _workspaceRoot),
+                dotnetTooling.OperationHandler,
+                gccTooling.OperationHandler,
                 new ArduinoLanguageToolingOperationHandler(arduinoOptions, _workspaceRoot),
                 java,
                 python.OperationHandler,
+                pythonLanguage,
             ]);
         _languageToolingHost = new LanguageToolingHostBridge(_languageTooling);
     }
@@ -104,6 +119,22 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         string? projectPath) =>
         RunLanguageToolingAsync(new InspectLanguageToolingProjectRequest(
             version, requestId ?? string.Empty, "active-workspace", providerId ?? string.Empty, projectPath ?? string.Empty));
+
+    public Task StartLanguageToolingSessionAsync(
+        int version,
+        string? requestId,
+        string? providerId,
+        string? documentPath) =>
+        RunLanguageToolingAsync(new StartLanguageToolingSessionRequest(
+            version, requestId ?? string.Empty, "active-workspace", providerId ?? string.Empty, documentPath ?? string.Empty));
+
+    public Task StopLanguageToolingSessionAsync(
+        int version,
+        string? requestId,
+        string? providerId,
+        string? sessionId) =>
+        RunLanguageToolingAsync(new StopLanguageToolingSessionRequest(
+            version, requestId ?? string.Empty, "active-workspace", providerId ?? string.Empty, sessionId ?? string.Empty));
 
     public Task CompileLanguageToolingAsync(
         int version,
@@ -121,6 +152,20 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
             mode ?? string.Empty,
             string.IsNullOrWhiteSpace(boardFqbn) ? null : boardFqbn));
 
+    public Task RunLanguageToolingTestsAsync(
+        int version,
+        string? requestId,
+        string? providerId,
+        string? targetPath,
+        string? selection) =>
+        RunLanguageToolingAsync(new RunLanguageToolingTestsRequest(
+            version,
+            requestId ?? string.Empty,
+            "active-workspace",
+            providerId ?? string.Empty,
+            targetPath ?? string.Empty,
+            string.IsNullOrWhiteSpace(selection) ? null : selection));
+
     public void CancelLanguageTooling(int version, string? requestId, string? targetRequestId)
     {
         var id = requestId?.Trim() ?? string.Empty;
@@ -130,12 +175,13 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
             PostLanguageToolingFailure(id, string.Empty, "cancel", "invalid-envelope", "The language-tooling cancellation request is invalid.");
             return;
         }
+        CancellationTokenSource? cancellation;
         bool accepted;
         lock (_gate)
         {
-            accepted = _languageToolingOperations.TryGetValue(target, out var cancellation);
-            cancellation?.Cancel();
+            accepted = _languageToolingOperations.TryGetValue(target, out cancellation);
         }
+        cancellation?.Cancel();
         _postMessage(new { type = "developerServices.languageTooling.cancel.result", version = LanguageToolingProtocol.Version, requestId = id, targetRequestId = target, accepted });
     }
 
@@ -447,12 +493,13 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
     public void Cancel(int version, string? requestId)
     {
         if (!TryValidateEnvelope(version, requestId, out var id)) return;
+        CancellationTokenSource? cancellation;
         bool accepted;
         lock (_gate)
         {
-            accepted = _activeOperations.TryGetValue(id, out var cancellation);
-            cancellation?.Cancel();
+            accepted = _activeOperations.TryGetValue(id, out cancellation);
         }
+        cancellation?.Cancel();
         _postMessage(new
         {
             type = "developerServices.cancel.result",
@@ -494,8 +541,7 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
 
         try
         {
-            await _roslynHost.EnsureStartedAsync(_workspaceRoot, CancellationToken.None);
-            await _roslynHost.OpenDocumentAsync(uri, revision, documentText, CancellationToken.None);
+            await _roslynHost.OpenDocumentAsync(_workspaceRoot, uri, revision, documentText, CancellationToken.None);
             LspPublishDiagnosticsParams? pending;
             lock (_gate)
             {
@@ -612,6 +658,482 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         }
     }
 
+    public async Task RunLanguageOperationAsync(
+        int version,
+        string? requestId,
+        string? sessionId,
+        int revision,
+        string? documentPath,
+        string? operation,
+        int line,
+        int character,
+        int endLine,
+        int endCharacter,
+        string? newName,
+        bool includeDeclaration)
+    {
+        if (!TryValidateEnvelope(version, requestId, out var id)) return;
+        if (!TryValidateSessionId(sessionId, id, out var validatedSessionId)
+            || !TryValidateLanguageRevision(revision, id)
+            || !TryValidateLanguageDocument(documentPath, out var relativePath, out var uri, id)
+            || !TryValidateLanguageOperation(operation, line, character, endLine, endCharacter, newName, id,
+                out var validatedOperation, out var position, out var range, out var validatedName)) return;
+
+        LanguageDocument document;
+        lock (_gate)
+        {
+            if (!_languageDocuments.TryGetValue(validatedSessionId, out document!)
+                || !document.Ready
+                || document.Revision != revision
+                || !document.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase)
+                || !document.Uri.Equals(uri, StringComparison.OrdinalIgnoreCase))
+            {
+                PostError(id, "language_session_stale", "The C# language request does not match the active document revision.", true);
+                return;
+            }
+            if (_disposed)
+            {
+                PostError(id, "host_stopping", "Developer services are shutting down.", true);
+                return;
+            }
+            if (_languageOperations.ContainsKey(id))
+            {
+                PostError(id, "duplicate_request", "That C# language request is already active.", false);
+                return;
+            }
+        }
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        lock (_gate) _languageOperations.Add(id, cancellation);
+        try
+        {
+            RoslynLanguageResult? result = validatedOperation switch
+            {
+                "completion" => await _roslynHost.CompletionAsync(uri, revision, position, cancellation.Token),
+                "hover" => await _roslynHost.HoverAsync(uri, revision, position, cancellation.Token),
+                "definition" => await _roslynHost.DefinitionAsync(uri, revision, position, cancellation.Token),
+                "references" => await _roslynHost.ReferencesAsync(uri, revision, position, includeDeclaration, cancellation.Token),
+                "rename" => await _roslynHost.RenameAsync(uri, revision, position, validatedName!, cancellation.Token),
+                "code-actions" => await _roslynHost.CodeActionsAsync(uri, revision, range, cancellation.Token),
+                _ => throw new InvalidOperationException("The C# language operation is unavailable."),
+            };
+            _postMessage(new
+            {
+                type = "developerServices.language.result",
+                version = ProtocolVersion,
+                requestId = id,
+                sessionId = validatedSessionId,
+                documentPath = relativePath,
+                revision,
+                operation = validatedOperation,
+                result = ProjectLanguageResult(result?.Value),
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            PostError(id, "language_cancelled", "The C# language request was cancelled.", true);
+        }
+        catch (Exception exception) when (IsLanguageFailure(exception))
+        {
+            PostError(id, "roslyn_request_failed", "The verified Roslyn language request could not be completed.", true);
+        }
+        finally
+        {
+            lock (_gate) _languageOperations.Remove(id);
+        }
+    }
+
+    public void CancelLanguageOperation(int version, string? requestId, string? targetRequestId)
+    {
+        if (!TryValidateEnvelope(version, requestId, out var id)) return;
+        var target = targetRequestId?.Trim() ?? string.Empty;
+        if (!ValidLanguageToolingIdentifier(target))
+        {
+            PostError(id, "invalid_cancel", "The C# language cancellation request is invalid.", false);
+            return;
+        }
+        CancellationTokenSource? cancellation;
+        bool accepted;
+        lock (_gate)
+        {
+            accepted = _languageOperations.TryGetValue(target, out cancellation);
+        }
+        cancellation?.Cancel();
+        _postMessage(new
+        {
+            type = "developerServices.language.cancel.result",
+            version = ProtocolVersion,
+            requestId = id,
+            targetRequestId = target,
+            accepted,
+        });
+    }
+
+    public Task DescribeDebugTargetsAsync(int version, string? requestId, string? configuration) =>
+        RunDebugOperationAsync(version, requestId, "targets", async cancellationToken =>
+        {
+            if (!TryParseConfiguration(configuration, out var parsed))
+                throw new ArgumentException("Select the Debug or Release configuration.");
+            return await Task.Run(() => DiscoverDebugTargets(parsed, cancellationToken), cancellationToken).ConfigureAwait(false);
+        });
+
+    public Task LaunchDebugAsync(
+        int version,
+        string? requestId,
+        string? programPath,
+        string? workingDirectory,
+        IReadOnlyList<string> arguments,
+        bool stopAtEntry) =>
+        RunDebugOperationAsync(version, requestId, "launch", async cancellationToken =>
+        {
+            var program = ResolveDebugFile(programPath, ".dll", ".exe");
+            var directory = ResolveDebugDirectory(workingDirectory, Path.GetDirectoryName(program)!);
+            ValidateDebugArguments(arguments);
+            await _debugHost.LaunchAsync(new DotNetDebugLaunchRequest(program, directory, arguments, stopAtEntry), cancellationToken).ConfigureAwait(false);
+            return DebugSessionProjection();
+        });
+
+    public Task AttachDebugAsync(int version, string? requestId, int processId) =>
+        RunDebugOperationAsync(version, requestId, "attach", async cancellationToken =>
+        {
+            await _debugHost.AttachAsync(new DotNetDebugAttachRequest(processId), cancellationToken).ConfigureAwait(false);
+            return DebugSessionProjection();
+        });
+
+    public Task SetDebugBreakpointsAsync(
+        int version,
+        string? requestId,
+        string? sourcePath,
+        IReadOnlyList<DapSourceBreakpoint> breakpoints) =>
+        RunDebugOperationAsync(version, requestId, "set-breakpoints", async cancellationToken =>
+        {
+            var source = ResolveDebugFile(sourcePath, ".cs");
+            var result = await _debugHost.SetBreakpointsAsync(source, breakpoints, cancellationToken).ConfigureAwait(false);
+            return result.Take(2_048).Select(breakpoint => new
+            {
+                id = breakpoint.Id,
+                verified = breakpoint.Verified,
+                message = SanitizeText(breakpoint.Message, 2_048),
+                path = SanitizeDiagnosticPath(breakpoint.Source?.Path),
+                line = breakpoint.Line,
+                column = breakpoint.Column,
+            }).ToArray();
+        });
+
+    public Task ConfigurationDoneDebugAsync(int version, string? requestId) =>
+        RunDebugOperationAsync(version, requestId, "configuration-done", async cancellationToken =>
+        {
+            await _debugHost.ConfigurationDoneAsync(cancellationToken).ConfigureAwait(false);
+            return DebugSessionProjection();
+        });
+
+    public Task GetDebugThreadsAsync(int version, string? requestId) =>
+        RunDebugOperationAsync(version, requestId, "threads", async cancellationToken =>
+        {
+            var result = await _debugHost.GetThreadsAsync(cancellationToken).ConfigureAwait(false);
+            return result.Take(1_000).Select(thread => new { id = thread.Id, name = SanitizeText(thread.Name, 512) }).ToArray();
+        });
+
+    public Task GetDebugStackTraceAsync(int version, string? requestId, int threadId, int startFrame, int levels) =>
+        RunDebugOperationAsync(version, requestId, "stack-trace", async cancellationToken =>
+        {
+            var result = await _debugHost.GetStackTraceAsync(
+                threadId,
+                startFrame < 0 ? null : startFrame,
+                levels < 0 ? null : levels,
+                cancellationToken).ConfigureAwait(false);
+            return result.Take(1_000).Select(frame => new
+            {
+                id = frame.Id,
+                name = SanitizeText(frame.Name, 1_024),
+                path = SanitizeDiagnosticPath(frame.Source?.Path),
+                line = ClampPosition(frame.Line),
+                column = ClampPosition(frame.Column),
+                endLine = frame.EndLine,
+                endColumn = frame.EndColumn,
+            }).ToArray();
+        });
+
+    public Task GetDebugScopesAsync(int version, string? requestId, int frameId) =>
+        RunDebugOperationAsync(version, requestId, "scopes", async cancellationToken =>
+        {
+            var result = await _debugHost.GetScopesAsync(frameId, cancellationToken).ConfigureAwait(false);
+            return result.Take(256).Select(scope => new
+            {
+                name = SanitizeText(scope.Name, 512),
+                variablesReference = scope.VariablesReference,
+                expensive = scope.Expensive,
+                presentationHint = SanitizeText(scope.PresentationHint, 128),
+            }).ToArray();
+        });
+
+    public Task GetDebugVariablesAsync(int version, string? requestId, int variablesReference, int start, int count) =>
+        RunDebugOperationAsync(version, requestId, "variables", async cancellationToken =>
+        {
+            var result = await _debugHost.GetVariablesAsync(
+                variablesReference,
+                start < 0 ? null : start,
+                count < 0 ? null : count,
+                cancellationToken).ConfigureAwait(false);
+            return result.Take(1_000).Select(variable => new
+            {
+                name = SanitizeText(variable.Name, 512),
+                value = SanitizeText(variable.Value, 16 * 1024),
+                type = SanitizeText(variable.Type, 512),
+                variablesReference = variable.VariablesReference,
+                evaluateName = SanitizeText(variable.EvaluateName, 2_048),
+            }).ToArray();
+        });
+
+    public Task EvaluateDebugAsync(int version, string? requestId, string? expression, int frameId, string? context) =>
+        RunDebugOperationAsync(version, requestId, "evaluate", async cancellationToken =>
+        {
+            var result = await _debugHost.EvaluateAsync(
+                expression ?? string.Empty,
+                frameId < 0 ? null : frameId,
+                context ?? string.Empty,
+                cancellationToken).ConfigureAwait(false);
+            return new
+            {
+                result = SanitizeText(result.Result, 64 * 1024),
+                type = SanitizeText(result.Type, 512),
+                variablesReference = result.VariablesReference,
+            };
+        });
+
+    public Task ContinueDebugAsync(int version, string? requestId, int threadId) =>
+        RunDebugControlAsync(version, requestId, "continue", token => _debugHost.ContinueAsync(threadId, token));
+
+    public Task StepOverDebugAsync(int version, string? requestId, int threadId) =>
+        RunDebugControlAsync(version, requestId, "step-over", token => _debugHost.StepOverAsync(threadId, token));
+
+    public Task StepIntoDebugAsync(int version, string? requestId, int threadId) =>
+        RunDebugControlAsync(version, requestId, "step-into", token => _debugHost.StepIntoAsync(threadId, token));
+
+    public Task StepOutDebugAsync(int version, string? requestId, int threadId) =>
+        RunDebugControlAsync(version, requestId, "step-out", token => _debugHost.StepOutAsync(threadId, token));
+
+    public Task DisconnectDebugAsync(int version, string? requestId) =>
+        RunDebugControlAsync(version, requestId, "disconnect", token => _debugHost.DisconnectAsync(token));
+
+    public void CancelDebugOperation(int version, string? requestId, string? targetRequestId)
+    {
+        if (!TryValidateEnvelope(version, requestId, out var id)) return;
+        var target = targetRequestId?.Trim() ?? string.Empty;
+        if (!ValidLanguageToolingIdentifier(target))
+        {
+            PostError(id, "invalid_cancel", "The .NET debugger cancellation request is invalid.", false);
+            return;
+        }
+        CancellationTokenSource? cancellation;
+        bool accepted;
+        lock (_gate)
+        {
+            accepted = _debugOperations.TryGetValue(target, out cancellation);
+        }
+        cancellation?.Cancel();
+        _postMessage(new { type = "developerServices.debug.cancel.result", version = ProtocolVersion, requestId = id, targetRequestId = target, accepted });
+    }
+
+    private Task RunDebugControlAsync(int version, string? requestId, string operation, Func<CancellationToken, Task> action) =>
+        RunDebugOperationAsync(version, requestId, operation, async cancellationToken =>
+        {
+            await action(cancellationToken).ConfigureAwait(false);
+            return DebugSessionProjection();
+        });
+
+    private async Task RunDebugOperationAsync(
+        int version,
+        string? requestId,
+        string operation,
+        Func<CancellationToken, Task<object?>> action)
+    {
+        if (!TryValidateEnvelope(version, requestId, out var id)) return;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                PostError(id, "host_stopping", "Developer services are shutting down.", true);
+                return;
+            }
+            if (_debugOperations.ContainsKey(id))
+            {
+                PostError(id, "duplicate_request", "That .NET debugger request is already active.", false);
+                return;
+            }
+            _debugOperations.Add(id, cancellation);
+        }
+        try
+        {
+            var result = await action(cancellation.Token).ConfigureAwait(false);
+            _postMessage(new
+            {
+                type = "developerServices.debug.result",
+                version = ProtocolVersion,
+                requestId = id,
+                operation,
+                state = DebugStateName(_debugHost.State),
+                result,
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            PostError(id, "debug_cancelled", "The .NET debugger request was cancelled.", true);
+        }
+        catch (Exception exception) when (IsDebugFailure(exception))
+        {
+            PostError(id, "debug_failed", "The .NET debugger could not complete that operation.", true);
+        }
+        finally
+        {
+            lock (_gate) _debugOperations.Remove(id);
+        }
+    }
+
+    private IReadOnlyList<string> DiscoverDebugTargets(BuildConfiguration configuration, CancellationToken cancellationToken)
+    {
+        var marker = $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}{configuration}{Path.DirectorySeparatorChar}";
+        var targets = new List<string>();
+        foreach (var runtimeConfig in Directory.EnumerateFiles(_workspaceRoot, "*.runtimeconfig.json", SearchOption.AllDirectories).Take(4_096))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!runtimeConfig.Contains(marker, StringComparison.OrdinalIgnoreCase)) continue;
+            var stem = runtimeConfig[..^".runtimeconfig.json".Length];
+            var candidate = File.Exists(stem + ".exe") ? stem + ".exe" : stem + ".dll";
+            if (!File.Exists(candidate) || TraversesDebugReparsePoint(candidate)) continue;
+            var relative = Path.GetRelativePath(_workspaceRoot, candidate).Replace(Path.DirectorySeparatorChar, '/');
+            if (TryValidateWorkspaceRelativeTarget(relative, out _)) targets.Add(relative);
+            if (targets.Count >= MaximumDebugTargets) break;
+        }
+        return targets.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private string ResolveDebugFile(string? path, params string[] allowedExtensions)
+    {
+        if (!TryValidateWorkspaceRelativeTarget(path, out var relative)) throw new ArgumentException("Select a workspace-relative debugger file.");
+        var fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, relative));
+        if (!File.Exists(fullPath) || !allowedExtensions.Contains(Path.GetExtension(fullPath), StringComparer.OrdinalIgnoreCase)
+            || TraversesDebugReparsePoint(fullPath)) throw new ArgumentException("The debugger file is unavailable.");
+        return fullPath;
+    }
+
+    private string ResolveDebugDirectory(string? path, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return fallback;
+        if (!TryValidateWorkspaceRelativeTarget(path, out var relative)) throw new ArgumentException("Select a workspace-relative debugger directory.");
+        var fullPath = Path.GetFullPath(Path.Combine(_workspaceRoot, relative));
+        if (!Directory.Exists(fullPath) || TraversesDebugReparsePoint(fullPath)) throw new ArgumentException("The debugger directory is unavailable.");
+        return fullPath;
+    }
+
+    private bool TraversesDebugReparsePoint(string fullPath)
+    {
+        var relative = Path.GetRelativePath(_workspaceRoot, fullPath);
+        var current = _workspaceRoot;
+        foreach (var component in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            current = Path.Combine(current, component);
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
+        }
+        return false;
+    }
+
+    private static void ValidateDebugArguments(IReadOnlyList<string> arguments)
+    {
+        if (arguments.Count > 128 || arguments.Any(value => value is null || value.Length > 4_096 || value.Contains('\0'))
+            || arguments.Sum(value => value.Length) > 32 * 1024) throw new ArgumentException("The debugger arguments exceed the supported bounds.");
+    }
+
+    private object DebugSessionProjection()
+    {
+        var capabilities = _debugHost.Capabilities;
+        return new
+        {
+            state = DebugStateName(_debugHost.State),
+            capabilities = capabilities is null ? null : new
+            {
+                supportsConfigurationDoneRequest = capabilities.SupportsConfigurationDoneRequest,
+                supportsConditionalBreakpoints = capabilities.SupportsConditionalBreakpoints,
+                supportsHitConditionalBreakpoints = capabilities.SupportsHitConditionalBreakpoints,
+                supportsEvaluateForHovers = capabilities.SupportsEvaluateForHovers,
+                supportsCancelRequest = capabilities.SupportsCancelRequest,
+            },
+        };
+    }
+
+    private static string DebugStateName(DapSessionState? state) => state?.ToString().ToLowerInvariant() ?? "inactive";
+
+    private static bool IsDebugFailure(Exception exception) => exception is IOException or UnauthorizedAccessException
+        or SecurityException or ArgumentException or InvalidOperationException or DapProtocolException
+        or DapSessionException or DotNetDebuggerAuthorizationException or DotNetDebuggerUnavailableException
+        or DotNetDebuggerOperationException or ObjectDisposedException;
+
+    private void HandleDebugEvent(DapEvent value)
+    {
+        try
+        {
+            object? body = value.Event switch
+            {
+                "stopped" => ProjectStoppedEvent(value.Body),
+                "continued" => ProjectContinuedEvent(value.Body),
+                "output" => ProjectOutputEvent(value.Body),
+                "initialized" or "terminated" or "exited" => null,
+                _ => null,
+            };
+            if (value.Event is not ("stopped" or "continued" or "output" or "initialized" or "terminated" or "exited")) return;
+            _postMessage(new
+            {
+                type = "developerServices.debug.event",
+                version = ProtocolVersion,
+                @event = value.Event,
+                state = DebugStateName(_debugHost.State),
+                body,
+            });
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            _postMessage(new
+            {
+                type = "developerServices.debug.event",
+                version = ProtocolVersion,
+                @event = "faulted",
+                state = "faulted",
+                body = new { message = "The .NET debugger emitted a malformed event." },
+            });
+        }
+    }
+
+    private static object? ProjectStoppedEvent(JsonElement? body)
+    {
+        var stopped = body?.Deserialize<DapStoppedEvent>(DebugJsonOptions);
+        return stopped is null ? null : new
+        {
+            reason = SanitizeText(stopped.Reason, 128),
+            threadId = stopped.ThreadId,
+            description = SanitizeText(stopped.Description, 1_024),
+            allThreadsStopped = stopped.AllThreadsStopped,
+        };
+    }
+
+    private static object? ProjectContinuedEvent(JsonElement? body)
+    {
+        var continued = body?.Deserialize<DapContinuedEvent>(DebugJsonOptions);
+        return continued is null ? null : new
+        {
+            threadId = continued.ThreadId,
+            allThreadsContinued = continued.AllThreadsContinued,
+        };
+    }
+
+    private static object? ProjectOutputEvent(JsonElement? body)
+    {
+        if (body is not { ValueKind: JsonValueKind.Object } value) return null;
+        var category = value.TryGetProperty("category", out var categoryValue) ? categoryValue.GetString() : null;
+        var output = value.TryGetProperty("output", out var outputValue) ? outputValue.GetString() : null;
+        return new { category = SanitizeText(category, 64), output = SanitizeText(output, 64 * 1024) };
+    }
+
     public async ValueTask DisposeAsync()
     {
         CancellationTokenSource[] active;
@@ -619,11 +1141,13 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         {
             if (_disposed) return;
             _disposed = true;
-            active = _activeOperations.Values.Concat(_languageToolingOperations.Values).ToArray();
+            active = _activeOperations.Values.Concat(_languageToolingOperations.Values).Concat(_languageOperations.Values).Concat(_debugOperations.Values).ToArray();
         }
         foreach (var cancellation in active) cancellation.Cancel();
         _roslynHost.DiagnosticsPublished -= HandleRoslynDiagnostics;
+        _debugHost.EventReceived -= HandleDebugEvent;
         await _roslynHost.DisposeAsync();
+        await _debugHost.DisposeAsync();
         await _languageTooling.DisposeAsync();
         await _providers.DisposeAsync();
     }
@@ -805,13 +1329,183 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         return false;
     }
 
+    private bool TryValidateLanguageOperation(
+        string? operation,
+        int line,
+        int character,
+        int endLine,
+        int endCharacter,
+        string? newName,
+        string requestId,
+        out string validatedOperation,
+        out LspPosition position,
+        out LspRange range,
+        out string? validatedName)
+    {
+        validatedOperation = operation?.Trim().ToLowerInvariant() ?? string.Empty;
+        position = new LspPosition(line, character);
+        range = new LspRange(position, new LspPosition(endLine, endCharacter));
+        validatedName = null;
+        if (validatedOperation is not ("completion" or "hover" or "definition" or "references" or "rename" or "code-actions")
+            || line is < 0 or > 1_000_000 || character is < 0 or > 1_000_000)
+        {
+            PostError(requestId, "invalid_language_operation", "The C# language operation is invalid.", false);
+            return false;
+        }
+        if (validatedOperation == "code-actions"
+            && (endLine is < 0 or > 1_000_000 || endCharacter is < 0 or > 1_000_000
+                || endLine < line || (endLine == line && endCharacter < character)))
+        {
+            PostError(requestId, "invalid_language_range", "The C# code-action range is invalid.", false);
+            return false;
+        }
+        if (validatedOperation == "rename")
+        {
+            validatedName = newName?.Trim();
+            if (string.IsNullOrWhiteSpace(validatedName) || validatedName.Length > 512 || validatedName.Contains('\0'))
+            {
+                PostError(requestId, "invalid_rename", "The C# rename target is invalid.", false);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private object? ProjectLanguageResult(JsonElement? value) => value is null
+        ? null
+        : ProjectLanguageValue(value.Value, null, 0);
+
+    private object? ProjectLanguageValue(JsonElement value, string? propertyName, int depth)
+    {
+        if (depth > 64) throw new LspProtocolException("The Roslyn language result is too deeply nested.");
+        return value.ValueKind switch
+        {
+            JsonValueKind.Object => ProjectLanguageObject(value, depth + 1),
+            JsonValueKind.Array => value.EnumerateArray().Select(item => ProjectLanguageValue(item, null, depth + 1)).ToArray(),
+            JsonValueKind.String when propertyName is "uri" or "targetUri" => ProjectLanguageUri(value.GetString()),
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number when value.TryGetInt64(out var integer) => integer,
+            JsonValueKind.Number when value.TryGetDouble(out var number) => number,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            _ => throw new LspProtocolException("The Roslyn language result contains an unsupported value."),
+        };
+    }
+
+    private Dictionary<string, object?> ProjectLanguageObject(JsonElement value, int depth)
+    {
+        var projected = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            var name = property.Name.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                ? ProjectLanguageUri(property.Name)
+                : property.Name;
+            if (name.Length == 0) continue;
+            projected[name] = ProjectLanguageValue(property.Value, property.Name, depth);
+        }
+        return projected;
+    }
+
+    private string ProjectLanguageUri(string? value)
+    {
+        try
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !uri.IsFile) return string.Empty;
+            var fullPath = Path.GetFullPath(uri.LocalPath);
+            var relative = Path.GetRelativePath(_workspaceRoot, fullPath);
+            if (Path.IsPathFullyQualified(relative) || relative.Equals("..", StringComparison.Ordinal)
+                || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || !relative.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) return string.Empty;
+            return relative.Replace(Path.DirectorySeparatorChar, '/');
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or UriFormatException)
+        {
+            return string.Empty;
+        }
+    }
+
     private static bool IsLanguageFailure(Exception exception) => exception is IOException
         or UnauthorizedAccessException or SecurityException or InvalidOperationException
         or ArgumentException or LspProtocolException or LspSessionException or RoslynStaleDocumentException;
 
+    private static (
+        ILanguageToolingEvidenceSource EvidenceSource,
+        ILanguageToolingOperationHandler OperationHandler) CreateGccProvider(
+            string workspaceRoot,
+            GccToolchainProvider fallbackProvider)
+    {
+        try
+        {
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var docker = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
+            var imageId = Environment.GetEnvironmentVariable("HERMES_IMAGE_REFERENCE")?.Trim() ?? string.Empty;
+            var authority = new HermesContainerGccToolingAuthority(new HermesContainerGccToolingOptions
+            {
+                DockerExecutablePath = docker,
+                ExpectedImageId = imageId,
+                WorkspaceRoot = workspaceRoot,
+            });
+            return (authority, new GccLanguageToolingOperationHandler(authority, workspaceRoot));
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException
+            or UnauthorizedAccessException or SecurityException)
+        {
+            return (
+                KnownPinnedToolchainEvidenceSource.Create(fallbackProvider, ownsProvider: false),
+                new GccLanguageToolingOperationHandler(fallbackProvider, workspaceRoot));
+        }
+    }
+
+    private static PythonLanguageToolingComponents CreatePythonProvider(string workspaceRoot)
+    {
+        try
+        {
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var docker = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
+            var imageId = Environment.GetEnvironmentVariable("HERMES_IMAGE_REFERENCE")?.Trim() ?? string.Empty;
+            var authority = new HermesContainerPythonToolingAuthority(new HermesContainerPythonToolingOptions
+            {
+                DockerExecutablePath = docker,
+                ExpectedImageId = imageId,
+                WorkspaceRoot = workspaceRoot,
+            });
+            return PythonLanguageToolingProvider.CreateReceiptBound(workspaceRoot, authority, authority);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException
+            or UnauthorizedAccessException or SecurityException)
+        {
+            return PythonLanguageToolingProvider.CreateFailClosed(workspaceRoot);
+        }
+    }
+
+    private static JavaJdtLanguageToolingProvider CreateJavaProvider(string workspaceRoot, string applicationInstallRoot)
+    {
+        var relative = JavaJdtProvisioning.BundleRelativePath.Replace('/', Path.DirectorySeparatorChar);
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, relative),
+            Path.Combine(applicationInstallRoot, relative),
+        };
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var root = Path.GetFullPath(candidate);
+                if (Directory.Exists(root)
+                    && File.Exists(Path.Combine(root, JavaJdtProvisioning.ReceiptFileName)))
+                    return JavaJdtLanguageToolingProvider.CreateProvisioned(workspaceRoot, root);
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException
+                or UnauthorizedAccessException or SecurityException)
+            { }
+        }
+        return JavaJdtLanguageToolingProvider.CreateUnprovisioned(workspaceRoot);
+    }
+
     private static RoslynLanguageServerProvider CreateRoslynProvider(string applicationInstallRoot)
     {
-        var installerRoot = Path.Combine(applicationInstallRoot, "developer-services", "roslyn");
+        var installerRoot = ResolveRoslynInstallerRoot(applicationInstallRoot, AppContext.BaseDirectory);
         var executablePath = Path.Combine(installerRoot, "Microsoft.CodeAnalysis.LanguageServer.exe");
         var dotnetRoot = Path.Combine(installerRoot, "dotnet");
         var expectedSha256 = new string('0', 64);
@@ -859,6 +1553,22 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
             dotnetRoot));
     }
 
+    internal static string ResolveRoslynInstallerRoot(string applicationInstallRoot, string binaryRoot)
+    {
+        var configured = Path.Combine(applicationInstallRoot, "developer-services", "roslyn");
+        if (File.Exists(Path.Combine(configured, "provider.json"))) return configured;
+
+        // The source-tree launcher keeps HERMES_INSTALL_ROOT at the bundle root for Docker/CAD,
+        // while the self-contained desktop owns provider assets beside its executable.
+        var besideExecutable = Path.Combine(
+            Path.GetFullPath(binaryRoot),
+            "developer-services",
+            "roslyn");
+        return File.Exists(Path.Combine(besideExecutable, "provider.json"))
+            ? besideExecutable
+            : configured;
+    }
+
     private void PostError(string requestId, string code, string message, bool retryable) =>
         _postMessage(new
         {
@@ -890,66 +1600,196 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         Analyze,
     }
 
-    private sealed class DenyUnreviewedDebugAuthorizationPolicy : IDotNetDebugAuthorizationPolicy
-    {
-        public ValueTask<bool> AuthorizeLaunchAsync(
-            string workspaceRoot,
-            DotNetDebugLaunchRequest request,
-            CancellationToken cancellationToken) => ValueTask.FromResult(false);
-
-        public ValueTask<bool> AuthorizeAttachAsync(
-            string workspaceRoot,
-            DotNetDebugAttachRequest request,
-            CancellationToken cancellationToken) => ValueTask.FromResult(false);
-    }
 }
 
 internal interface IDeveloperRoslynHost : IAsyncDisposable
 {
     event Action<LspPublishDiagnosticsParams>? DiagnosticsPublished;
 
-    Task EnsureStartedAsync(string workspaceRoot, CancellationToken cancellationToken);
-
-    Task OpenDocumentAsync(string uri, int revision, string text, CancellationToken cancellationToken);
+    Task OpenDocumentAsync(string workspaceRoot, string uri, int revision, string text, CancellationToken cancellationToken);
 
     Task ChangeDocumentAsync(string uri, int revision, string text, CancellationToken cancellationToken);
 
     Task CloseDocumentAsync(string uri, CancellationToken cancellationToken);
+
+    Task<RoslynLanguageResult?> CompletionAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken);
+
+    Task<RoslynLanguageResult?> HoverAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken);
+
+    Task<RoslynLanguageResult?> DefinitionAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken);
+
+    Task<RoslynLanguageResult?> ReferencesAsync(string uri, int revision, LspPosition position, bool includeDeclaration, CancellationToken cancellationToken);
+
+    Task<RoslynLanguageResult?> RenameAsync(string uri, int revision, LspPosition position, string newName, CancellationToken cancellationToken);
+
+    Task<RoslynLanguageResult?> CodeActionsAsync(string uri, int revision, LspRange range, CancellationToken cancellationToken);
 }
 
 internal sealed class DeveloperRoslynHost(RoslynLanguageServerProvider provider) : IDeveloperRoslynHost
 {
+    private const int MaximumWorkspaceCandidates = 64;
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly HashSet<string> _openDocuments = new(StringComparer.OrdinalIgnoreCase);
     private bool _subscribed;
+    private string? _workspacePath;
 
     public event Action<LspPublishDiagnosticsParams>? DiagnosticsPublished;
 
-    public async Task EnsureStartedAsync(string workspaceRoot, CancellationToken cancellationToken)
+    public async Task OpenDocumentAsync(
+        string workspaceRoot,
+        string uri,
+        int revision,
+        string text,
+        CancellationToken cancellationToken)
     {
-        await provider.StartAsync(new ToolchainStartContext(
-            workspaceRoot,
-            [new WorkspacePathMapping(workspaceRoot, workspaceRoot)],
-            ToolchainExecutionKind.LocalSidecarProcess), cancellationToken);
-        if (_subscribed) return;
-        provider.Session.DiagnosticsPublished += ForwardDiagnostics;
-        _subscribed = true;
-    }
+        var resolvedRoot = Path.GetFullPath(workspaceRoot);
+        var documentPath = Path.GetFullPath(new Uri(uri).LocalPath);
+        var selectedWorkspace = SelectWorkspacePath(resolvedRoot, documentPath);
+        await _lifecycleGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_workspacePath is not null
+                && !_workspacePath.Equals(selectedWorkspace, StringComparison.OrdinalIgnoreCase))
+            {
+                if (_openDocuments.Count != 0)
+                    throw new InvalidOperationException("Close the active Roslyn project documents before opening a different project.");
+                if (_subscribed && provider.LifecycleState == ToolchainLifecycleState.Ready)
+                    provider.Session.DiagnosticsPublished -= ForwardDiagnostics;
+                _subscribed = false;
+                await provider.StopAsync(cancellationToken);
+                _workspacePath = null;
+            }
 
-    public Task OpenDocumentAsync(string uri, int revision, string text, CancellationToken cancellationToken) =>
-        provider.Session.OpenDocumentAsync(uri, revision, text, cancellationToken);
+            await provider.StartAsync(new ToolchainStartContext(
+                resolvedRoot,
+                [new WorkspacePathMapping(resolvedRoot, resolvedRoot)],
+                ToolchainExecutionKind.LocalSidecarProcess), cancellationToken);
+            if (!_subscribed)
+            {
+                provider.Session.DiagnosticsPublished += ForwardDiagnostics;
+                _subscribed = true;
+            }
+            if (_workspacePath is null)
+            {
+                await provider.Session.OpenSolutionAsync(selectedWorkspace, cancellationToken);
+                _workspacePath = selectedWorkspace;
+            }
+            await provider.Session.OpenDocumentAsync(uri, revision, text, cancellationToken);
+            _openDocuments.Add(uri);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
 
     public Task ChangeDocumentAsync(string uri, int revision, string text, CancellationToken cancellationToken) =>
         provider.Session.ChangeDocumentAsync(uri, revision, text, cancellationToken);
 
-    public Task CloseDocumentAsync(string uri, CancellationToken cancellationToken) =>
-        provider.Session.CloseDocumentAsync(uri, cancellationToken);
-
-    public ValueTask DisposeAsync()
+    public async Task CloseDocumentAsync(string uri, CancellationToken cancellationToken)
     {
-        if (_subscribed && provider.LifecycleState == ToolchainLifecycleState.Ready)
-            provider.Session.DiagnosticsPublished -= ForwardDiagnostics;
-        _subscribed = false;
-        return ValueTask.CompletedTask;
+        await _lifecycleGate.WaitAsync(cancellationToken);
+        try
+        {
+            await provider.Session.CloseDocumentAsync(uri, cancellationToken);
+            _openDocuments.Remove(uri);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    public Task<RoslynLanguageResult?> CompletionAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken) =>
+        provider.Session.CompletionAsync(uri, revision, position, cancellationToken);
+
+    public Task<RoslynLanguageResult?> HoverAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken) =>
+        provider.Session.HoverAsync(uri, revision, position, cancellationToken);
+
+    public Task<RoslynLanguageResult?> DefinitionAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken) =>
+        provider.Session.DefinitionAsync(uri, revision, position, cancellationToken);
+
+    public Task<RoslynLanguageResult?> ReferencesAsync(string uri, int revision, LspPosition position, bool includeDeclaration, CancellationToken cancellationToken) =>
+        provider.Session.ReferencesAsync(uri, revision, position, includeDeclaration, cancellationToken);
+
+    public Task<RoslynLanguageResult?> RenameAsync(string uri, int revision, LspPosition position, string newName, CancellationToken cancellationToken) =>
+        provider.Session.RenameAsync(uri, revision, position, newName, cancellationToken);
+
+    public Task<RoslynLanguageResult?> CodeActionsAsync(string uri, int revision, LspRange range, CancellationToken cancellationToken) =>
+        provider.Session.CodeActionsAsync(uri, revision, range, cancellationToken: cancellationToken);
+
+    public async ValueTask DisposeAsync()
+    {
+        await _lifecycleGate.WaitAsync();
+        try
+        {
+            if (_subscribed && provider.LifecycleState == ToolchainLifecycleState.Ready)
+                provider.Session.DiagnosticsPublished -= ForwardDiagnostics;
+            _subscribed = false;
+            _openDocuments.Clear();
+            _workspacePath = null;
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+            _lifecycleGate.Dispose();
+        }
     }
 
     private void ForwardDiagnostics(LspPublishDiagnosticsParams diagnostics) => DiagnosticsPublished?.Invoke(diagnostics);
+
+    private static string SelectWorkspacePath(string workspaceRoot, string documentPath)
+    {
+        var relative = Path.GetRelativePath(workspaceRoot, documentPath);
+        if (Path.IsPathRooted(relative)
+            || relative.Equals("..", StringComparison.Ordinal)
+            || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            throw new UnauthorizedAccessException("The Roslyn document is outside the active workspace.");
+
+        var rootSolutions = EnumerateWorkspaceFiles(workspaceRoot, "*.sln")
+            .Concat(EnumerateWorkspaceFiles(workspaceRoot, "*.slnx"))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Take(MaximumWorkspaceCandidates + 1)
+            .ToArray();
+        if (rootSolutions.Length == 1) return rootSolutions[0];
+        if (rootSolutions.Length > MaximumWorkspaceCandidates)
+            throw new InvalidOperationException("The Roslyn workspace candidate limit was exceeded.");
+
+        var current = Directory.GetParent(documentPath)?.FullName
+            ?? throw new InvalidOperationException("The Roslyn document directory is unavailable.");
+        while (true)
+        {
+            var projects = EnumerateWorkspaceFiles(current, "*.csproj")
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Take(MaximumWorkspaceCandidates + 1)
+                .ToArray();
+            if (projects.Length == 1) return projects[0];
+            if (projects.Length > 1)
+                throw new InvalidOperationException("The Roslyn project selection is ambiguous for this document.");
+            if (current.Equals(workspaceRoot, StringComparison.OrdinalIgnoreCase)) break;
+            var parent = Directory.GetParent(current)?.FullName;
+            if (parent is null || !IsWithinRoot(workspaceRoot, parent)) break;
+            current = parent;
+        }
+
+        if (rootSolutions.Length > 1)
+            throw new InvalidOperationException("The Roslyn solution selection is ambiguous for this document.");
+        throw new InvalidOperationException("No Roslyn solution or C# project owns this document.");
+    }
+
+    private static IEnumerable<string> EnumerateWorkspaceFiles(string directory, string pattern)
+    {
+        if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+            throw new UnauthorizedAccessException("The Roslyn workspace path traverses a reparse point.");
+        return Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly)
+            .Where(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0);
+    }
+
+    private static bool IsWithinRoot(string root, string path)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        return !Path.IsPathRooted(relative)
+            && !relative.Equals("..", StringComparison.Ordinal)
+            && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
+    }
 }

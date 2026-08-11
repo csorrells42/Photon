@@ -1,0 +1,77 @@
+.hermes-reasoning-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 28px;
+  margin-left: 5px;
+  border: 1px solid #2d3445;
+  border-radius: 6px;
+  background: #111722;
+  color: #9ca6bb;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.hermes-reasoning-control:focus-within {
+  border-color: #715ad0;
+  box-shadow: 0 0 0 2px rgba(113, 90, 208, .14);
+}
+
+.hermes-reasoning-trigger {
+  min-width: 0;
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px 0 7px;
+  border: 0;
+  border-radius: 5px;
+  outline: 0;
+  background: #111722;
+  color: #e1e5ef;
+  font: inherit;
+  cursor: pointer;
+}
+.hermes-reasoning-trigger:hover { background: #171e2b; }
+.hermes-reasoning-trigger > svg:first-child { color: #a897ff; flex: 0 0 auto; }
+.hermes-reasoning-trigger > span { color: #9ca6bb; letter-spacing: .02em; }
+.hermes-reasoning-trigger > strong { max-width: 132px; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.hermes-reasoning-trigger > svg:last-child { flex: 0 0 auto; color: #aeb7c8; }
+.hermes-reasoning-trigger:disabled { cursor: default; opacity: .55; }
+
+.hermes-reasoning-menu {
+  position: fixed;
+  z-index: 1200;
+  display: grid;
+  gap: 2px;
+  max-height: min(260px, calc(100vh - 16px));
+  overflow-y: auto;
+  border: 1px solid rgba(142,116,248,.35);
+  border-radius: 8px;
+  background: #0d111b;
+  padding: 4px;
+  box-shadow: 0 18px 55px rgba(0,0,0,.62), 0 0 0 1px rgba(255,255,255,.025);
+}
+.hermes-reasoning-menu > button {
+  min-height: 29px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 0 8px;
+  color: #b7bfce;
+  font: 9px/1 "Segoe UI Variable", "Segoe UI", sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+.hermes-reasoning-menu > button:hover,
+.hermes-reasoning-menu > button:focus-visible { outline: 0; background: rgba(116,89,224,.16); color: #eef0f6; }
+.hermes-reasoning-menu > button[aria-selected="true"] { background: rgba(92,72,176,.18); color: #d9d1ff; }
+.hermes-reasoning-menu > button svg { color: #8f7aec; }
+
+@media (max-width: 620px) {
+  .hermes-reasoning-trigger > span { display: none; }
+  .hermes-reasoning-trigger > strong { max-width: 68px; }
+}

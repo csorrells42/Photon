@@ -30,6 +30,7 @@ import {
   Sparkles,
   TerminalSquare,
   Trash2,
+  Volume2,
   WandSparkles,
   Wrench,
   XCircle,
@@ -40,6 +41,7 @@ import type { HermesNotification } from '../HermesGateway/HermesNotificationAdap
 import {
   enqueueHermesPrompt,
   HERMES_PROMPT_QUEUE_ADAPTER_VERSION,
+  isHermesImmediatePauseInstruction,
   promoteHermesQueuedPrompt,
   removeHermesQueuedPrompt,
   shouldAutoDrainHermesQueue,
@@ -48,6 +50,7 @@ import {
 import type { HermesQueuedPrompt } from '../HermesGateway/HermesPromptQueue'
 import { HERMES_RUNTIME_ADAPTER_VERSION } from '../HermesGateway/HermesRuntimeAdapter'
 import { createHermesBridgeSnapshot, registerHermesConversationBridge } from '../HermesGateway/HermesConversationBridgeAdapter'
+import type { HermesBridgeObservation } from '../HermesGateway/HermesConversationBridgeAdapter'
 import type {
   HermesApprovalChoice,
   HermesApprovalRequest,
@@ -56,6 +59,12 @@ import type {
 } from '../HermesGateway/HermesRuntimeAdapter'
 import type { HermesSession } from '../HermesSessions/HermesSessionApi'
 import { ModelControlPopover } from '../HermesSettings/ModelControlPopover'
+import { HermesReasoningControl } from './HermesReasoningControl'
+import {
+  HERMES_NATURAL_VOICE_IDLE,
+  HermesNaturalVoicePlayer,
+} from './HermesNaturalVoice'
+import './HermesNaturalVoice.css'
 import { isAgentScrollNearBottom, preserveAgentScrollAnchor } from './AgentScroll'
 import { InlineDiffCard } from './InlineDiffCard'
 import { useAssistantDisplayName } from '../AssistantIdentity/AssistantIdentity'
@@ -431,6 +440,10 @@ function PromptCard({ request, submitting, respond }: PromptCardProps) {
 }
 
 export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockControls, onDesktopUiAction }: Props) {
+  const [bridgeGeneration] = useState(() => {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    return `renderer:${Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')}`
+  })
   const [assistantName] = useAssistantDisplayName()
   const [draft, setDraft] = useState('')
   const [queuedPrompts, setQueuedPrompts] = useState<HermesQueuedPrompt<HermesComposerAttachment>[]>([])
@@ -441,6 +454,8 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   const [nearBottom, setNearBottom] = useState(true)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
+  const [bridgeObservations, setBridgeObservations] = useState<HermesBridgeObservation[]>([])
+  const [naturalVoice, setNaturalVoice] = useState(HERMES_NATURAL_VOICE_IDLE)
   const conversationRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const agentMenuRef = useRef<HTMLDivElement>(null)
@@ -451,6 +466,8 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   const queuedPromptsRef = useRef(queuedPrompts)
   const drainingQueueRef = useRef(false)
   const lastCompletionRef = useRef(0)
+  const naturalVoicePlayerRef = useRef<HermesNaturalVoicePlayer | null>(null)
+  if (!naturalVoicePlayerRef.current) naturalVoicePlayerRef.current = new HermesNaturalVoicePlayer()
   const captureReadingAnchor = useCallback(() => {
     const conversation = conversationRef.current
     const content = conversation?.querySelector<HTMLElement>('.message-list, .welcome')
@@ -508,6 +525,8 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     pendingPrompt,
     promptSubmitting,
     reasoning,
+    reasoningEffort,
+    reasoningEffortSaving,
     refreshModels,
     removeAttachment,
     respondToApproval,
@@ -515,6 +534,7 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     selectModel,
     send,
     setApprovalMode,
+    setReasoningEffort,
     stop,
     toolActivity,
     toolRuns,
@@ -522,13 +542,20 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   } = useHermesChat({ onDesktopUiAction })
   const memoryStatus = useHermesMemoryStatus(connection)
 
+  useEffect(() => {
+    naturalVoicePlayerRef.current?.stop()
+    setNaturalVoice(HERMES_NATURAL_VOICE_IDLE)
+  }, [activeStoredSessionId])
+
+  useEffect(() => () => naturalVoicePlayerRef.current?.stop(false), [])
+
   const bridgeStateRef = useRef({ activeStoredSessionId, busy, connection, error, messages, send, stop, toolRuns, turnCompletionCount })
   bridgeStateRef.current = { activeStoredSessionId, busy, connection, error, messages, send, stop, toolRuns, turnCompletionCount }
 
   useEffect(() => registerHermesConversationBridge({
     snapshot: () => {
       const current = bridgeStateRef.current
-      return createHermesBridgeSnapshot(current.connection, current.busy, current.activeStoredSessionId, current.messages, current.toolRuns)
+      return createHermesBridgeSnapshot(current.connection, current.busy, current.activeStoredSessionId, current.messages, current.toolRuns, bridgeGeneration)
     },
     submitTurn: async (text) => {
       const current = bridgeStateRef.current
@@ -545,14 +572,23 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
       }
       const completed = bridgeStateRef.current
       if (completed.busy || completed.turnCompletionCount <= startingCompletion) throw new Error('Hermes did not complete the bridge turn before the timeout.')
-      return createHermesBridgeSnapshot(completed.connection, completed.busy, completed.activeStoredSessionId, completed.messages, completed.toolRuns)
+      return createHermesBridgeSnapshot(completed.connection, completed.busy, completed.activeStoredSessionId, completed.messages, completed.toolRuns, bridgeGeneration)
     },
     interrupt: async () => {
       await bridgeStateRef.current.stop()
       const current = bridgeStateRef.current
-      return createHermesBridgeSnapshot(current.connection, current.busy, current.activeStoredSessionId, current.messages, current.toolRuns)
+      return createHermesBridgeSnapshot(current.connection, current.busy, current.activeStoredSessionId, current.messages, current.toolRuns, bridgeGeneration)
     },
-  }), [])
+    observe: async (observation) => {
+      setBridgeObservations((current) => current.some((item) => item.messageId === observation.messageId)
+        ? current
+        : [...current.slice(-199), observation])
+      const current = bridgeStateRef.current
+      return createHermesBridgeSnapshot(current.connection, current.busy, current.activeStoredSessionId, current.messages, current.toolRuns, bridgeGeneration)
+    },
+  }), [bridgeGeneration])
+
+  useEffect(() => { setBridgeObservations([]) }, [activeStoredSessionId, bridgeGeneration])
 
   useEffect(() => { queuedPromptsRef.current = queuedPrompts }, [queuedPrompts])
 
@@ -708,6 +744,13 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     event.preventDefault()
     const prompt = draft.trim()
     if ((!prompt && attachments.length === 0) || connection !== 'open') return
+    if (turnActive && attachments.length === 0 && isHermesImmediatePauseInstruction(prompt)) {
+      setDraft('')
+      if (queuedPromptsRef.current.length > 0) setQueueParked(true)
+      setQueueNotice(`${assistantName} was interrupted and is paused. Send an explicit resume instruction when you are ready.`)
+      await stop().catch(() => setDraft(prompt))
+      return
+    }
     if (turnActive) {
       queueCurrentDraft(prompt, attachments)
       return
@@ -822,7 +865,7 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
           else captureReadingAnchor()
         }}
       >
-        {messages.length === 0 && toolRuns.length === 0 && !pendingApproval && !pendingPrompt ? (
+        {messages.length === 0 && bridgeObservations.length === 0 && toolRuns.length === 0 && !pendingApproval && !pendingPrompt ? (
           <section className="welcome">
             <div className="welcome-mark"><Bot size={28} /></div>
             <p className="eyebrow">LOCAL AGENT · {loadingSession ? 'OPENING SESSION' : connection === 'open' ? 'READY' : connection.toUpperCase()}</p>
@@ -892,6 +935,41 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
                       </button>
                     </div>
                   )}
+                  {message.author === 'hermes' && message.body && !message.streaming && !message.interim && (
+                    <div className="message-actions hermes-natural-voice-actions">
+                      <button
+                        type="button"
+                        data-active={naturalVoice.messageId === message.id && naturalVoice.phase !== 'idle'}
+                        title="Read aloud with the on-device Kokoro voice"
+                        aria-label={naturalVoice.messageId === message.id && naturalVoice.phase !== 'idle' ? 'Stop reading aloud' : 'Read response aloud'}
+                        onClick={() => void naturalVoicePlayerRef.current?.toggle(message.id, message.body ?? '', setNaturalVoice)}
+                      >
+                        {naturalVoice.messageId === message.id && naturalVoice.phase === 'loading'
+                          ? <LoaderCircle className="hermes-natural-voice-spinner" size={12} />
+                          : naturalVoice.messageId === message.id && naturalVoice.phase === 'playing'
+                            ? <CircleStop size={12} />
+                            : <Volume2 size={12} />}
+                        {naturalVoice.messageId === message.id && naturalVoice.phase === 'loading'
+                          ? 'Preparing local voice…'
+                          : naturalVoice.messageId === message.id && naturalVoice.phase === 'playing'
+                            ? 'Stop'
+                            : 'Read aloud'}
+                      </button>
+                      {naturalVoice.messageId === message.id && naturalVoice.phase === 'error' && (
+                        <small className="hermes-natural-voice-error" role="status">Local voice unavailable</small>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))}
+            {bridgeObservations.map((message) => (
+              <article className="message external" key={message.messageId} data-message-id={message.messageId}>
+                <div className="message-avatar"><Bot size={14} /></div>
+                <div>
+                  <strong>{message.header}</strong>
+                  <p>{message.body}</p>
+                  <small>Assistant conversation bus · observed without invoking {assistantName}</small>
                 </div>
               </article>
             ))}
@@ -1078,6 +1156,13 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
               {modelSelection?.model ? modelSelection.model.split('/').pop() : assistantName}
               <ChevronDown size={13} />
             </button>
+            <HermesReasoningControl
+              disabled={connection !== 'open' || loadingSession || modelLoading || modelSwitching || reasoningEffortSaving}
+              effort={reasoningEffort}
+              modelSelection={modelSelection}
+              onChange={(effort) => { void setReasoningEffort(effort).catch(() => undefined) }}
+              options={modelCatalog?.reasoningControl}
+            />
           </div>
           <div className="composer-submit-actions">
             {turnActive && (draft.trim() || attachments.length > 0) && (

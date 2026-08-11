@@ -1,7 +1,35 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { PHOTON_CAD_CONTRACT_VERSION, type PhotonCadRuntimeDescription } from './PhotonCadContract'
-import { PhotonCadWorkspace } from './PhotonCadWorkspace'
+import {
+  PHOTON_CAD_CONTRACT_VERSION,
+  type PhotonCadCapability,
+  type PhotonCadController,
+  type PhotonCadInputValue,
+  type PhotonCadOperationRequest,
+  type PhotonCadProjectSnapshot,
+  type PhotonCadRuntimeDescription,
+} from './PhotonCadContract'
+import {
+  PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID,
+  PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID,
+  PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID,
+  PhotonCadWorkspace,
+  photonCadAcceptedPersistedScratchCommit,
+  photonCadAcceptedAssemblySnapshot,
+  photonCadAcceptedPersistedScratchSnapshot,
+  photonCadAssemblyRigidTransform,
+  photonCadAuthorizePersistedScratchRequest,
+  photonCadCapabilityAuthorizationFingerprint,
+  photonCadCapabilityInputsMatch,
+  photonCadCatalogSections,
+  photonCadInitialCapabilityInputs,
+  photonCadKeyboardPaneWidth,
+  photonCadManualDesignCapabilityId,
+  photonCadProjectParts,
+  photonCadOperationContinuationAuthorizationBinding,
+  loadPhotonCadPaneLayout,
+  savePhotonCadPaneLayout,
+} from './PhotonCadWorkspace'
 import {
   PhotonCadWorkspaceFixture,
   photonCadWorkspaceFixtureBom,
@@ -9,11 +37,550 @@ import {
   photonCadWorkspaceFixtureRuntime,
 } from './PhotonCadWorkspaceFixture'
 
+const industrialDigest = 'e'.repeat(64)
+
+function persistedProject(): PhotonCadProjectSnapshot {
+  return {
+    ...photonCadWorkspaceFixtureProject,
+    sessionId: 'session:industrial',
+    projectId: 'project:industrial',
+    revision: 0,
+    mode: 'canonical',
+    units: 'millimeter',
+    dirty: false,
+    entities: [],
+    occurrences: [],
+    operations: [],
+    issues: [],
+  }
+}
+
+function spurGearCapability(overrides: Partial<PhotonCadCapability> = {}): PhotonCadCapability {
+  return {
+    id: 'industrial.gear.spur.v1',
+    backend: 'assembly',
+    category: 'Gears',
+    title: 'Spur Gear',
+    description: 'Create a discovered spur gear.',
+    operation: 'create',
+    parameters: [
+      { id: 'module', label: 'Module', description: '', kind: 'number', required: true, unit: 'length', minimum: 0.1, maximum: 100 },
+      { id: 'pressure_angle', label: 'Pressure angle', description: '', kind: 'number', required: true, unit: 'angle', minimum: 1, maximum: 89 },
+      { id: 'thickness', label: 'Thickness', description: '', kind: 'number', required: true, unit: 'length', minimum: 0.1, maximum: 1_000 },
+      { id: 'tooth_count', label: 'Tooth count', description: '', kind: 'integer', required: true, unit: 'count', minimum: 3, maximum: 1_000 },
+      { id: 'addendum', label: 'Addendum', description: '', kind: 'number', required: false, unit: 'length', defaultValue: null },
+      { id: 'dedendum', label: 'Dedendum', description: '', kind: 'number', required: false, unit: 'length', defaultValue: null },
+      { id: 'root_fillet', label: 'Root fillet', description: '', kind: 'number', required: false, unit: 'length', defaultValue: null },
+    ],
+    source: { package: 'bd-warehouse', version: '0.2.0', digest: industrialDigest, license: 'redistribution-blocked' },
+    previewSupported: true,
+    experimental: false,
+    ...overrides,
+  }
+}
+
+function industrialRuntime(capability: PhotonCadCapability, catalogRevision = 'catalog:industrial:1'): PhotonCadRuntimeDescription {
+  return {
+    contractVersion: 1,
+    status: 'available',
+    reason: 'ready',
+    geometryBundleId: 'geometry:industrial',
+    catalog: {
+      contractVersion: 1,
+      catalogRevision,
+      generatedAtUtc: '2026-08-11T10:00:00Z',
+      capabilities: [capability],
+      coverage: { discovered: 1, available: 1, unavailable: 0, unavailableReasons: [] },
+    },
+  }
+}
+
+function operationRequest(capabilityId: string, inputs: Record<string, PhotonCadInputValue>): PhotonCadOperationRequest {
+  const project = persistedProject()
+  return {
+    contractVersion: 1,
+    requestId: 'operation:industrial',
+    sessionId: project.sessionId,
+    projectId: project.projectId,
+    baseRevision: project.revision,
+    mode: 'scratch',
+    capabilityId,
+    inputs,
+    targetEntityIds: [],
+  }
+}
+
+const exactSpurGearInputs: Record<string, PhotonCadInputValue> = {
+  module: 2,
+  pressure_angle: 20,
+  thickness: 10,
+  tooth_count: 24,
+  addendum: null,
+  dedendum: null,
+  root_fillet: null,
+}
+
+const identityTransform = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] as const
+
+function assemblyCapability(overrides: Partial<PhotonCadCapability> = {}): PhotonCadCapability {
+  return {
+    id: PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID,
+    backend: 'assembly',
+    category: 'Assembly',
+    title: 'Place occurrence',
+    description: 'Place one existing part occurrence.',
+    operation: 'assemble',
+    parameters: [
+      { id: 'sourceEntityId', label: 'Source part', description: '', kind: 'entity', required: true, defaultValue: null },
+      { id: 'parentOccurrenceId', label: 'Parent occurrence', description: '', kind: 'text', required: false, defaultValue: null },
+      { id: 'translation', label: 'Translation', description: '', kind: 'vector3', required: true, unit: 'length', minimum: -1_000_000, maximum: 1_000_000, defaultValue: { x: 0, y: 0, z: 0 } },
+      { id: 'rotationDegrees', label: 'Rotation', description: '', kind: 'vector3', required: true, unit: 'angle', minimum: -360, maximum: 360, defaultValue: { x: 0, y: 0, z: 0 } },
+    ],
+    source: { package: 'photon-industrial', version: '1.0.0', digest: industrialDigest, license: 'local-engineering-only' },
+    previewSupported: true,
+    experimental: false,
+    ...overrides,
+  }
+}
+
+function assemblyRemoveCapability(overrides: Partial<PhotonCadCapability> = {}): PhotonCadCapability {
+  return {
+    id: PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID,
+    backend: 'assembly',
+    category: 'Assembly',
+    title: 'Remove occurrence',
+    description: 'Remove the selected occurrence and descendants while retaining source parts.',
+    operation: 'assemble',
+    parameters: [],
+    source: { package: 'photon-industrial', version: '1.0.0', digest: industrialDigest, license: 'local-engineering-only' },
+    previewSupported: true,
+    experimental: false,
+    ...overrides,
+  }
+}
+
+function assemblyTransformCapability(overrides: Partial<PhotonCadCapability> = {}): PhotonCadCapability {
+  return {
+    id: PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID,
+    backend: 'assembly',
+    category: 'Assembly',
+    title: 'Move occurrence',
+    description: 'Replace the selected occurrence rigid transform.',
+    operation: 'assemble',
+    parameters: [
+      { id: 'translation', label: 'Translation', description: '', kind: 'vector3', required: true, unit: 'length', minimum: -1_000_000, maximum: 1_000_000, defaultValue: { x: 0, y: 0, z: 0 } },
+      { id: 'rotationDegrees', label: 'Rotation', description: '', kind: 'vector3', required: true, unit: 'angle', minimum: -360, maximum: 360, defaultValue: { x: 0, y: 0, z: 0 } },
+    ],
+    source: { package: 'photon-industrial', version: '1.0.0', digest: industrialDigest, license: 'local-engineering-only' },
+    previewSupported: true,
+    experimental: false,
+    ...overrides,
+  }
+}
+
+function twoPartProject(): PhotonCadProjectSnapshot {
+  return {
+    ...persistedProject(),
+    revision: 4,
+    entities: [
+      { id: 'part:bearing', parentId: null, kind: 'part', name: 'Bearing', visible: true, suppressed: false },
+      { id: 'part:gear', parentId: null, kind: 'part', name: 'Spur Gear', visible: true, suppressed: false },
+      { id: 'part:bearing.occ', parentId: null, kind: 'occurrence', name: 'BRG-008', visible: true, suppressed: false },
+      { id: 'part:gear.occ', parentId: 'part:bearing.occ', kind: 'occurrence', name: 'GEAR-024', visible: true, suppressed: false },
+    ],
+    occurrences: [
+      { occurrenceId: 'part:bearing.occ', parentOccurrenceId: null, sourceEntityId: 'part:bearing', partNumber: 'BRG-008', transform: identityTransform },
+      { occurrenceId: 'part:gear.occ', parentOccurrenceId: 'part:bearing.occ', sourceEntityId: 'part:gear', partNumber: 'GEAR-024', transform: identityTransform },
+    ],
+  }
+}
+
+function assemblyRequest(project = twoPartProject()): PhotonCadOperationRequest {
+  return {
+    contractVersion: 1,
+    requestId: 'operation:assembly:nested',
+    sessionId: project.sessionId,
+    projectId: project.projectId,
+    baseRevision: project.revision,
+    mode: 'scratch',
+    capabilityId: PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID,
+    inputs: {
+      sourceEntityId: 'part:gear',
+      parentOccurrenceId: 'part:gear.occ',
+      translation: { x: 10, y: 20, z: 30 },
+      rotationDegrees: { x: 0, y: 0, z: 90 },
+    },
+    targetEntityIds: [],
+  }
+}
+
 describe('PhotonCadWorkspace', () => {
-  it('renders an editor-like document and workflow tab structure without duplicating the shell sidebars', () => {
+  it('authorizes exact host-described Spur Gear and real-shaped bearing inputs only', () => {
+    const project = persistedProject()
+    const gear = spurGearCapability()
+    const gearRuntime = industrialRuntime(gear)
+    const gearRequest = operationRequest(gear.id, exactSpurGearInputs)
+    expect(photonCadCapabilityInputsMatch(gear, exactSpurGearInputs, project)).toBe(true)
+    expect(photonCadAuthorizePersistedScratchRequest(gearRuntime, project, gearRequest)).toBe(
+      photonCadCapabilityAuthorizationFingerprint(gearRuntime.catalog!.catalogRevision, gear),
+    )
+
+    const bearing: PhotonCadCapability = {
+      ...spurGearCapability(),
+      id: 'industrial.bearing.single-row-deep-groove.v1',
+      category: 'Industrial bearings',
+      title: 'Single Row Deep Groove Ball Bearing',
+      parameters: [{
+        id: 'size', label: 'Bearing size', description: '', kind: 'choice', required: true,
+        choices: [{ value: 'M8-22-7', label: '8 x 22 x 7 mm' }, { value: 'M10-26-8', label: '10 x 26 x 8 mm' }],
+      }],
+    }
+    const bearingInputs = { size: 'M8-22-7' }
+    expect(photonCadCapabilityInputsMatch(bearing, bearingInputs, project)).toBe(true)
+    expect(photonCadAuthorizePersistedScratchRequest(
+      industrialRuntime(bearing), project, operationRequest(bearing.id, bearingInputs),
+    )).not.toBeNull()
+    expect(photonCadCapabilityInputsMatch(bearing, { size: 'not-in-host-catalog' }, project)).toBe(false)
+  })
+
+  it('rejects arbitrary capabilities, unsafe schemas, hostile values, and non-persisted contexts', () => {
+    const project = persistedProject()
+    const gear = spurGearCapability()
+    const runtime = industrialRuntime(gear)
+    const authorize = (inputs: Record<string, PhotonCadInputValue>, request: Partial<PhotonCadOperationRequest> = {}, current = project) =>
+      photonCadAuthorizePersistedScratchRequest(runtime, current, { ...operationRequest(gear.id, inputs), ...request })
+
+    expect(authorize({ ...exactSpurGearInputs, unexpected: 1 })).toBeNull()
+    expect(authorize({ ...exactSpurGearInputs, module: '2' })).toBeNull()
+    expect(authorize({ ...exactSpurGearInputs, module: Number.NaN })).toBeNull()
+    expect(authorize({ ...exactSpurGearInputs, module: 0.01 })).toBeNull()
+    expect(authorize({ ...exactSpurGearInputs, tooth_count: 24.5 })).toBeNull()
+    expect(authorize(exactSpurGearInputs, { capabilityId: 'industrial.arbitrary.v1' })).toBeNull()
+    expect(authorize(exactSpurGearInputs, { mode: 'suggest' })).toBeNull()
+    expect(authorize(exactSpurGearInputs, { targetEntityIds: ['part:foreign'] })).toBeNull()
+    expect(authorize(exactSpurGearInputs, {}, { ...project, dirty: true })).toBeNull()
+    expect(authorize(exactSpurGearInputs, {}, { ...project, units: 'inch' })).toBeNull()
+    for (const rejected of [
+      spurGearCapability({ experimental: true }),
+      spurGearCapability({ previewSupported: false }),
+      spurGearCapability({ operation: 'modify' }),
+    ]) {
+      expect(photonCadAuthorizePersistedScratchRequest(
+        industrialRuntime(rejected), project, operationRequest(rejected.id, exactSpurGearInputs),
+      )).toBeNull()
+    }
+  })
+
+  it('binds authorization to catalog revision and schema and accepts only exact +2 results', () => {
+    const project = persistedProject()
+    const gear = spurGearCapability()
+    const request = operationRequest(gear.id, exactSpurGearInputs)
+    const first = photonCadCapabilityAuthorizationFingerprint('catalog:1', gear)
+    const nextRevision = photonCadCapabilityAuthorizationFingerprint('catalog:2', gear)
+    const nextSchema = photonCadCapabilityAuthorizationFingerprint('catalog:1', spurGearCapability({
+      parameters: gear.parameters.map((parameter) => parameter.id === 'module' ? { ...parameter, maximum: 50 } : parameter),
+    }))
+    const nextSource = photonCadCapabilityAuthorizationFingerprint('catalog:1', spurGearCapability({
+      source: { ...gear.source, digest: 'f'.repeat(64) },
+    }))
+    expect(nextRevision).not.toBe(first)
+    expect(nextSchema).not.toBe(first)
+    expect(nextSource).not.toBe(first)
+    expect(photonCadInitialCapabilityInputs(gear)).toEqual({
+      module: null,
+      pressure_angle: null,
+      thickness: null,
+      tooth_count: null,
+      addendum: null,
+      dedendum: null,
+      root_fillet: null,
+    })
+
+    const accepted = {
+      contractVersion: 1 as const,
+      requestId: request.requestId,
+      projectId: request.projectId,
+      baseRevision: 0,
+      resultingRevision: 2,
+      status: 'accepted' as const,
+      stale: false,
+      reason: 'accepted-and-saved',
+      snapshot: { ...project, revision: 2 },
+      preview: {
+        previewId: 'preview:accepted',
+        projectId: request.projectId,
+        revision: 2,
+        contentDigest: 'b'.repeat(64),
+        units: 'millimeter' as const,
+        bounds: { minimum: { x: 0, y: 0, z: 0 }, maximum: { x: 10, y: 10, z: 10 } },
+        entityCount: 1,
+      },
+      issues: [],
+    }
+    expect(photonCadAcceptedPersistedScratchSnapshot(request, accepted, true)?.revision).toBe(2)
+    expect(photonCadAcceptedPersistedScratchSnapshot(request, { ...accepted, resultingRevision: 1, snapshot: { ...project, revision: 1 } }, true)).toBeNull()
+    expect(photonCadAcceptedPersistedScratchSnapshot(request, accepted, false)).toBeNull()
+    const dispatchContinuation = photonCadOperationContinuationAuthorizationBinding(first, project, true)
+    const parentAdvancedToAccepted = { ...project, revision: 2 }
+    expect(photonCadOperationContinuationAuthorizationBinding(first, parentAdvancedToAccepted, true)).toBe(dispatchContinuation)
+    expect(photonCadAcceptedPersistedScratchCommit(request, accepted, true)).toEqual({
+      snapshot: accepted.snapshot,
+      preview: accepted.preview,
+    })
+    expect(photonCadOperationContinuationAuthorizationBinding(nextRevision, parentAdvancedToAccepted, true)).not.toBe(dispatchContinuation)
+    expect(photonCadOperationContinuationAuthorizationBinding(nextSchema, parentAdvancedToAccepted, true)).not.toBe(dispatchContinuation)
+    expect(photonCadOperationContinuationAuthorizationBinding(nextSource, parentAdvancedToAccepted, true)).not.toBe(dispatchContinuation)
+    expect(photonCadOperationContinuationAuthorizationBinding(first, {
+      ...parentAdvancedToAccepted,
+      sessionId: 'session:foreign',
+      projectId: 'project:foreign',
+    }, true)).not.toBe(dispatchContinuation)
+    expect(photonCadOperationContinuationAuthorizationBinding(first, parentAdvancedToAccepted, false)).toBe('')
+    expect(photonCadAcceptedPersistedScratchCommit(request, { ...accepted, preview: { ...accepted.preview, projectId: 'project:foreign' } }, true)).toBeNull()
+  })
+
+  it('authorizes only the exact assembly placement schema and accepts one nested rotated occurrence at +2', () => {
+    const project = twoPartProject()
+    const capability = assemblyCapability()
+    const runtime = industrialRuntime(capability, 'catalog:assembly:1')
+    const request = assemblyRequest(project)
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, request)).toBe(
+      photonCadCapabilityAuthorizationFingerprint('catalog:assembly:1', capability),
+    )
+    const transform = photonCadAssemblyRigidTransform(
+      request.inputs.translation as { x: number; y: number; z: number },
+      request.inputs.rotationDegrees as { x: number; y: number; z: number },
+    )
+    const nested = {
+      occurrenceId: 'occurrence:gear:nested',
+      parentOccurrenceId: 'part:gear.occ',
+      sourceEntityId: 'part:gear',
+      partNumber: 'GEAR-024',
+      transform,
+    }
+    const nestedEntity = { id: nested.occurrenceId, parentId: nested.parentOccurrenceId, kind: 'occurrence' as const, name: nested.partNumber, visible: true, suppressed: false }
+    const snapshot = { ...project, revision: 6, entities: [...project.entities, nestedEntity], occurrences: [...project.occurrences!, nested] }
+    const accepted = {
+      contractVersion: 1 as const,
+      requestId: request.requestId,
+      projectId: request.projectId,
+      baseRevision: 4,
+      resultingRevision: 6,
+      status: 'accepted' as const,
+      stale: false,
+      reason: 'accepted-and-saved',
+      snapshot,
+      preview: {
+        previewId: 'preview:6', projectId: request.projectId, revision: 6, contentDigest: 'b'.repeat(64), units: 'millimeter' as const,
+        bounds: { minimum: { x: 0, y: 0, z: 0 }, maximum: { x: 100, y: 100, z: 100 } }, entityCount: 3,
+      },
+      issues: [],
+    }
+    const priorPreview = { ...accepted.preview, previewId: 'preview:4', revision: 4, contentDigest: 'a'.repeat(64), entityCount: 2 }
+    expect(photonCadAcceptedAssemblySnapshot(request, accepted, project, priorPreview)?.occurrences?.[2]).toEqual(nested)
+    expect(transform[0]).toBeCloseTo(0, 12)
+    expect(transform[1]).toBeCloseTo(-1, 12)
+    expect(transform[3]).toBe(10)
+    expect(transform[4]).toBeCloseTo(1, 12)
+    expect(transform[5]).toBeCloseTo(0, 12)
+    expect(transform[7]).toBe(20)
+    expect(transform[11]).toBe(30)
+
+    for (const hostile of [
+      { ...accepted, stale: true },
+      { ...accepted, resultingRevision: 5, snapshot: { ...snapshot, revision: 5 }, preview: { ...accepted.preview, revision: 5 } },
+      { ...accepted, preview: { ...accepted.preview, contentDigest: priorPreview.contentDigest } },
+      { ...accepted, snapshot: { ...snapshot, occurrences: [...project.occurrences!, { ...nested, sourceEntityId: 'part:foreign' }] } },
+      { ...accepted, snapshot: { ...snapshot, occurrences: [...project.occurrences!, { ...nested, parentOccurrenceId: 'part:foreign.occ' }] } },
+    ]) expect(photonCadAcceptedAssemblySnapshot(request, hostile, project, priorPreview)).toBeNull()
+
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, capabilityId: 'assembly.arbitrary.v1' })).toBeNull()
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, inputs: { ...request.inputs, sourceEntityId: 'part:foreign' } })).toBeNull()
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, inputs: { ...request.inputs, parentOccurrenceId: 'part:foreign.occ' } })).toBeNull()
+    for (const rejected of [
+      assemblyCapability({ experimental: true }),
+      assemblyCapability({ previewSupported: false }),
+      assemblyCapability({ operation: 'create' }),
+      assemblyCapability({ parameters: capability.parameters.map((parameter) => parameter.id === 'rotationDegrees' ? { ...parameter, maximum: 180 } : parameter) }),
+    ]) expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(rejected), project, request)).toBeNull()
+  })
+
+  it('renders exact host-declared assembly controls without offering pseudo-occurrences as source parts', () => {
+    const markup = renderToStaticMarkup(
+      <PhotonCadWorkspace
+        controller={{} as PhotonCadController}
+        runtime={industrialRuntime(assemblyCapability())}
+        project={twoPartProject()}
+        initialStage="design"
+        persistedScratchAuthorized
+      />,
+    )
+    expect(markup).toContain('data-operation-access="enabled"')
+    expect(markup).toContain('Run persisted scratch operation')
+    expect(markup).toContain('Source part')
+    expect(markup).toContain('Parent occurrence')
+    expect(markup).toContain('Translation X')
+    expect(markup).toContain('Rotation Z')
+    expect(markup).toContain('value="part:gear"')
+    expect(markup).not.toContain('value="part:gear.occ"')
+  })
+
+  it('authorizes one selected occurrence and accepts only its exact +2 rigid-transform replacement', () => {
+    const project = twoPartProject()
+    const capability = assemblyTransformCapability()
+    const runtime = industrialRuntime(capability, 'catalog:assembly:transform:1')
+    const request: PhotonCadOperationRequest = {
+      contractVersion: 1,
+      requestId: 'operation:assembly:transform',
+      sessionId: project.sessionId,
+      projectId: project.projectId,
+      baseRevision: project.revision,
+      mode: 'scratch',
+      capabilityId: capability.id,
+      inputs: { translation: { x: 2, y: 3, z: 4 }, rotationDegrees: { x: 0, y: 180, z: 0 } },
+      targetEntityIds: ['part:gear.occ'],
+    }
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, request)).toBe(
+      photonCadCapabilityAuthorizationFingerprint('catalog:assembly:transform:1', capability),
+    )
+    const expectedTransform = photonCadAssemblyRigidTransform(
+      request.inputs.translation as { x: number; y: number; z: number },
+      request.inputs.rotationDegrees as { x: number; y: number; z: number },
+    )
+    const snapshot: PhotonCadProjectSnapshot = {
+      ...project,
+      revision: 6,
+      occurrences: project.occurrences!.map((occurrence) => occurrence.occurrenceId === 'part:gear.occ'
+        ? { ...occurrence, transform: expectedTransform }
+        : occurrence),
+    }
+    const previousPreview = {
+      previewId: 'preview:4', projectId: project.projectId, revision: 4, contentDigest: 'a'.repeat(64), units: 'millimeter' as const,
+      bounds: { minimum: { x: 0, y: 0, z: 0 }, maximum: { x: 20, y: 20, z: 20 } }, entityCount: 2,
+    }
+    const accepted = {
+      contractVersion: 1 as const,
+      requestId: request.requestId,
+      projectId: request.projectId,
+      baseRevision: request.baseRevision,
+      resultingRevision: 6,
+      status: 'accepted' as const,
+      stale: false,
+      reason: 'accepted-and-saved',
+      snapshot,
+      preview: { ...previousPreview, previewId: 'preview:6', revision: 6, contentDigest: 'b'.repeat(64) },
+      issues: [],
+    }
+    expect(photonCadAcceptedAssemblySnapshot(request, accepted, project, previousPreview)).toEqual(snapshot)
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, targetEntityIds: [] })).toBeNull()
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, targetEntityIds: ['part:gear'] })).toBeNull()
+    expect(photonCadAcceptedAssemblySnapshot(request, {
+      ...accepted,
+      snapshot: { ...snapshot, occurrences: snapshot.occurrences!.map((occurrence) => occurrence.occurrenceId === 'part:bearing.occ'
+        ? { ...occurrence, transform: expectedTransform }
+        : occurrence) },
+    }, project, previousPreview)).toBeNull()
+  })
+
+  it('authorizes one selected occurrence and accepts exact subtree removal at +2', () => {
+    const project = twoPartProject()
+    const capability = assemblyRemoveCapability()
+    const runtime = industrialRuntime(capability, 'catalog:assembly:remove:1')
+    const request: PhotonCadOperationRequest = {
+      contractVersion: 1,
+      requestId: 'operation:assembly:remove',
+      sessionId: project.sessionId,
+      projectId: project.projectId,
+      baseRevision: project.revision,
+      mode: 'scratch',
+      capabilityId: capability.id,
+      inputs: {},
+      targetEntityIds: ['part:gear.occ'],
+    }
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, request)).toBe(
+      photonCadCapabilityAuthorizationFingerprint('catalog:assembly:remove:1', capability),
+    )
+    const snapshot: PhotonCadProjectSnapshot = {
+      ...project,
+      revision: 6,
+      entities: project.entities.filter((entity) => entity.id !== 'part:gear.occ'),
+      occurrences: project.occurrences!.filter((occurrence) => occurrence.occurrenceId !== 'part:gear.occ'),
+    }
+    const previousPreview = {
+      previewId: 'preview:4', projectId: project.projectId, revision: 4, contentDigest: 'a'.repeat(64), units: 'millimeter' as const,
+      bounds: { minimum: { x: 0, y: 0, z: 0 }, maximum: { x: 20, y: 20, z: 20 } }, entityCount: 2,
+    }
+    const accepted = {
+      contractVersion: 1 as const,
+      requestId: request.requestId,
+      projectId: request.projectId,
+      baseRevision: request.baseRevision,
+      resultingRevision: 6,
+      status: 'accepted' as const,
+      stale: false,
+      reason: 'accepted-and-saved',
+      snapshot,
+      preview: { ...previousPreview, previewId: 'preview:6', revision: 6, contentDigest: 'b'.repeat(64), entityCount: 1 },
+      issues: [],
+    }
+    expect(photonCadAcceptedAssemblySnapshot(request, accepted, project, previousPreview)).toEqual(snapshot)
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, targetEntityIds: [] })).toBeNull()
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, targetEntityIds: ['part:gear'] })).toBeNull()
+    expect(photonCadAuthorizePersistedScratchRequest(runtime, project, { ...request, targetEntityIds: ['part:bearing.occ'] })).toBeNull()
+    expect(photonCadAcceptedAssemblySnapshot(request, { ...accepted, preview: { ...accepted.preview, contentDigest: previousPreview.contentDigest } }, project, previousPreview)).toBeNull()
+    expect(photonCadAcceptedAssemblySnapshot(request, {
+      ...accepted,
+      snapshot: { ...snapshot, entities: [...snapshot.entities, project.entities.find((entity) => entity.id === 'part:gear.occ')!] },
+    }, project, previousPreview)).toBeNull()
+  })
+
+  it('labels the explicit persisted-scratch boundary without enabling an unattached workspace', () => {
+    const runtime = industrialRuntime(spurGearCapability())
+    const project = persistedProject()
+    const controller = {} as PhotonCadController
+    const locked = renderToStaticMarkup(
+      <PhotonCadWorkspace controller={controller} runtime={runtime} project={project} initialStage="design" />,
+    )
+    const authorized = renderToStaticMarkup(
+      <PhotonCadWorkspace
+        controller={controller}
+        runtime={runtime}
+        project={project}
+        initialStage="design"
+        persistedScratchAuthorized
+      />,
+    )
+    expect(locked).toContain('data-operation-access="locked"')
+    expect(locked).toContain('Prepare suggestion')
+    expect(authorized).toContain('data-operation-access="enabled"')
+    expect(authorized).toContain('Run persisted scratch operation')
+    expect(authorized).toContain('exact host-described scratch operation will be persisted')
+    expect(authorized).toContain('<dt>Targets</dt><dd>New part</dd>')
+    for (const rejected of [
+      spurGearCapability({ experimental: true }),
+      spurGearCapability({ previewSupported: false }),
+      spurGearCapability({ operation: 'modify' }),
+    ]) {
+      const rejectedMarkup = renderToStaticMarkup(
+        <PhotonCadWorkspace
+          controller={controller}
+          runtime={industrialRuntime(rejected)}
+          project={project}
+          initialStage="design"
+          persistedScratchAuthorized
+        />,
+      )
+      expect(rejectedMarkup).toContain('data-operation-access="locked"')
+      expect(rejectedMarkup).not.toContain('Run persisted scratch operation')
+    }
+  })
+
+  it('uses the shell project tab as the only document identity row while retaining workflow tabs', () => {
     const markup = renderToStaticMarkup(<PhotonCadWorkspaceFixture />)
 
-    expect(markup).toContain('aria-label="CAD documents"')
+    expect(markup).not.toContain('aria-label="CAD documents"')
+    expect(markup).not.toContain('aria-label="CAD document location"')
+    expect(markup).toContain('aria-label="Conveyor Drive Gearbox CAD workspace"')
     expect(markup).toContain('aria-label="CAD workflow"')
     expect(markup).toContain('role="tabpanel"')
     expect(markup).toContain('aria-selected="true"')
@@ -25,13 +592,21 @@ describe('PhotonCadWorkspace', () => {
     expect(markup).toContain('Release')
     expect(markup).not.toContain('Activity rail')
     expect(markup).not.toContain('Photon agent')
+    expect(markup).toContain('aria-label="Resize parts and context pane"')
+    expect(markup).toContain('aria-label="Resize parameter inspector"')
+    expect(markup).toContain('aria-label="CAD work area visibility"')
   })
 
-  it('renders catalog coverage, human parameters, units, and declared provenance honestly', () => {
+  it('renders compact expandable categories, human parameters, units, and declared provenance honestly', () => {
     const markup = renderToStaticMarkup(<PhotonCadWorkspaceFixture initialStage="library" />)
 
-    expect(markup).toContain('Operation library')
-    expect(markup).toContain('4 discovered · 4 available · 0 unavailable')
+    expect(markup).toContain('Parts library')
+    expect(markup).toContain('Part library categories')
+    expect(markup).toContain('Primitives')
+    expect(markup).toContain('<details')
+    expect(markup).toContain('Build123d generator')
+    expect(markup).not.toContain('Catalog coverage')
+    expect(markup).not.toContain('Catalog scope')
     expect(markup).toContain('Precision box')
     expect(markup).toContain('Length')
     expect(markup).toContain('Overall X dimension.')
@@ -40,6 +615,102 @@ describe('PhotonCadWorkspace', () => {
     expect(markup).toContain('build123d')
     expect(markup).toContain('Apache-2.0')
     expect(markup).toContain('does not independently attest')
+  })
+
+  it('groups source-backed parts separately from assembly tools and exposes reusable project definitions', () => {
+    const gear = spurGearCapability()
+    const primitive: PhotonCadCapability = { ...gear, id: 'geometry.box.create.v1', backend: 'geometry', category: 'Primitive solids', title: 'Box' }
+    const bearing: PhotonCadCapability = { ...gear, id: 'industrial.bearing.deep-groove.v1', category: 'Industrial bearings', title: 'Deep Groove Ball Bearing' }
+    const fastener: PhotonCadCapability = { ...gear, id: 'industrial.fastener.socket-head.v1', category: 'Industrial fasteners', title: 'Socket Head Cap Screw' }
+    const assembly = assemblyCapability()
+
+    expect(photonCadCatalogSections([assembly, bearing, primitive, gear, fastener]).map((section) => [section.id, section.label, section.library, section.capabilities.length])).toEqual([
+      ['build123d-design', 'Build123d design', 'build123d', 1],
+      ['bearings', 'Bearings', 'bd-warehouse', 1],
+      ['gears', 'Gears', 'bd-warehouse', 1],
+      ['fasteners', 'Fasteners', 'bd-warehouse', 1],
+      ['assembly-tools', 'Assembly tools', 'assembly', 1],
+    ])
+    expect(photonCadProjectParts(twoPartProject())).toEqual([
+      { id: 'part:bearing', name: 'Bearing', kind: 'part', occurrenceCount: 1 },
+      { id: 'part:gear', name: 'Spur Gear', kind: 'part', occurrenceCount: 1 },
+    ])
+    expect(photonCadProjectParts(twoPartProject(), 'gear')).toEqual([
+      { id: 'part:gear', name: 'Spur Gear', kind: 'part', occurrenceCount: 1 },
+    ])
+
+    const markup = renderToStaticMarkup(
+      <PhotonCadWorkspace runtime={industrialRuntime(gear)} project={twoPartProject()} initialStage="library" />,
+    )
+    expect(markup).toContain('Project parts')
+    expect(markup).toContain('Reusable definitions already sealed in this project')
+    expect(markup).toContain('Bearing')
+    expect(markup).toContain('1 placed')
+    expect(markup).toContain('BD Warehouse')
+    expect(markup).toContain('Gears')
+  })
+
+  it('presents verified Build123d constructors directly in the Design drawer', () => {
+    const markup = renderToStaticMarkup(<PhotonCadWorkspaceFixture initialStage="design" />)
+
+    expect(markup).toContain('Manual solid tools')
+    expect(markup).toContain('Build123d solid constructors')
+    expect(markup).toContain('Create an exact parametric B-rep solid')
+  })
+
+  it('enters Design on a verified manual constructor instead of retaining a library part', () => {
+    const gear = spurGearCapability()
+    const box: PhotonCadCapability = {
+      ...gear,
+      id: 'geometry.box.create.v1',
+      backend: 'geometry',
+      category: 'Primitive solids',
+      title: 'Box',
+      source: { ...gear.source, package: 'build123d' },
+    }
+    const cylinder: PhotonCadCapability = { ...box, id: 'geometry.cylinder.create.v1', title: 'Cylinder' }
+
+    expect(photonCadManualDesignCapabilityId([gear, box, cylinder], gear.id)).toBe(box.id)
+    expect(photonCadManualDesignCapabilityId([gear, box, cylinder], cylinder.id)).toBe(cylinder.id)
+    expect(photonCadManualDesignCapabilityId([gear], gear.id)).toBe('')
+  })
+
+  it('bounds large library rendering and offers the next catalog page', () => {
+    const capabilities = Array.from({ length: 105 }, (_, index) => spurGearCapability({
+      id: `bdw_${String(index).padStart(48, '0')}`,
+      title: `Verified gear ${index + 1}`,
+    }))
+    const runtime: PhotonCadRuntimeDescription = {
+      ...industrialRuntime(capabilities[0]),
+      catalog: {
+        contractVersion: 1,
+        catalogRevision: 'catalog:large:1',
+        generatedAtUtc: '2026-08-11T10:00:00Z',
+        capabilities,
+        coverage: { discovered: capabilities.length, available: capabilities.length, unavailable: 0, unavailableReasons: [] },
+      },
+    }
+    const markup = renderToStaticMarkup(<PhotonCadWorkspace runtime={runtime} project={persistedProject()} initialStage="library" />)
+
+    expect(markup).toContain('Show 5 more')
+    expect(markup).toContain('5 remaining')
+    expect(markup).toContain('Verified gear 100')
+    expect(markup).not.toContain('Verified gear 101')
+  })
+
+  it('persists bounded CAD work-area widths and supports keyboard separators', () => {
+    const values = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    }
+    const layout = { contextWidth: 344, inspectorWidth: 416, contextCollapsed: true, inspectorCollapsed: false }
+
+    expect(savePhotonCadPaneLayout(layout, storage)).toBe(true)
+    expect(loadPhotonCadPaneLayout(storage)).toEqual(layout)
+    expect(photonCadKeyboardPaneWidth('context', 260, 'ArrowRight')).toBe(276)
+    expect(photonCadKeyboardPaneWidth('inspector', 300, 'ArrowLeft', true)).toBe(348)
+    expect(photonCadKeyboardPaneWidth('inspector', 300, 'Enter')).toBeNull()
   })
 
   it('keeps the viewer boundary injectable and makes missing evidence unmistakable', () => {
@@ -59,6 +730,28 @@ describe('PhotonCadWorkspace', () => {
     expect(injectedMarkup).toContain('Injected renderer boundary')
     expect(injectedMarkup).not.toContain('No geometry renderer connected')
     expect(injectedMarkup).toContain('No preview receipt')
+  })
+
+  it('runs only mounted verification checks by default and marks interference unavailable', () => {
+    const markup = renderToStaticMarkup(<PhotonCadWorkspaceFixture initialStage="verify" />)
+
+    expect(markup).toContain('4 selected')
+    expect(markup).toContain('Interference — unavailable')
+    expect(markup).toContain('Not mounted yet; overlapping-occurrence analysis remains unavailable')
+  })
+
+  it('makes the real selected-part generic STEP exporter reachable from Release', () => {
+    const markup = renderToStaticMarkup(<PhotonCadWorkspaceFixture initialStage="release" />)
+
+    expect(markup).toContain('Portable STEP source')
+    expect(markup).toContain('Generic Part 21')
+    expect(markup).toContain('Select exactly one saved Body or Part')
+    expect(markup).toContain('Model tree')
+    expect(markup).toContain('Export selected STEP')
+    expect(markup).toContain('BOM files and quote/invoice output are not mounted yet')
+    expect(markup).not.toContain('>Quote / invoice<')
+    expect(markup).not.toContain('STEP AP242')
+    expect(markup).not.toContain('STEP AP214')
   })
 
   it('limits autonomous language to scratch drafting and never advertises a canonical write', () => {
@@ -120,11 +813,13 @@ describe('PhotonCadWorkspace', () => {
     expect(verifyMarkup).toContain('No verification result')
     expect(verifyMarkup).toContain('Passing status is never inferred')
     expect(verifyMarkup).toContain('Preview answers')
-    expect(releaseMarkup).toContain('Review before write')
-    expect(releaseMarkup).toContain('Preparing never creates files')
+    expect(releaseMarkup).toContain('Canonical source export')
+    expect(releaseMarkup).toContain('Select exactly one saved Body or Part')
     expect(releaseMarkup).toContain('STEP is the portable source of truth.')
     expect(releaseMarkup).toContain('Autodesk Inventor is an optional later bridge')
-    expect(releaseMarkup).toContain('No release review')
+    expect(releaseMarkup).toContain('Export selected STEP')
+    expect(releaseMarkup).not.toContain('Prepare review')
+    expect(releaseMarkup).not.toContain('Create package')
     expect(releaseMarkup).not.toContain('Package plan ready')
   })
 
@@ -183,7 +878,7 @@ describe('PhotonCadWorkspace', () => {
     expect(fixtureMarkup).toContain('Fixture catalog')
     expect(fixtureMarkup).not.toContain('Runtime ready')
     expect(fixtureMarkup).toContain('No CAD runtime action, geometry render, verification pass, or release success is implied.')
-    expect(unavailableMarkup).toContain('Runtime unavailable')
+    expect(unavailableMarkup).toContain('data-runtime="unavailable"')
     expect(unavailableMarkup).toContain('The verified CAD runtime is not installed')
     expect(unavailableMarkup).toContain('No catalog evidence')
     expect(unavailableMarkup).toContain('No geometry snapshot')
@@ -230,7 +925,7 @@ describe('PhotonCadWorkspace', () => {
     expect(verifyMarkup).toMatch(/<input[^>]*type="checkbox"[^>]*disabled=""/u)
     expect(verifyMarkup).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Run selected checks<\/button>/u)
     expect(releaseMarkup).toMatch(/<fieldset[^>]*class="pcad-release-output"[^>]*disabled=""/u)
-    expect(releaseMarkup).toMatch(/<input[^>]*type="checkbox"[^>]*disabled=""/u)
+    expect(releaseMarkup).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Export selected STEP<\/button>/u)
     expect(bomMarkup).toMatch(/<fieldset[^>]*class="pcad-format-list"[^>]*disabled=""/u)
     expect(commercialMarkup).toMatch(/<span>Document number<\/span><input disabled=""/u)
     expect(commercialMarkup).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Prepare preview<\/button>/u)

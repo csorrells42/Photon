@@ -12,5 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PhotonCadRuntime.IndustrialProvider.Smoke" />
+    <InternalsVisibleTo Include="PhotonCadRuntime.ManualProvider" />
+    <InternalsVisibleTo Include="PhotonCadRuntime.ManualProvider.Smoke" />
   </ItemGroup>
 </Project>

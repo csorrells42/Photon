@@ -32,6 +32,9 @@ public sealed class JavaJdtLanguageToolingProvider :
     public static JavaJdtLanguageToolingProvider CreateUnprovisioned(string workspaceRoot) =>
         new(workspaceRoot, JavaJdtProvisioning.CreateUnavailableAuthority());
 
+    public static JavaJdtLanguageToolingProvider CreateProvisioned(string workspaceRoot, string installRoot) =>
+        new(workspaceRoot, JavaJdtProvisioning.CreateReceiptBoundAuthority(installRoot));
+
     internal static JavaJdtLanguageToolingProvider CreateForTrustedAuthority(
         string workspaceRoot,
         IJavaJdtRuntimeAuthority authority) => new(workspaceRoot, authority);

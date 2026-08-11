@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { PhotonCadPreviewAssetResolver } from './PhotonCadPreviewAsset'
 import type { PhotonCadPreviewContext } from './PhotonCadWorkspace'
 import { DesktopPhotonCadPreviewClient } from './DesktopPhotonCadPreviewClient'
@@ -8,6 +8,14 @@ export function PhotonCadDesktopPreviewSurface({ context }: { context: PhotonCad
   const client = useRef(new DesktopPhotonCadPreviewClient())
   const project = context.project
   const receipt = context.receipt
+  useEffect(() => {
+    if (!project || receipt || project.revision < 1 || project.entities.length === 0) return
+    const cancellation = new AbortController()
+    void client.current.hydrate({ sessionId: project.sessionId, projectId: project.projectId, revision: project.revision }, cancellation.signal)
+      .then((hydrated) => { context.acceptHydratedReceipt(hydrated) })
+      .catch(() => undefined)
+    return () => cancellation.abort()
+  }, [project?.sessionId, project?.projectId, project?.revision, receipt?.previewId])
   const resolveAsset = useCallback<PhotonCadPreviewAssetResolver>((request, signal) => {
     if (!project || !receipt || project.projectId !== receipt.projectId || project.revision !== receipt.revision) {
       return Promise.reject(new Error('preview-context-unavailable'))

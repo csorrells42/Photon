@@ -6,6 +6,7 @@ import type {
   DockerObservedState,
   DockerProductService,
   DockerProductServiceSnapshot,
+  DockerStackSnapshot,
 } from './contracts'
 import './DockerControlCenter.css'
 
@@ -16,6 +17,7 @@ export type DockerControlCenterProps = {
 
 const serviceLabels: Record<DockerProductService, string> = {
   hermes: 'Hermes',
+  'memory-vector': 'Memory Vector',
   serena: 'Serena',
   'model-runner': 'Model Runner',
 }
@@ -139,7 +141,11 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
               {selected ? (
                 <ServiceDetail
                   service={selected}
-                  mutationDisabled={!canMutate || !state.operations.restartService}
+                  canStart={canMutate && state.operations.startService && selected.manageable === true}
+                  canStop={canMutate && state.operations.stopService && selected.manageable === true}
+                  canRestart={canMutate && state.operations.restartService && selected.manageable === true}
+                  onStart={() => request({ kind: 'start-service', service: selected.id })}
+                  onStop={() => request({ kind: 'stop-service', service: selected.id })}
                   onRestart={() => request({ kind: 'restart-service', service: selected.id })}
                 />
               ) : <p className="docker-control__missing">No selected service snapshot.</p>}
@@ -165,6 +171,12 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
                 : <p className="docker-control__missing">No workflow receipt reported.</p>}
             </div>
           </section>
+
+          <ModelRunnerPanel
+            snapshot={state.snapshot.modelRunner}
+            canMutate={canMutate && state.operations.unloadModel}
+            onUnload={(model) => request({ kind: 'unload-model', model })}
+          />
 
           <section className="docker-control__logs" aria-label="Bounded service logs">
             <div className="docker-control__section-heading">
@@ -221,16 +233,38 @@ function StatePill({ state }: { state: DockerObservedState }) {
   return <span className={`docker-control__pill docker-control__pill--${state}`}>{stateLabels[state]}</span>
 }
 
-function ServiceDetail({ service, mutationDisabled, onRestart }: { service: DockerProductServiceSnapshot; mutationDisabled: boolean; onRestart(): void }) {
+function ServiceDetail({
+  service,
+  canStart,
+  canStop,
+  canRestart,
+  onStart,
+  onStop,
+  onRestart,
+}: {
+  service: DockerProductServiceSnapshot
+  canStart: boolean
+  canStop: boolean
+  canRestart: boolean
+  onStart(): void
+  onStop(): void
+  onRestart(): void
+}) {
   return (
     <>
       <div className="docker-control__section-heading">
         <div><p className="docker-control__eyebrow">Approved service</p><h3>{serviceLabels[service.id]}</h3></div>
-        <button type="button" disabled={mutationDisabled} onClick={onRestart}>Review restart</button>
+        <div className="docker-control__service-actions">
+          <button type="button" disabled={!canStart || service.state === 'running'} onClick={onStart}>Review start</button>
+          <button type="button" disabled={!canStop || service.state === 'stopped' || service.state === 'unavailable'} onClick={onStop}>Review stop</button>
+          <button type="button" disabled={!canRestart || (service.state !== 'running' && service.state !== 'degraded')} onClick={onRestart}>Review restart</button>
+        </div>
       </div>
       <dl className="docker-control__facts">
         <div><dt>State</dt><dd>{stateLabels[service.state]}</dd></div>
         <div><dt>Health</dt><dd>{service.health}</dd></div>
+        <div><dt>Managed here</dt><dd>{service.manageable ? 'Yes' : 'No'}</dd></div>
+        <div><dt>Container ID</dt><dd><code>{service.containerId ?? 'Not running'}</code></dd></div>
         <div><dt>Version</dt><dd>{service.version ?? 'Not reported'}</dd></div>
         <div><dt>Image verification</dt><dd>{service.image?.verification ?? 'Not reported'}</dd></div>
         <div><dt>Exact image ID</dt><dd><code>{service.image?.imageId ?? 'Not reported'}</code></dd></div>
@@ -239,7 +273,72 @@ function ServiceDetail({ service, mutationDisabled, onRestart }: { service: Dock
       </dl>
       <h4>Loopback ports</h4>
       {service.ports.length ? <ul>{service.ports.map((port) => <li key={`${port.address}-${port.hostPort}-${port.containerPort}-${port.protocol}`}><code>{port.address}:{port.hostPort}</code> → {port.containerPort}/{port.protocol}</li>)}</ul> : <p className="docker-control__missing">No loopback ports reported.</p>}
+      <h4>Current resources</h4>
+      {service.resources ? (
+        <dl className="docker-control__facts docker-control__facts--resources">
+          <div><dt>CPU</dt><dd>{service.resources.cpuPercent === undefined ? 'Not reported' : `${service.resources.cpuPercent.toFixed(2)}%`}</dd></div>
+          <div><dt>Memory</dt><dd>{service.resources.memoryUsage ?? 'Not reported'}{service.resources.memoryLimit ? ` / ${service.resources.memoryLimit}` : ''}</dd></div>
+          <div><dt>Memory %</dt><dd>{service.resources.memoryPercent === undefined ? 'Not reported' : `${service.resources.memoryPercent.toFixed(2)}%`}</dd></div>
+          <div><dt>Network I/O</dt><dd>{service.resources.networkIo ?? 'Not reported'}</dd></div>
+          <div><dt>Block I/O</dt><dd>{service.resources.blockIo ?? 'Not reported'}</dd></div>
+          <div><dt>PIDs</dt><dd>{service.resources.pids ?? 'Not reported'}</dd></div>
+        </dl>
+      ) : <p className="docker-control__missing">Resource telemetry is unavailable for this service.</p>}
     </>
+  )
+}
+
+function ModelRunnerPanel({
+  snapshot,
+  canMutate,
+  onUnload,
+}: {
+  snapshot: DockerStackSnapshot['modelRunner']
+  canMutate: boolean
+  onUnload(model: string): void
+}) {
+  return (
+    <section className="docker-control__model-runner" aria-label="Docker Model Runner">
+      <div className="docker-control__section-heading">
+        <div>
+          <p className="docker-control__eyebrow">Local inference authority</p>
+          <h3>Docker Model Runner</h3>
+          <p>{snapshot?.message ?? 'No Docker Model Runner evidence was returned.'}</p>
+        </div>
+        <StatePill state={snapshot?.state ?? 'unavailable'} />
+      </div>
+      {snapshot ? (
+        <>
+          <dl className="docker-control__facts">
+            <div><dt>Version</dt><dd>{snapshot.version ?? 'Not reported'}</dd></div>
+            <div><dt>Runtime kind</dt><dd>{snapshot.kind ?? 'Not reported'}</dd></div>
+            <div><dt>Loopback endpoint</dt><dd><code>{snapshot.endpoint ?? 'Not reported'}</code></dd></div>
+            <div><dt>Model disk usage</dt><dd>{snapshot.diskUsage ?? 'Not reported'}</dd></div>
+          </dl>
+          <div className="docker-control__model-authority">
+            <button type="button" disabled title="This Docker CLI exposes pull/run, not a bounded load-only command. Loading remains unavailable here.">Load model unavailable</button>
+            <span>{snapshot.models.filter((model) => model.loaded).length} loaded / {snapshot.models.length} local</span>
+          </div>
+          {snapshot.models.length ? (
+            <div className="docker-control__models">
+              {snapshot.models.map((model) => (
+                <article key={`${model.reference}-${model.modelId ?? 'unknown'}`}>
+                  <div>
+                    <strong>{model.reference}</strong>
+                    <small>{[model.parameters, model.format, model.size, model.backend, model.mode].filter(Boolean).join(' · ') || 'No model details reported'}</small>
+                    <code>{model.modelId ?? 'Model digest not reported'}</code>
+                  </div>
+                  <div className="docker-control__model-state">
+                    <span>{model.loaded ? 'Loaded' : 'Local'}</span>
+                    <button type="button" disabled={!model.loaded || !snapshot.unloadAvailable || !canMutate} onClick={() => onUnload(model.reference)}>Review unload</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : <p className="docker-control__missing">No local models reported.</p>}
+        </>
+      ) : <p className="docker-control__missing">Model Runner inventory is unavailable.</p>}
+    </section>
   )
 }
 

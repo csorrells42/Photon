@@ -262,6 +262,109 @@ internal static class Program
                 (cylinderBytes, cylinderDigest) = ValidateArtifact(result.Response, Path.Combine(job, "output", "model.step"), "step");
             });
 
+            await ScenarioAsync(scenarios, "manual-rectangle-circle-extrude-cut-hole-and-preview", async () =>
+            {
+                var rectangleJob = NewJob(tempRoot, "manual-rectangle-add");
+                var rectangle = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    rectangleJob,
+                    ManualSketchExtrudeAddRequest("rectangle", 10, 20, depthMm: 30));
+                RequireSuccess(rectangle.Process, "manual rectangle add");
+                RequireSuccessResponse(rectangle.Response, "manualSketchExtrudeAdd");
+                RequireApproximately(rectangle.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble(), 6000.0, 1e-9, "manual rectangle volume");
+                ValidateManualProvenance(rectangle.Response, "sketchExtrudeAdd", "rectangle");
+                var (rectangleBytes, rectangleDigest) = ValidateArtifact(rectangle.Response, Path.Combine(rectangleJob, "output", "model.step"), "step");
+
+                var circleJob = NewJob(tempRoot, "manual-circle-add");
+                var circle = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    circleJob,
+                    ManualSketchExtrudeAddRequest("circle", 5, 0, depthMm: 12));
+                RequireSuccess(circle.Process, "manual circle add");
+                RequireSuccessResponse(circle.Response, "manualSketchExtrudeAdd");
+                RequireApproximately(circle.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble(), Math.PI * 5 * 5 * 12, 1e-8, "manual circle volume");
+                ValidateManualProvenance(circle.Response, "sketchExtrudeAdd", "circle");
+
+                var cutJob = NewJob(tempRoot, "manual-rectangle-cut");
+                File.WriteAllBytes(Path.Combine(cutJob, "input", "base.step"), boxBytes);
+                var cut = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    cutJob,
+                    ManualSketchExtrudeCutRequest("base", boxDigest!, "rectangle", 4, 5, depthMm: 30));
+                RequireSuccess(cut.Process, "manual rectangle cut");
+                RequireSuccessResponse(cut.Response, "manualSketchExtrudeCut");
+                var cutVolume = cut.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
+                Require(cutVolume > 0 && cutVolume < 6000, "manual cut did not subtract real solid volume");
+                ValidateManualProvenance(cut.Response, "sketchExtrudeCut", "rectangle");
+                var (cutBytes, cutDigest) = ValidateArtifact(cut.Response, Path.Combine(cutJob, "output", "model.step"), "step");
+
+                var holeJob = NewJob(tempRoot, "manual-hole-cut");
+                File.WriteAllBytes(Path.Combine(holeJob, "input", "base.step"), boxBytes);
+                var hole = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    holeJob,
+                    ManualHoleCutRequest("base", boxDigest!, radiusMm: 2, depthMm: 30, xMm: 0, yMm: 0, zMm: 0));
+                RequireSuccess(hole.Process, "manual hole cut");
+                RequireSuccessResponse(hole.Response, "manualHoleCut");
+                var holeVolume = hole.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
+                Require(holeVolume > 0 && holeVolume < 6000, "manual hole did not subtract real solid volume");
+                ValidateManualProvenance(hole.Response, "holeCut", null);
+
+                var previewJob = NewJob(tempRoot, "manual-complete-preview");
+                File.WriteAllBytes(Path.Combine(previewJob, "input", "cut.step"), cutBytes);
+                var preview = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    previewJob,
+                    SingleSourcePreviewRequest("cut", cutDigest, IdentityTransform()));
+                RequireSuccess(preview.Process, "manual preview");
+                RequireSuccessResponse(preview.Response, "createPreview");
+                ValidateArtifact(preview.Response, Path.Combine(previewJob, "output", "preview.glb"), "glb");
+                ValidateGlb(File.ReadAllBytes(Path.Combine(previewJob, "output", "preview.glb")), new[] { "entity" });
+                Require(rectangleBytes.Length > 0 && circle.Response.GetProperty("artifact").GetProperty("byteLength").GetInt64() > 0, "manual artifacts were empty");
+            });
+
+            await ScenarioAsync(scenarios, "manual-protocol-hostiles-and-unimplemented-edit-operations", async () =>
+            {
+                var unknown = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    NewJob(tempRoot, "manual-unknown-member"),
+                    JsonSerializer.Serialize(new
+                    {
+                        schema = RequestSchema,
+                        operation = "manualSketchExtrudeAdd",
+                        profile = new { kind = "rectangle", plane = "xy", widthMm = 1, heightMm = 1, script = "forbidden" },
+                        depthMm = 1,
+                    }, JsonOptions));
+                RequireErrorResponse(unknown, "invalid-request");
+
+                var unsupportedPlane = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    NewJob(tempRoot, "manual-plane"),
+                    ManualSketchExtrudeAddRequest("rectangle", 1, 1, depthMm: 1, plane: "xz"));
+                RequireErrorResponse(unsupportedPlane, "invalid-parameter");
+
+                var badSource = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    NewJob(tempRoot, "manual-bad-source"),
+                    ManualHoleCutRequest("../base", "sha256:" + new string('0', 64), 1, 1, 0, 0, 0));
+                RequireErrorResponse(badSource, "invalid-parameter");
+
+                var fillet = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    NewJob(tempRoot, "manual-fillet"),
+                    JsonSerializer.Serialize(new { schema = RequestSchema, operation = "manualFillet", source = new { inputSlot = "base", expectedDigest = "sha256:" + new string('0', 64) } }, JsonOptions));
+                RequireErrorResponse(fillet, "unsupported-operation");
+            });
+
             await ScenarioAsync(scenarios, "dynamic-bearing-creation", async () =>
             {
                 var item = SelectCatalogItem(firstCatalog.Response, "bearings", null);
@@ -1040,6 +1143,39 @@ internal static class Program
     private static string PrimitiveRequest(string kind, Dictionary<string, object> dimensions) =>
         JsonSerializer.Serialize(new { schema = RequestSchema, operation = "createPrimitive", primitive = new { kind, dimensions } }, JsonOptions);
 
+    private static string ManualSketchExtrudeAddRequest(string kind, double first, double second, double depthMm, string plane = "xy")
+    {
+        object profile = kind == "rectangle"
+            ? new { kind, plane, widthMm = first, heightMm = second }
+            : new { kind, plane, radiusMm = first };
+        return JsonSerializer.Serialize(new { schema = RequestSchema, operation = "manualSketchExtrudeAdd", profile, depthMm }, JsonOptions);
+    }
+
+    private static string ManualSketchExtrudeCutRequest(string inputSlot, string digest, string kind, double first, double second, double depthMm)
+    {
+        object profile = kind == "rectangle"
+            ? new { kind, plane = "xy", widthMm = first, heightMm = second }
+            : new { kind, plane = "xy", radiusMm = first };
+        return JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualSketchExtrudeCut",
+            source = new { inputSlot, expectedDigest = digest },
+            profile,
+            depthMm,
+        }, JsonOptions);
+    }
+
+    private static string ManualHoleCutRequest(
+        string inputSlot, string digest, double radiusMm, double depthMm, double xMm, double yMm, double zMm) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualHoleCut",
+            source = new { inputSlot, expectedDigest = digest },
+            hole = new { radiusMm, depthMm, xMm, yMm, zMm },
+        }, JsonOptions);
+
     private static string CatalogItemRequest(string digest, CatalogItem item) =>
         JsonSerializer.Serialize(new
         {
@@ -1229,6 +1365,17 @@ internal static class Program
         Require(provenance.GetProperty("generator").GetString() == "primitive", "primitive provenance generator drifted");
         Require(provenance.GetProperty("kind").GetString() == expectedKind, "primitive provenance kind drifted");
         RequireExactKeys(provenance.GetProperty("parameters"), parameterNames.ToArray());
+    }
+
+    private static void ValidateManualProvenance(JsonElement response, string expectedKind, string? expectedProfileKind)
+    {
+        var provenance = response.GetProperty("provenance");
+        Require(provenance.GetProperty("generator").GetString() == "manual", "manual provenance generator drifted");
+        Require(provenance.GetProperty("kind").GetString() == expectedKind, "manual provenance kind drifted");
+        if (expectedProfileKind is null) return;
+        var profile = provenance.GetProperty("profile");
+        Require(profile.GetProperty("kind").GetString() == expectedProfileKind, "manual profile kind drifted");
+        Require(profile.GetProperty("plane").GetString() == "xy", "manual profile plane drifted");
     }
 
     private static void ValidateCatalogProvenance(JsonElement response, string expectedDigest, CatalogItem item)

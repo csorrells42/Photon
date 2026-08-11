@@ -929,6 +929,123 @@ def _primitive(request: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _manual_profile_solid(profile_request: object, depth_value: object) -> tuple[object, dict[str, object], float]:
+    depth = _finite_number(depth_value, 0.000001, 1_000_000.0)
+    profile = _require_object(profile_request)
+    kind = profile.get("kind")
+    if profile.get("plane") != "xy":
+        raise ProtocolFailure("invalid-parameter")
+    if build123d is None:
+        raise ProtocolFailure("dependency-unavailable")
+    try:
+        with build123d.BuildPart() as part:
+            with build123d.BuildSketch(build123d.Plane.XY):
+                if kind == "rectangle":
+                    _exact_keys(profile, {"kind", "plane", "widthMm", "heightMm"})
+                    width = _finite_number(profile["widthMm"], 0.000001, 1_000_000.0)
+                    height = _finite_number(profile["heightMm"], 0.000001, 1_000_000.0)
+                    build123d.Rectangle(width, height)
+                    provenance: dict[str, object] = {
+                        "heightMm": height,
+                        "kind": "rectangle",
+                        "plane": "xy",
+                        "widthMm": width,
+                    }
+                elif kind == "circle":
+                    _exact_keys(profile, {"kind", "plane", "radiusMm"})
+                    radius = _finite_number(profile["radiusMm"], 0.000001, 1_000_000.0)
+                    build123d.Circle(radius)
+                    provenance = {"kind": "circle", "plane": "xy", "radiusMm": radius}
+                else:
+                    raise ProtocolFailure("invalid-parameter")
+            build123d.extrude(amount=depth)
+        return _validate_shape(part.part)[1], provenance, depth
+    except ProtocolFailure:
+        raise
+    except Exception as exception:
+        raise ProtocolFailure("operation-failed") from exception
+
+
+def _manual_response(operation: str, shape: object, provenance: dict[str, object]) -> dict[str, object]:
+    receipt, shape = _validate_shape(shape)
+    payload = _step_bytes(shape)
+    artifact = _write_new_artifact("model.step", payload)
+    return {
+        "operation": operation,
+        "artifact": artifact,
+        "measurement": receipt,
+        "provenance": provenance,
+    }
+
+
+def _manual_sketch_extrude_add(request: dict[str, object]) -> dict[str, object]:
+    _exact_keys(request, {"schema", "operation", "profile", "depthMm"})
+    shape, profile, depth = _manual_profile_solid(request["profile"], request["depthMm"])
+    return _manual_response(
+        "manualSketchExtrudeAdd",
+        shape,
+        {"generator": "manual", "kind": "sketchExtrudeAdd", "profile": profile, "depthMm": depth},
+    )
+
+
+def _manual_source(request: dict[str, object]) -> tuple[object, dict[str, object]]:
+    source = _require_object(request["source"])
+    _exact_keys(source, {"inputSlot", "expectedDigest"})
+    _payload, shape, receipt = _read_sealed_model(
+        _safe_slot(source["inputSlot"]), _expected_digest(source["expectedDigest"]), [0]
+    )
+    return shape, receipt
+
+
+def _manual_sketch_extrude_cut(request: dict[str, object]) -> dict[str, object]:
+    _exact_keys(request, {"schema", "operation", "source", "profile", "depthMm"})
+    base, base_receipt = _manual_source(request)
+    cutter, profile, depth = _manual_profile_solid(request["profile"], request["depthMm"])
+    try:
+        result = base.cut(cutter)
+    except Exception as exception:
+        raise ProtocolFailure("operation-failed") from exception
+    return _manual_response(
+        "manualSketchExtrudeCut",
+        result,
+        {
+            "generator": "manual",
+            "kind": "sketchExtrudeCut",
+            "profile": profile,
+            "depthMm": depth,
+            "sourceVolumeMm3": base_receipt["volumeMm3"],
+        },
+    )
+
+
+def _manual_hole_cut(request: dict[str, object]) -> dict[str, object]:
+    _exact_keys(request, {"schema", "operation", "source", "hole"})
+    base, base_receipt = _manual_source(request)
+    hole = _require_object(request["hole"])
+    _exact_keys(hole, {"radiusMm", "depthMm", "xMm", "yMm", "zMm"})
+    radius = _finite_number(hole["radiusMm"], 0.000001, 1_000_000.0)
+    depth = _finite_number(hole["depthMm"], 0.000001, 1_000_000.0)
+    x = _finite_number(hole["xMm"], -1_000_000.0, 1_000_000.0)
+    y = _finite_number(hole["yMm"], -1_000_000.0, 1_000_000.0)
+    z = _finite_number(hole["zMm"], -1_000_000.0, 1_000_000.0)
+    try:
+        cutter = build123d.Cylinder(radius, depth)
+        cutter.translate((x, y, z))
+        result = base.cut(cutter)
+    except Exception as exception:
+        raise ProtocolFailure("operation-failed") from exception
+    return _manual_response(
+        "manualHoleCut",
+        result,
+        {
+            "generator": "manual",
+            "kind": "holeCut",
+            "hole": {"depthMm": depth, "radiusMm": radius, "xMm": x, "yMm": y, "zMm": z},
+            "sourceVolumeMm3": base_receipt["volumeMm3"],
+        },
+    )
+
+
 def _create_catalog_item(request: dict[str, object]) -> dict[str, object]:
     _exact_keys(request, {"schema", "operation", "catalogDigest", "itemId", "parameters"})
     supplied_digest = _expected_digest(request["catalogDigest"])
@@ -1388,6 +1505,12 @@ def _dispatch(request: dict[str, object]) -> dict[str, object]:
         return _create_catalog_item(request)
     if operation == "createPreview":
         return _glb(request)
+    if operation == "manualSketchExtrudeAdd":
+        return _manual_sketch_extrude_add(request)
+    if operation == "manualSketchExtrudeCut":
+        return _manual_sketch_extrude_cut(request)
+    if operation == "manualHoleCut":
+        return _manual_hole_cut(request)
     raise ProtocolFailure("unsupported-operation")
 
 

@@ -29,7 +29,11 @@ const unavailableMessages = {
 const unavailableOperations = {
   startStack: false,
   stopStack: false,
+  startService: false,
+  stopService: false,
   restartService: false,
+  loadModel: false,
+  unloadModel: false,
   update: false,
 } as const
 
@@ -188,11 +192,14 @@ export class DockerControlController {
       })
       return false
     }
-    if (intent.kind === 'restart-service' && !this.state.snapshot.services.some((service) => service.id === intent.service)) return false
+    if (intent.kind === 'start-service' || intent.kind === 'stop-service' || intent.kind === 'restart-service') {
+      const service = this.state.snapshot.services.find((candidate) => candidate.id === intent.service)
+      if (!service || service.manageable !== true) return false
+    }
+    if (intent.kind === 'unload-model' && !this.state.snapshot.modelRunner?.models.some((model) => model.loaded && model.reference === intent.model)) return false
     if ((intent.kind === 'start-stack' || intent.kind === 'stop-stack')
-      && (!this.state.snapshot.services.some((service) => service.id === 'hermes')
-        || !this.state.snapshot.services.some((service) => service.id === 'serena'))) {
-      this.update({ message: 'The approved Hermes and Serena stack is not fully described; refresh before requesting this operation.' })
+      && !this.state.snapshot.services.some((service) => service.manageable === true)) {
+      this.update({ message: 'No approved Docker-managed service is currently described; refresh before requesting this operation.' })
       return false
     }
     const requestId = this.createRequestId()
@@ -314,7 +321,10 @@ export class DockerControlController {
   private operationAvailable(intent: DockerMutationIntent) {
     if (intent.kind === 'start-stack') return this.state.operations.startStack
     if (intent.kind === 'stop-stack') return this.state.operations.stopStack
+    if (intent.kind === 'start-service') return this.state.operations.startService
+    if (intent.kind === 'stop-service') return this.state.operations.stopService
     if (intent.kind === 'restart-service') return this.state.operations.restartService
+    if (intent.kind === 'unload-model') return this.state.operations.unloadModel
     return this.state.operations.update
   }
 

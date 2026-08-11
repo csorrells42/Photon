@@ -1,6 +1,16 @@
 export const HERMES_PROMPT_QUEUE_ADAPTER_VERSION = 1
 export const HERMES_PROMPT_QUEUE_LIMIT = 20
 
+const immediatePausePattern = /\b(?:hang\s+tight|hold\s+(?:up|on)|just\s+(?:a\s+)?(?:sec(?:ond)?|moment)|wait(?:\s+(?:just\s+)?(?:a\s+)?(?:sec(?:ond)?|moment))?|stop|pause)\b/i
+const pauseNegationPattern = /\b(?:do\s+not|don't|dont|never|not\s+yet|keep\s+going|continue|resume)\b/i
+
+export function isHermesImmediatePauseInstruction(text: string) {
+  const normalized = text.trim().replace(/\s+/g, ' ')
+  if (!normalized || normalized.length > 240 || normalized.includes('?')) return false
+  if (pauseNegationPattern.test(normalized)) return false
+  return immediatePausePattern.test(normalized)
+}
+
 export type HermesQueuedPrompt<TAttachment> = {
   id: string
   text: string

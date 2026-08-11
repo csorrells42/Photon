@@ -105,7 +105,10 @@ internal sealed partial class SerenaWorkspaceSearchClient : IAsyncDisposable
             var toolsRequestId = $"{requestNonce}:tools-list";
             using var tools = (await SendRequestAsync(new
             {
-                jsonrpc = "2.0", id = toolsRequestId, method = "tools/list", @params = new { },
+                jsonrpc = "2.0",
+                id = toolsRequestId,
+                method = "tools/list",
+                @params = new { },
             }, toolsRequestId, sessionId, cancellationToken).ConfigureAwait(false)).Document;
             if (!HasFixedFindSymbolTool(tools.RootElement))
             {
@@ -165,7 +168,8 @@ internal sealed partial class SerenaWorkspaceSearchClient : IAsyncDisposable
                 var ranges = match >= 0
                     ? new[] { new WorkspaceSearchMatchRange(match, Math.Min(preview.Length, match + location.Token.Length)) }
                     : Array.Empty<WorkspaceSearchMatchRange>();
-                results.Add(new WorkspaceSearchNativeResult(location.Path.Replace('\\', '/'), location.ZeroBasedLine + 1, match + 1, preview, ranges));
+                var column = match >= 0 ? match + 1 : 1;
+                results.Add(new WorkspaceSearchNativeResult(location.Path.Replace('\\', '/'), location.ZeroBasedLine + 1, column, preview, ranges));
                 perFile[location.Path] = count + 1;
                 if (results.Count >= resultLimit) break;
             }

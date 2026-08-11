@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("pinned provisioning and integrity receipt", TestProvisioningAsync),
     ("explicit launch and attach authorization", TestAuthorizationAsync),
     ("full launch DAP workflow and bounded process", TestLaunchWorkflowAsync),
+    ("disconnect fully retires the session before restart", TestDisconnectRetirementAsync),
     ("attach negotiation without a real attach", TestAttachWorkflowAsync),
     ("adapter exit is observed and owned", TestAdapterExitAsync),
     ("provider stop terminates only its exact child", TestExactChildOwnershipAsync),
@@ -159,6 +160,22 @@ static async Task TestAttachWorkflowAsync()
     await session.DisconnectAsync();
     await AssertProcessExitedAsync(processId);
     Assert(policy.AttachRequests == 1, "Attach was not explicitly authorized.");
+}
+
+static async Task TestDisconnectRetirementAsync()
+{
+    using var fixture = SmokeFixture.Create();
+    await using var provider = new HermesDotNetDebuggerProvider(fixture.InstallRoot, new DecisionPolicy());
+    await StartProviderAsync(provider, fixture.WorkspaceRoot);
+
+    for (var attempt = 0; attempt < 8; attempt++)
+    {
+        var session = await provider.LaunchAsync(new DotNetDebugLaunchRequest(fixture.ProgramPath));
+        await session.ConfigurationDoneAsync();
+        await WaitUntilAsync(() => session.State == DapSessionState.Stopped, "restartable session stop");
+        await session.DisconnectAsync();
+        Assert(!provider.HasActiveSession, "Disconnect returned before the exact active-session slot was released.");
+    }
 }
 
 static async Task TestAdapterExitAsync()

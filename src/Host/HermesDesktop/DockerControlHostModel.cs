@@ -3,6 +3,7 @@ namespace HermesDesktop;
 internal enum DockerControlService
 {
     Hermes,
+    MemoryVector,
     Serena,
     ModelRunner,
 }
@@ -11,7 +12,10 @@ internal enum DockerControlMutationKind
 {
     StartStack,
     StopStack,
+    StartService,
+    StopService,
     RestartService,
+    UnloadModel,
 }
 
 internal sealed record DockerControlPort(string Address, int HostPort, int ContainerPort, string Protocol);
@@ -22,14 +26,45 @@ internal sealed record DockerControlImage(
     string? OciRevision,
     string Verification);
 
+internal sealed record DockerControlResources(
+    double? CpuPercent,
+    string? MemoryUsage,
+    string? MemoryLimit,
+    double? MemoryPercent,
+    string? NetworkIo,
+    string? BlockIo,
+    int? Pids);
+
 internal sealed record DockerControlServiceEvidence(
     DockerControlService Id,
     string State,
     string Health,
+    string? ContainerId,
     string? Version,
     DockerControlImage? Image,
     IReadOnlyList<DockerControlPort> Ports,
+    DockerControlResources? Resources,
     bool Manageable);
+
+internal sealed record DockerControlModel(
+    string Reference,
+    string? ModelId,
+    string? Size,
+    string? Format,
+    string? Parameters,
+    bool Loaded,
+    string? Backend,
+    string? Mode);
+
+internal sealed record DockerControlModelRunner(
+    string State,
+    string? Version,
+    string? Endpoint,
+    string? Kind,
+    string? DiskUsage,
+    bool UnloadAvailable,
+    IReadOnlyList<DockerControlModel> Models,
+    string Message);
 
 internal sealed record DockerControlVolumeEvidence(
     string Role,
@@ -52,6 +87,7 @@ internal sealed record DockerControlHostSnapshot(
     string RuntimeProtocol,
     IReadOnlyList<DockerControlServiceEvidence> Services,
     IReadOnlyList<DockerControlVolumeEvidence> Volumes,
+    DockerControlModelRunner? ModelRunner,
     DockerControlWorkflowEvidence? LastWorkflow);
 
 internal sealed record DockerControlLogLine(DateTimeOffset? TimestampUtc, string Stream, string Text);
@@ -61,7 +97,8 @@ internal sealed record DockerControlLogs(IReadOnlyList<DockerControlLogLine> Ent
 internal sealed record DockerControlMutation(
     DockerControlMutationKind Kind,
     DockerControlService? Service,
-    IReadOnlyList<DockerControlService> Targets);
+    IReadOnlyList<DockerControlService> Targets,
+    string? Model = null);
 
 internal sealed record DockerControlMutationOutcome(bool Succeeded, string Message);
 

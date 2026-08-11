@@ -12,11 +12,12 @@ const snapshot = {
   engine: { state: 'running', version: '28.1.0' },
   compose: { state: 'degraded', definitionFingerprint: hash, upstreamRevision: 'rev-123', runtimeProtocol: 'authenticated-v2' },
   services: [
-    { id: 'hermes', state: 'running', health: 'healthy', version: '1.0.0', image: { imageId: hash, approvedDigest: hash, ociRevision: 'rev-123', verification: 'verified' }, ports: [{ address: '127.0.0.1', hostPort: 9119, containerPort: 8000, protocol: 'tcp' }] },
+    { id: 'hermes', state: 'running', health: 'healthy', manageable: true, containerId: 'a'.repeat(64), version: '1.0.0', image: { imageId: hash, approvedDigest: hash, ociRevision: 'rev-123', verification: 'verified' }, ports: [{ address: '127.0.0.1', hostPort: 9119, containerPort: 8000, protocol: 'tcp' }], resources: { cpuPercent: 1.25, memoryUsage: '512MiB', memoryLimit: '8GiB', memoryPercent: 6.25, pids: 12 } },
     { id: 'serena', state: 'stopped', health: 'unknown', ports: [] },
     { id: 'model-runner', state: 'unavailable', health: 'not-configured', ports: [] },
   ],
   volumes: [{ role: 'data', state: 'mounted', persistent: true }, { role: 'workspace', state: 'mounted', persistent: true }],
+  modelRunner: { state: 'running', version: 'v1.2.6', endpoint: 'http://127.0.0.1:12434/v1/', kind: 'Docker Engine', diskUsage: '5.64GB', loadAvailable: false, unloadAvailable: true, message: 'Docker Model Runner is available.', models: [{ reference: 'docker.io/ai/qwen3:4b', modelId: hash, size: '2.37 GiB', format: 'gguf', parameters: '4.02 B', loaded: true, backend: 'llama.cpp', mode: 'completion' }] },
   lastWorkflow: { kind: 'rollback', state: 'succeeded', completedAtUtc: '2026-08-10T17:00:00Z', summary: 'Previous verified image restored.' },
 }
 
@@ -27,7 +28,7 @@ function adapter(): DockerControlAdapter {
       protocolVersion: DOCKER_CONTROL_PROTOCOL_VERSION,
       availability: { state: 'available' },
       services: ['hermes', 'serena', 'model-runner'],
-      operations: { startStack: true, stopStack: true, restartService: true, update: false },
+      operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, loadModel: false, unloadModel: true, update: false },
       updateReason: 'derived-runtime-updater-not-integrated',
     } as const)),
     refresh: vi.fn(async () => snapshot),
@@ -59,6 +60,7 @@ describe('DockerControlCenter', () => {
       'aria-label="Docker Control Center"', 'aria-label="Docker services"', 'role="tab"', 'role="tabpanel"',
       'Hermes', 'Serena', 'Model Runner', 'Revision 9', 'sha256:', '127.0.0.1:9119',
       'Data:', 'Workspace:', 'Previous verified image restored.', 'Review stack start', 'Update workflow unavailable',
+      'Container ID', 'Current resources', '512MiB / 8GiB', 'Docker Model Runner', 'docker.io/ai/qwen3:4b', 'Review unload', 'Load model unavailable',
       'Environment values, Docker credentials, mounted secret contents',
     ]) expect(markup).toContain(expected)
     expect(markup).toContain('tabindex="0"')

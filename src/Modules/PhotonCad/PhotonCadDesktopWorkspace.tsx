@@ -8,9 +8,11 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react'
+import { Box, FileInput, FilePlus2, FolderOpen, RefreshCw, Save, SaveAll, X } from 'lucide-react'
 import { DesktopPhotonCadClient } from './DesktopPhotonCadClient'
 import { DesktopPhotonCadCommercialClient } from './DesktopPhotonCadCommercialClient'
 import { DesktopPhotonCadProjectClient, normalizePhotonCadProjectDocument } from './DesktopPhotonCadProjectClient'
+import { DesktopPhotonCadStepImportClient, type PhotonCadStepImportController } from './DesktopPhotonCadStepImportClient'
 import {
   PHOTON_CAD_COMMERCIAL_CONTRACT_VERSION,
   isPhotonCadBomReviewHandle,
@@ -46,6 +48,8 @@ import {
   type PhotonCadReleaseReviewRequest,
   type PhotonCadReleaseReviewResult,
   type PhotonCadRuntimeDescription,
+  type PhotonCadStepExportRequest,
+  type PhotonCadStepExportResult,
   type PhotonCadVerificationRequest,
   type PhotonCadVerificationResult,
   type PhotonCadUnit,
@@ -62,6 +66,12 @@ import {
 } from './PhotonCadProjectContract'
 import {
   PhotonCadWorkspace,
+  PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID,
+  PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID,
+  PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID,
+  photonCadAcceptedAssemblySnapshot,
+  photonCadAcceptedPersistedScratchSnapshot,
+  photonCadAuthorizePersistedScratchRequest,
   type PhotonCadCommercialPreviewContext,
   type PhotonCadWorkspaceProps,
 } from './PhotonCadWorkspace'
@@ -70,6 +80,7 @@ import './PhotonCadDesktopWorkspace.css'
 type LifecycleProjectController = PhotonCadProjectController & { cancelPending?: () => void; close?: () => void }
 type LifecycleCoreController = PhotonCadController & { cancelPending?: () => void; close?: () => void }
 type LifecycleCommercialTransport = PhotonCadCommercialTransport & { cancelPending?: () => void; close?: () => void }
+type LifecycleStepImportController = PhotonCadStepImportController & { cancelPending?: () => void; close?: () => void }
 
 export type PhotonCadCommercialRenderedPageContext = PhotonCadCommercialPreviewContext & {
   reportRendered: () => boolean
@@ -79,6 +90,7 @@ export type PhotonCadDesktopWorkspaceProps = {
   projectActionsAvailable?: boolean
   runtimeProjectSyncAvailable?: boolean
   projectController?: PhotonCadProjectController
+  stepImportController?: PhotonCadStepImportController
   coreController?: PhotonCadController
   runtimeDescription?: PhotonCadRuntimeDescription
   commercialController?: PhotonCadCommercialTransport
@@ -96,7 +108,7 @@ export type PhotonCadDesktopWorkspaceProps = {
 }
 
 type ProjectTab = { document: PhotonCadProjectDocument; metadataCurrent: boolean; runtimeAttached: boolean }
-type LifecycleBusy = 'details' | 'picker' | 'create' | 'open' | 'reopen' | 'refresh' | 'save' | 'save-as' | 'close' | null
+type LifecycleBusy = 'details' | 'picker' | 'create' | 'import-step' | 'open' | 'reopen' | 'refresh' | 'save' | 'save-as' | 'close' | null
 type NewProjectDraft = { title: string; units: PhotonCadUnit }
 type PhotonCadProjectLoadSource = 'new' | 'open' | 'reopen'
 
@@ -216,6 +228,13 @@ export function photonCadControllerForAttachment(
   return runtimeAttached && metadataCurrent && runtimeProjectSyncAvailable ? controller : undefined
 }
 
+export function photonCadProjectRefreshRequestId(
+  previewRefreshRequestId: string | undefined,
+  createManualRequestId: () => string,
+) {
+  return previewRefreshRequestId ?? createManualRequestId()
+}
+
 export function photonCadRuntimeAttachmentForLoad(
   source: PhotonCadProjectLoadSource,
   result: PhotonCadProjectLoadResult,
@@ -235,25 +254,78 @@ export function photonCadRuntimeAttachmentForLoad(
 export function photonCadAcceptedRuntimeSnapshot(
   request: PhotonCadOperationRequest,
   result: PhotonCadOperationResult,
+  catalogAuthorization?: string,
+  previousSnapshot?: PhotonCadProjectSnapshot | null,
 ): PhotonCadProjectSnapshot | null {
-  const snapshot = result.snapshot
-  if (request.mode !== 'scratch'
-    || request.capabilityId !== 'geometry.box.create.v1' && request.capabilityId !== 'geometry.cylinder.create.v1'
-    || request.targetEntityIds.length !== 0
-    || result.status !== 'accepted'
-    || result.stale
-    || !snapshot
-    || result.requestId !== request.requestId
-    || result.projectId !== request.projectId
-    || result.baseRevision !== request.baseRevision
-    || result.resultingRevision !== request.baseRevision + 2
-    || snapshot.sessionId !== request.sessionId
-    || snapshot.projectId !== request.projectId
-    || snapshot.revision !== result.resultingRevision
-    || snapshot.units !== 'millimeter'
-    || snapshot.mode !== 'canonical'
-    || snapshot.dirty) return null
-  return snapshot
+  if (request.capabilityId === PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID
+    || request.capabilityId === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+    || request.capabilityId === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID) {
+    return catalogAuthorization && previousSnapshot
+      ? photonCadAcceptedAssemblySnapshot(request, result, previousSnapshot)
+      : null
+  }
+  const authorized = Boolean(catalogAuthorization)
+    || request.capabilityId === 'geometry.box.create.v1'
+    || request.capabilityId === 'geometry.cylinder.create.v1'
+  return photonCadAcceptedPersistedScratchSnapshot(request, result, authorized)
+}
+
+export function photonCadDerivedBomMatchesSnapshot(
+  document: PhotonCadProjectDocument,
+  previous?: PhotonCadProjectDocument,
+) {
+  const occurrences = document.snapshot.occurrences
+  if (!occurrences) return false
+  const counts = new Map<string, { count: number; partNumber: string }>()
+  for (const occurrence of occurrences) {
+    const current = counts.get(occurrence.sourceEntityId)
+    if (current && current.partNumber !== occurrence.partNumber) return false
+    counts.set(occurrence.sourceEntityId, { count: (current?.count ?? 0) + 1, partNumber: occurrence.partNumber })
+  }
+  if (document.bom.length !== counts.size) return false
+  const rows = new Map(document.bom.map((row) => [row.sourceEntityId, row]))
+  if (rows.size !== document.bom.length) return false
+  const previousRows = new Map((previous?.bom ?? []).map((row) => [row.sourceEntityId, row]))
+  for (const [sourceEntityId, expected] of counts) {
+    const row = rows.get(sourceEntityId)
+    const old = previousRows.get(sourceEntityId)
+    if (!row || row.unit !== 'each' || row.quantity !== expected.count || row.partNumber !== expected.partNumber
+      || old && (row.partNumber !== old.partNumber || row.description !== old.description || row.unit !== old.unit)) return false
+  }
+  return true
+}
+
+export function photonCadSnapshotExactlyMatches(left: PhotonCadProjectSnapshot, right: PhotonCadProjectSnapshot) {
+  return left.contractVersion === right.contractVersion
+    && left.sessionId === right.sessionId && left.projectId === right.projectId && left.revision === right.revision
+    && left.title === right.title && left.units === right.units && left.mode === right.mode && left.dirty === right.dirty
+    && left.entities.length === right.entities.length && left.entities.every((entity, index) => {
+      const candidate = right.entities[index]
+      return entity.id === candidate.id && entity.parentId === candidate.parentId && entity.kind === candidate.kind
+        && entity.name === candidate.name && entity.visible === candidate.visible && entity.suppressed === candidate.suppressed
+        && entity.sourceCapabilityId === candidate.sourceCapabilityId
+    })
+    && Boolean(left.occurrences) === Boolean(right.occurrences)
+    && (left.occurrences === undefined || right.occurrences === undefined || (
+      left.occurrences.length === right.occurrences.length && left.occurrences.every((occurrence, index) => {
+        const candidate = right.occurrences![index]
+        return occurrence.occurrenceId === candidate.occurrenceId
+          && occurrence.parentOccurrenceId === candidate.parentOccurrenceId
+          && occurrence.partNumber === candidate.partNumber && occurrence.sourceEntityId === candidate.sourceEntityId
+          && occurrence.transform.every((value, transformIndex) => value === candidate.transform[transformIndex])
+      })
+    ))
+    && left.operations.length === right.operations.length && left.operations.every((operation, index) => {
+      const candidate = right.operations[index]
+      return operation.id === candidate.id && operation.capabilityId === candidate.capabilityId
+        && operation.label === candidate.label && operation.createdAtUtc === candidate.createdAtUtc && operation.state === candidate.state
+    })
+    && left.issues.length === right.issues.length && left.issues.every((issue, index) => {
+      const candidate = right.issues[index]
+      return issue.code === candidate.code && issue.severity === candidate.severity && issue.message === candidate.message
+        && issue.entityIds.length === candidate.entityIds.length
+        && issue.entityIds.every((entityId, entityIndex) => entityId === candidate.entityIds[entityIndex])
+    })
 }
 
 export function photonCadPersistedRefreshMatches(
@@ -272,7 +344,9 @@ export function photonCadPersistedRefreshMatches(
     && !document.snapshot.dirty
     && document.lastSavedRevision === accepted.revision
     && document.contentDigest.toLowerCase() === document.lastSavedContentDigest.toLowerCase()
-    && JSON.stringify(document.snapshot) === JSON.stringify(accepted))
+    && photonCadDerivedBomMatchesSnapshot(document, current)
+    && photonCadSnapshotExactlyMatches(document.snapshot, accepted)
+  )
 }
 
 function desktopPhotonCadRuntimeProjectSyncAvailable() {
@@ -289,31 +363,32 @@ function browseOnlyProjectStatus(document: PhotonCadProjectDocument) {
 
 export class TrackingPhotonCadController implements PhotonCadController {
   private activeOperations = 0
+  public readonly exportStep?: (request: PhotonCadStepExportRequest) => Promise<PhotonCadStepExportResult>
 
   public constructor(
     private readonly inner: LifecycleCoreController,
-    private readonly onAcceptedSnapshot: (snapshot: PhotonCadProjectSnapshot) => Promise<boolean>,
+    private readonly onAcceptedSnapshot: (snapshot: PhotonCadProjectSnapshot, previewRefreshRequestId?: string) => Promise<boolean>,
     private readonly onBusyChange: (busy: boolean) => void,
-  ) {}
+    private readonly authorizePersistedScratch?: (request: PhotonCadOperationRequest) => string | null,
+    private readonly projectBeforeMutation?: (request: PhotonCadOperationRequest) => PhotonCadProjectSnapshot | null,
+  ) {
+    if (inner.exportStep) this.exportStep = (request) => this.track(() => inner.exportStep!(request))
+  }
 
   public describe(): Promise<PhotonCadRuntimeDescription> { return this.inner.describe() }
   public async execute(request: PhotonCadOperationRequest): Promise<PhotonCadOperationResult> {
     return this.track(async () => {
+      const authorization = this.authorizePersistedScratch?.(request)
+      const previousSnapshot = this.projectBeforeMutation?.(request)
+      if (this.authorizePersistedScratch && !authorization) return this.unavailable(request, 'catalog-authorization-rejected')
       const result = await this.inner.execute(request)
+      if (this.authorizePersistedScratch && authorization !== this.authorizePersistedScratch(request)) {
+        return this.unavailable(request, 'catalog-authorization-drift', true)
+      }
       if (result.status !== 'accepted') return result
-      const snapshot = photonCadAcceptedRuntimeSnapshot(request, result)
-      if (!snapshot || !await this.onAcceptedSnapshot(snapshot)) {
-        return {
-          contractVersion: PHOTON_CAD_CONTRACT_VERSION,
-          requestId: request.requestId,
-          projectId: request.projectId,
-          baseRevision: request.baseRevision,
-          resultingRevision: request.baseRevision,
-          status: 'unavailable',
-          stale: false,
-          reason: snapshot ? 'project-metadata-refresh-failed' : 'project-runtime-result-mismatch',
-          issues: [],
-        }
+      const snapshot = photonCadAcceptedRuntimeSnapshot(request, result, authorization ?? undefined, previousSnapshot)
+      if (!snapshot || !await this.onAcceptedSnapshot(snapshot, result.preview?.previewId)) {
+        return this.unavailable(request, snapshot ? 'project-metadata-refresh-failed' : 'project-runtime-result-mismatch')
       }
       return result
     })
@@ -322,6 +397,20 @@ export class TrackingPhotonCadController implements PhotonCadController {
   public reviewRelease(request: PhotonCadReleaseReviewRequest): Promise<PhotonCadReleaseReviewResult> { return this.track(() => this.inner.reviewRelease(request)) }
   public commitRelease(request: PhotonCadReleaseCommitRequest): Promise<PhotonCadReleaseCommitResult> { return this.track(() => this.inner.commitRelease(request)) }
   public discardRelease(reviewHandle: string) { return this.inner.discardRelease(reviewHandle) }
+
+  private unavailable(request: PhotonCadOperationRequest, reason: string, stale = false): PhotonCadOperationResult {
+    return {
+      contractVersion: PHOTON_CAD_CONTRACT_VERSION,
+      requestId: request.requestId,
+      projectId: request.projectId,
+      baseRevision: request.baseRevision,
+      resultingRevision: request.baseRevision,
+      status: 'unavailable',
+      stale,
+      reason,
+      issues: [],
+    }
+  }
 
   private async track<T>(operation: () => Promise<T>) {
     this.activeOperations += 1
@@ -468,6 +557,7 @@ export function PhotonCadDesktopWorkspace({
   projectActionsAvailable = true,
   runtimeProjectSyncAvailable: suppliedRuntimeProjectSyncAvailable,
   projectController,
+  stepImportController,
   coreController,
   runtimeDescription: suppliedRuntimeDescription,
   commercialController,
@@ -506,6 +596,7 @@ export function PhotonCadDesktopWorkspace({
     status: 'checking',
     reason: 'unavailable',
   })
+  const runtimeDescription = suppliedRuntimeDescription ?? describedRuntime
   const [, setCommercialEpoch] = useState(0)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
   const newProjectDialogRef = useRef<HTMLDialogElement>(null)
@@ -514,12 +605,23 @@ export function PhotonCadDesktopWorkspace({
   const newProjectDialogVisible = newProjectDraft !== null
   const documentsRef = useRef(documents)
   documentsRef.current = documents
+  const runtimeDescriptionRef = useRef(runtimeDescription)
+  runtimeDescriptionRef.current = runtimeDescription
+  const runtimeProjectSyncAvailableRef = useRef(runtimeProjectSyncAvailable)
+  runtimeProjectSyncAvailableRef.current = runtimeProjectSyncAvailable
 
   const projectControllerRef = useRef<LifecycleProjectController | null>(null)
   const ownsProjectController = useRef(false)
   if (!projectControllerRef.current) {
     projectControllerRef.current = projectController ?? new DesktopPhotonCadProjectClient()
     ownsProjectController.current = !projectController
+  }
+
+  const stepImportControllerRef = useRef<LifecycleStepImportController | null>(null)
+  const ownsStepImportController = useRef(false)
+  if (!stepImportControllerRef.current) {
+    stepImportControllerRef.current = stepImportController ?? new DesktopPhotonCadStepImportClient()
+    ownsStepImportController.current = !stepImportController
   }
 
   const coreControllerRef = useRef<LifecycleCoreController | null>(null)
@@ -542,14 +644,24 @@ export function PhotonCadDesktopWorkspace({
   const requestSequence = useRef(0)
   const requestNonce = useRef(desktopWorkspaceNonce())
   const describeGeneration = useRef(0)
-  const mutationHandler = useRef<(snapshot: PhotonCadProjectSnapshot) => Promise<boolean>>(async () => false)
+  const mutationHandler = useRef<(snapshot: PhotonCadProjectSnapshot, previewRefreshRequestId?: string) => Promise<boolean>>(async () => false)
   const coreBusyHandler = useRef<(value: boolean) => void>((value) => setCoreBusy(value))
   const trackingControllerRef = useRef<TrackingPhotonCadController | null>(null)
   if (!trackingControllerRef.current) {
     trackingControllerRef.current = new TrackingPhotonCadController(
       coreControllerRef.current,
-      (snapshot) => mutationHandler.current(snapshot),
+      (snapshot, previewRefreshRequestId) => mutationHandler.current(snapshot, previewRefreshRequestId),
       (value) => coreBusyHandler.current(value),
+      (request) => {
+        const tab = documentsRef.current.find((candidate) =>
+          candidate.document.snapshot.sessionId === request.sessionId
+          && candidate.document.snapshot.projectId === request.projectId)
+        if (!runtimeProjectSyncAvailableRef.current || !tab?.metadataCurrent || !tab.runtimeAttached) return null
+        return photonCadAuthorizePersistedScratchRequest(runtimeDescriptionRef.current, tab.document.snapshot, request)
+      },
+      (request) => documentsRef.current.find((candidate) =>
+        candidate.document.snapshot.sessionId === request.sessionId
+        && candidate.document.snapshot.projectId === request.projectId)?.document.snapshot ?? null,
     )
   }
 
@@ -598,8 +710,6 @@ export function PhotonCadDesktopWorkspace({
     }
   }, [newProjectDialogVisible])
 
-  const runtimeDescription = suppliedRuntimeDescription ?? describedRuntime
-
   const activeTab = documents.find((tab) => tab.document.projectHandle === activeProjectHandle) ?? null
   const activeTabIndex = documents.findIndex((tab) => tab.document.projectHandle === activeProjectHandle)
   const activeContext = activeTab && activeTab.metadataCurrent && activeTab.runtimeAttached && runtimeProjectSyncAvailable
@@ -630,6 +740,7 @@ export function PhotonCadDesktopWorkspace({
         coreBusyHandler.current = () => undefined
         commercialAdapterRef.current?.invalidate()
         if (ownsProjectController.current) projectControllerRef.current?.close?.()
+        if (ownsStepImportController.current) stepImportControllerRef.current?.close?.()
         if (ownsCoreController.current) coreControllerRef.current?.close?.()
         if (ownsCommercialTransport.current) commercialTransportRef.current?.close?.()
       },
@@ -678,28 +789,19 @@ export function PhotonCadDesktopWorkspace({
     return true
   }
 
-  async function refreshAfterAcceptedSnapshot(snapshot: PhotonCadProjectSnapshot) {
+  async function refreshAfterAcceptedSnapshot(snapshot: PhotonCadProjectSnapshot, previewRefreshRequestId?: string) {
     const tab = documentsRef.current.find((candidate) => candidate.document.snapshot.sessionId === snapshot.sessionId
       && candidate.document.snapshot.projectId === snapshot.projectId)
     if (!tab) {
       setStatus('project-metadata-untracked')
       return false
     }
-    const provisional = documentsRef.current.map((candidate) => candidate.document.projectHandle === tab.document.projectHandle
-      ? { ...candidate, metadataCurrent: false }
-      : candidate)
-    documentsRef.current = provisional
-    setDocuments(provisional)
-    if (activeProjectHandle === tab.document.projectHandle) {
-      commercialAdapterRef.current!.clearContext()
-      setCommercialEpoch((value) => value + 1)
-    }
     setBusy('refresh')
     setStatus('refreshing-project-metadata')
     try {
       const result = await projectControllerRef.current!.refreshProject({
         contractVersion: PHOTON_CAD_PROJECT_CONTRACT_VERSION,
-        requestId: nextRequestId('refresh'),
+        requestId: photonCadProjectRefreshRequestId(previewRefreshRequestId, () => nextRequestId('refresh')),
         projectHandle: tab.document.projectHandle,
         sessionId: snapshot.sessionId,
         projectId: snapshot.projectId,
@@ -708,10 +810,12 @@ export function PhotonCadDesktopWorkspace({
       if (result.status === 'opened' && photonCadPersistedRefreshMatches(result.document, tab.document, snapshot)) {
         return installDocument(result.document!, tab.document.projectHandle, activeProjectHandle === tab.document.projectHandle, true)
       } else {
+        invalidateProjectMetadata(tab.document.projectHandle)
         setStatus(result.status === 'opened' ? 'project-metadata-revision-mismatch' : result.reason)
         return false
       }
     } catch {
+      invalidateProjectMetadata(tab.document.projectHandle)
       setStatus('project-metadata-refresh-failed')
       return false
     } finally {
@@ -719,6 +823,18 @@ export function PhotonCadDesktopWorkspace({
     }
   }
   mutationHandler.current = refreshAfterAcceptedSnapshot
+
+  function invalidateProjectMetadata(projectHandle: string) {
+    const next = documentsRef.current.map((candidate) => candidate.document.projectHandle === projectHandle
+      ? { ...candidate, metadataCurrent: false }
+      : candidate)
+    documentsRef.current = next
+    setDocuments(next)
+    if (activeProjectHandle === projectHandle) {
+      commercialAdapterRef.current!.clearContext()
+      setCommercialEpoch((value) => value + 1)
+    }
+  }
 
   async function runPicker(purpose: 'new' | 'open' | 'save-as', suggestedName?: string) {
     const result = await projectControllerRef.current!.chooseWorkspace({
@@ -836,6 +952,21 @@ export function PhotonCadDesktopWorkspace({
     }
   }
 
+  async function importStep() {
+    if (!projectActionsAvailable || busy || coreBusy || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments) return
+    setBusy('import-step')
+    setStatus('choosing-step-source')
+    try {
+      const result = await stepImportControllerRef.current!.importStep(nextRequestId('step-import'))
+      if (result.status === 'opened' && result.document) installDocument(result.document, undefined, true, true)
+      else setStatus(result.reason)
+    } catch {
+      setStatus('step-import-failed')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   function acceptLoadResult(result: PhotonCadProjectLoadResult, replaceHandle?: string, runtimeAttached?: boolean) {
     if (result.status === 'opened' && result.document) installDocument(result.document, replaceHandle, true, runtimeAttached)
     else setStatus(result.reason)
@@ -849,7 +980,7 @@ export function PhotonCadDesktopWorkspace({
       const document = activeTab.document
       const result = await projectControllerRef.current!.refreshProject({
         contractVersion: 1,
-        requestId: nextRequestId('refresh'),
+        requestId: photonCadProjectRefreshRequestId(undefined, () => nextRequestId('refresh')),
         projectHandle: document.projectHandle,
         sessionId: document.snapshot.sessionId,
         projectId: document.snapshot.projectId,
@@ -1012,12 +1143,13 @@ export function PhotonCadDesktopWorkspace({
       <header className="photon-cad-desktop__toolbar">
         <div className="photon-cad-desktop__identity"><strong>Photon CAD</strong><span>Project workspace</span></div>
         <div className="photon-cad-desktop__actions" aria-label="Project actions">
-          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void beginCreateProject()}>New</button>
-          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void openProject()}>Open</button>
-          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab?.metadataCurrent} onClick={() => void saveActiveProject(false)}>Save</button>
-          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab?.metadataCurrent} onClick={() => void saveActiveProject(true)}>Save as</button>
-          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab} onClick={() => void refreshActiveProject()}>Refresh</button>
-          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab} onClick={() => activeTab && void closeDocument(activeTab.document.projectHandle)}>Close</button>
+          <button type="button" data-command="new" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void beginCreateProject()}><FilePlus2 size={14} aria-hidden="true" /><span>New</span></button>
+          <button type="button" data-command="open" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void openProject()}><FolderOpen size={14} aria-hidden="true" /><span>Open</span></button>
+          <button type="button" data-command="import-step" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void importStep()}><FileInput size={14} aria-hidden="true" /><span>Import STEP</span></button>
+          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab?.metadataCurrent} onClick={() => void saveActiveProject(false)}><Save size={14} aria-hidden="true" /><span>Save</span></button>
+          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab?.metadataCurrent} onClick={() => void saveActiveProject(true)}><SaveAll size={14} aria-hidden="true" /><span>Save as</span></button>
+          <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab} onClick={() => void refreshActiveProject()}><RefreshCw size={14} aria-hidden="true" /><span>Refresh</span></button>
+          <button type="button" data-command="close" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab} onClick={() => activeTab && void closeDocument(activeTab.document.projectHandle)}><X size={14} aria-hidden="true" /><span>Close</span></button>
         </div>
         <p className="photon-cad-desktop__status" role="status">{projectStatusText(status)}</p>
       </header>
@@ -1052,6 +1184,7 @@ export function PhotonCadDesktopWorkspace({
                 onClick={() => activateTab(tab.document.projectHandle)}
                 onKeyDown={(event) => handleTabKey(event, index)}
               >
+                <Box className="photon-cad-desktop__tab-icon" size={13} aria-hidden="true" />
                 <span>{tab.document.displayName}</span>
                 {tab.document.snapshot.dirty ? <span className="photon-cad-desktop__dirty" aria-label="Unsaved changes">*</span> : null}
                 {!tab.metadataCurrent ? <span className="photon-cad-desktop__stale">Metadata pending</span> : null}
@@ -1069,26 +1202,42 @@ export function PhotonCadDesktopWorkspace({
         aria-labelledby={activeTabIndex >= 0 ? `photon-cad-document-tab-${activeTabIndex}` : undefined}
       >
         {activeTab ? (
-          <PhotonCadWorkspace
-            controller={photonCadControllerForAttachment(
-              activeTab.runtimeAttached,
-              trackingControllerRef.current ?? undefined,
-              activeTab.metadataCurrent,
-              runtimeProjectSyncAvailable,
-            )}
-            runtime={runtimeDescription}
-            project={activeTab.document.snapshot}
-            bom={activeTab.document.bom}
-            bomDigest={activeTab.document.bomDigest}
-            previewSurface={previewSurface}
-            commercialController={activeTab.metadataCurrent && commercialReady ? commercialAdapterRef.current : undefined}
-            commercialPreviewSurface={wrappedCommercialPreview}
-            destination={destination}
-            onChooseDestination={onChooseDestination}
-            printer={printer}
-            onChoosePrinter={onChoosePrinter}
-            evidenceMode="runtime"
-          />
+          documents.map((tab) => {
+            const selected = tab.document.projectHandle === activeTab.document.projectHandle
+            return (
+              <div
+                key={tab.document.projectHandle}
+                data-photon-cad-project-workspace={tab.document.projectHandle}
+                hidden={!selected}
+                aria-hidden={!selected || undefined}
+              >
+                <PhotonCadWorkspace
+                  controller={selected ? photonCadControllerForAttachment(
+                    tab.runtimeAttached,
+                    trackingControllerRef.current ?? undefined,
+                    tab.metadataCurrent,
+                    runtimeProjectSyncAvailable,
+                  ) : undefined}
+                  runtime={runtimeDescription}
+                  project={tab.document.snapshot}
+                  bom={tab.document.bom}
+                  bomDigest={tab.document.bomDigest}
+                  projectContentDigest={tab.document.contentDigest}
+                  previewSurface={previewSurface}
+                  commercialController={selected && tab.metadataCurrent && commercialReady
+                    ? commercialAdapterRef.current ?? undefined
+                    : undefined}
+                  commercialPreviewSurface={wrappedCommercialPreview}
+                  destination={destination}
+                  onChooseDestination={onChooseDestination}
+                  printer={printer}
+                  onChoosePrinter={onChoosePrinter}
+                  evidenceMode="runtime"
+                  persistedScratchAuthorized={Boolean(selected && tab.metadataCurrent && tab.runtimeAttached && runtimeProjectSyncAvailable)}
+                />
+              </div>
+            )
+          })
         ) : (
           <div className="photon-cad-desktop__empty">
             <strong>No project is open</strong>
@@ -1099,12 +1248,6 @@ export function PhotonCadDesktopWorkspace({
         )}
       </div>
 
-      {recent.length ? (
-        <aside className="photon-cad-desktop__recent" aria-label="Recently closed CAD projects">
-          <strong>Recently closed</strong>
-          <ul>{recent.map((item) => <li key={item.reopenHandle}><span>{item.displayName}</span><button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null} onClick={() => void reopenProject(item)}>Reopen</button></li>)}</ul>
-        </aside>
-      ) : null}
     </section>
   )
 }
@@ -1147,6 +1290,7 @@ export function projectStatusText(reason: string) {
     'project-runtime-hydration-unavailable': 'This stored project is open for viewing and saving. Browse the connected catalog; editing remains disabled until trusted runtime hydration is available.',
     'choosing-project-workspace': 'Choose an opaque workspace for the new project.',
     'choosing-project': 'Choose a project through the desktop picker.',
+    'choosing-step-source': 'Choose a STEP Part 21 source, then choose the new Photon CAD project file.',
     'choosing-save-as-workspace': 'Choose a new opaque workspace for this project.',
     'creating-project': 'Creating a new host-owned CAD project session.',
     'opening-project': 'Opening the selected CAD project.',
@@ -1175,6 +1319,14 @@ export function projectStatusText(reason: string) {
     'project-save-as-failed': 'The project could not be saved to the selected destination safely.',
     'project-close-failed': 'The project could not be closed safely and remains open.',
     'project-reopen-failed': 'The project could not be reopened safely.',
+    'step-source-picker-unavailable': 'The native STEP source picker is unavailable. No project was changed.',
+    'step-destination-picker-unavailable': 'The STEP source was verified, but the destination picker is unavailable. No project was created.',
+    'step-source-invalid': 'The selected file is not a complete supported STEP Part 21 document.',
+    'step-import-host-unavailable': 'The native STEP import host is unavailable.',
+    'industrial-runtime-unavailable': 'The verified CAD runtime required to seal this STEP import is unavailable.',
+    'step-import-cancelled': 'STEP import was cancelled. No imported geometry was accepted.',
+    'step-import-commit-failed': 'The STEP source was verified, but its canonical project transaction did not complete.',
+    'step-import-failed': 'STEP import failed before a verified project could be opened.',
     'close-cancelled-unsaved-changes-preserved': 'Close was cancelled. Unsaved changes remain open.',
     'open-document-limit-reached': 'The 32-project tab limit is reached. Close a project before opening another.',
     'project-metadata-revision-mismatch': 'Project metadata advanced unexpectedly. Save and commercial output remain disabled until refreshed.',

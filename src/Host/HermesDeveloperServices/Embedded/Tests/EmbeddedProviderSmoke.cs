@@ -168,7 +168,9 @@ internal static class Program
         var state = Directory.GetParent(data)!.FullName;
         var command = args.Skip(configIndex + 3).ToArray();
         File.AppendAllText(Path.Combine(state, "arduino-invocations.log"), string.Join(' ', command) + Environment.NewLine);
-        if (command is ["config", "dump"]) Console.Write(File.ReadAllText(config));
+        if (command is ["config", "dump"])
+            Console.Write(JsonSerializer.Serialize(new { config = JsonDocument.Parse(File.ReadAllText(config)).RootElement }));
+        else if (command is ["core", "list"]) Console.Write("{\"platforms\":[{\"id\":\"arduino:avr\",\"installed_version\":\"1.8.8\"}]}");
         else if (command is ["board", "list"]) Console.Write("{\"detected_ports\":[{\"port\":{\"address\":\"COM7\"},\"matching_boards\":[{\"fqbn\":\"arduino:avr:uno\"}]}]}");
         else if (command is ["board", "details", "--fqbn", var fqbn]) return fqbn is "arduino:avr:uno" or "arduino:avr:zero" or "arduino:avr:nano" or "arduino:avr:cancel" ? 0 : 2;
         else if (command.FirstOrDefault() == "compile")

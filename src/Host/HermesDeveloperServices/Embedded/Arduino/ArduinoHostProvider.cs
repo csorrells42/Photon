@@ -38,6 +38,7 @@ public sealed partial class ArduinoHostProvider
 
         var provider = new ArduinoHostProvider(options, state);
         await provider.VerifyConfigurationAsync(lease, cancellationToken).ConfigureAwait(false);
+        await provider.VerifyBoardProfileAsync(lease, cancellationToken).ConfigureAwait(false);
         return provider;
     }
 
@@ -229,8 +230,19 @@ public sealed partial class ArduinoHostProvider
         try
         {
             using var json = JsonDocument.Parse(process.StandardOutput);
+            var configuration = json.RootElement;
+            if (configuration.ValueKind == JsonValueKind.Object)
+            {
+                var rootProperties = configuration.EnumerateObject().ToArray();
+                if (rootProperties.Length == 1
+                    && rootProperties[0].NameEquals("config")
+                    && rootProperties[0].Value.ValueKind == JsonValueKind.Object)
+                {
+                    configuration = rootProperties[0].Value;
+                }
+            }
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            Walk(json.RootElement, string.Empty);
+            Walk(configuration, string.Empty);
             foreach (var key in new[] { "directories.data", "directories.downloads", "directories.user" })
             {
                 if (!values.TryGetValue(key, out var path) || !IsWithinStateRoot(path))
@@ -262,6 +274,40 @@ public sealed partial class ArduinoHostProvider
     private Task<OwnedToolchainProcessResult> VerifyFqbnAsync(
         PinnedToolchainPackageLease lease, string fqbn, CancellationToken cancellationToken) =>
         RunCliAsync(lease, ["board", "details", "--fqbn", fqbn], TimeSpan.FromMinutes(1), cancellationToken);
+
+    private async Task VerifyBoardProfileAsync(
+        PinnedToolchainPackageLease lease,
+        CancellationToken cancellationToken)
+    {
+        var cores = await RunCliAsync(lease, ["core", "list"], TimeSpan.FromMinutes(1), cancellationToken).ConfigureAwait(false);
+        if (!ProcessSucceeded(cores))
+            throw new TrustedToolchainValidationException("arduino_core_unavailable", "The pinned Arduino board core could not be inspected.");
+        try
+        {
+            using var document = JsonDocument.Parse(cores.StandardOutput);
+            if (!document.RootElement.TryGetProperty("platforms", out var platforms)
+                || platforms.ValueKind != JsonValueKind.Array)
+                throw new JsonException();
+            var matches = platforms.EnumerateArray().Where(platform =>
+                platform.ValueKind == JsonValueKind.Object
+                && platform.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.String
+                && id.GetString() == ArduinoProviderOptions.SupportedCore
+                && platform.TryGetProperty("installed_version", out var version)
+                && version.ValueKind == JsonValueKind.String
+                && version.GetString() == ArduinoProviderOptions.SupportedCoreVersion).ToArray();
+            if (matches.Length != 1)
+                throw new TrustedToolchainValidationException("arduino_core_identity_mismatch", "The exact supported Arduino board core is not installed.");
+        }
+        catch (JsonException)
+        {
+            throw new TrustedToolchainValidationException("arduino_core_inventory_invalid", "Arduino core inspection did not return valid bounded JSON.");
+        }
+
+        var board = await VerifyFqbnAsync(lease, ArduinoProviderOptions.SupportedFqbn, cancellationToken).ConfigureAwait(false);
+        if (!ProcessSucceeded(board))
+            throw new TrustedToolchainValidationException("arduino_board_profile_unavailable", "The exact supported Arduino board profile is not installed.");
+    }
 
     private async Task<EmbeddedHostOperationResult> SearchAsync(
         string operation,

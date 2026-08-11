@@ -16,6 +16,27 @@ const context = { sessionId: 'session-1', projectId: 'project-1', revision: 2 }
 const request = { previewId: 'preview-1', projectId: 'project-1', revision: 2, expectedDigest: digest, maximumBytes: 1_048_576 }
 
 describe('DesktopPhotonCadPreviewClient', () => {
+  it('hydrates a fresh receipt from the exact committed project binding', async () => {
+    const bridge = new FakeBridge()
+    const client = new DesktopPhotonCadPreviewClient({ getBridge: () => bridge, createRequestId: () => 'preview-hydrate-1' })
+    const pending = client.hydrate(context, new AbortController().signal)
+    expect(bridge.posted).toEqual([{
+      type: 'photonCad.preview.hydrate', version: 1, contractVersion: 1, requestId: 'preview-hydrate-1',
+      sessionId: 'session-1', projectId: 'project-1', revision: 2,
+    }])
+    bridge.emit({
+      type: 'photonCad.preview.hydrate.result', version: 1,
+      value: {
+        contractVersion: 1, requestId: 'preview-hydrate-1', status: 'available',
+        preview: {
+          previewId: 'preview-hydrated-1', projectId: 'project-1', revision: 2, contentDigest: digest,
+          units: 'millimeter', bounds: { minimum: { x: -1, y: -1, z: -1 }, maximum: { x: 1, y: 1, z: 1 } }, entityCount: 1,
+        },
+      },
+    })
+    await expect(pending).resolves.toMatchObject({ previewId: 'preview-hydrated-1', projectId: 'project-1', revision: 2 })
+  })
+
   it('binds an opaque preview resolve to the exact project context', async () => {
     const bridge = new FakeBridge()
     const client = new DesktopPhotonCadPreviewClient({ getBridge: () => bridge, createRequestId: () => 'preview-request-1' })

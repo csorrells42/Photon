@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using PhotonCadProjects.Codec;
+using PhotonCadProjects.RuntimeSync;
 
 namespace PhotonCadRuntime.IndustrialProvider;
 
@@ -9,6 +11,19 @@ internal enum IndustrialPrimitiveKind
 {
     Box,
     Cylinder,
+}
+
+internal interface IIndustrialPartCommand
+{
+    string EntityId { get; }
+    string PartNumber { get; }
+    string Label { get; }
+    string CapabilityId { get; }
+    string EntityName { get; }
+    PhotonCadEntityKindV1 EntityKind { get; }
+    IReadOnlyList<PhotonCadSyncOperationInput> SyncInputs { get; }
+    byte[] SerializeRequest();
+    IndustrialPrimitiveResponse ParseResponse(ReadOnlyMemory<byte> payload);
 }
 
 internal sealed record IndustrialPrimitiveCommand(
@@ -19,7 +34,53 @@ internal sealed record IndustrialPrimitiveCommand(
     double RadiusMm,
     string EntityId,
     string PartNumber,
-    string Label);
+    string Label) : IIndustrialPartCommand
+{
+    public string CapabilityId => Kind == IndustrialPrimitiveKind.Box
+        ? "geometry.box.create.v1"
+        : "geometry.cylinder.create.v1";
+    public string EntityName => Kind == IndustrialPrimitiveKind.Box ? "Box" : "Cylinder";
+    public PhotonCadEntityKindV1 EntityKind => PhotonCadEntityKindV1.Body;
+    public IReadOnlyList<PhotonCadSyncOperationInput> SyncInputs => Kind == IndustrialPrimitiveKind.Box
+        ?
+        [
+            new("lengthMm", PhotonCadSyncInputValue.Number(LengthMm)),
+            new("widthMm", PhotonCadSyncInputValue.Number(WidthMm)),
+            new("heightMm", PhotonCadSyncInputValue.Number(HeightMm)),
+        ]
+        :
+        [
+            new("radiusMm", PhotonCadSyncInputValue.Number(RadiusMm)),
+            new("heightMm", PhotonCadSyncInputValue.Number(HeightMm)),
+        ];
+    public byte[] SerializeRequest() => ProtocolV1.SerializePrimitive(this);
+    public IndustrialPrimitiveResponse ParseResponse(ReadOnlyMemory<byte> payload) =>
+        ProtocolV1.ParsePrimitiveResponse(payload, this);
+}
+
+internal sealed record IndustrialCatalogParameterValue(
+    string Id,
+    IndustrialCatalogScalar RawValue,
+    PhotonCadSyncInputValue SyncValue);
+
+internal sealed record IndustrialCatalogCommand(
+    string CatalogDigest,
+    string ItemId,
+    IReadOnlyList<IndustrialCatalogParameterValue> Parameters,
+    string EntityId,
+    string PartNumber,
+    string Label,
+    string EntityName) : IIndustrialPartCommand
+{
+    public string CapabilityId => ItemId;
+    public PhotonCadEntityKindV1 EntityKind => PhotonCadEntityKindV1.Part;
+    public IReadOnlyList<PhotonCadSyncOperationInput> SyncInputs => Parameters
+        .Select(parameter => new PhotonCadSyncOperationInput(parameter.Id, parameter.SyncValue))
+        .ToArray();
+    public byte[] SerializeRequest() => ProtocolV1.SerializeCatalogItem(this);
+    public IndustrialPrimitiveResponse ParseResponse(ReadOnlyMemory<byte> payload) =>
+        ProtocolV1.ParseCatalogItemResponse(payload, this);
+}
 
 internal sealed record IndustrialArtifactClaim(string Format, string ContentDigest, long ByteLength);
 
@@ -96,6 +157,42 @@ internal static class ProtocolV1
         return Bounded(stream.ToArray(), MaximumRequestBytes, "industrial_request_too_large");
     }
 
+    internal static byte[] SerializeCatalog()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("schema", RequestSchema);
+            writer.WriteString("operation", "catalog");
+            writer.WriteEndObject();
+        }
+        return Bounded(stream.ToArray(), MaximumRequestBytes, "industrial_request_too_large");
+    }
+
+    internal static byte[] SerializeCatalogItem(IndustrialCatalogCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("schema", RequestSchema);
+            writer.WriteString("operation", "createCatalogItem");
+            writer.WriteString("catalogDigest", NormalizeDigest(command.CatalogDigest));
+            writer.WriteString("itemId", command.ItemId);
+            writer.WriteStartObject("parameters");
+            foreach (var parameter in command.Parameters.OrderBy(value => value.Id, StringComparer.Ordinal))
+            {
+                writer.WritePropertyName(parameter.Id);
+                parameter.RawValue.Write(writer);
+            }
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        return Bounded(stream.ToArray(), MaximumRequestBytes, "industrial_request_too_large");
+    }
+
     internal static byte[] SerializePreview(IndustrialPreviewCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -157,6 +254,45 @@ internal static class ProtocolV1
         var volume = Number(measurement, "volumeMm3", double.Epsilon, double.MaxValue);
         var bounds = Bounds(measurement.GetProperty("bounds"));
         ValidatePrimitiveProvenance(root.GetProperty("provenance"), command);
+        return new IndustrialPrimitiveResponse(artifact, bounds, volume);
+    }
+
+    internal static byte[] ParseCatalogResponse(ReadOnlyMemory<byte> payload, string expectedDigest)
+    {
+        using var document = Parse(payload);
+        var root = document.RootElement;
+        Exact(root, "schema", "ok", "operation", "catalogDigest", "catalog");
+        RequireString(root, "schema", ResponseSchema);
+        RequireBoolean(root, "ok", true);
+        RequireString(root, "operation", "catalog");
+        if (!FixedDigestEquals(String(root, "catalogDigest"), expectedDigest))
+            throw Failure("catalog_digest_mismatch");
+        var bytes = StrictUtf8.GetBytes(root.GetProperty("catalog").GetRawText());
+        using var catalog = ParseCatalog(bytes, expectedDigest);
+        return bytes;
+    }
+
+    internal static IndustrialPrimitiveResponse ParseCatalogItemResponse(
+        ReadOnlyMemory<byte> payload,
+        IndustrialCatalogCommand command)
+    {
+        using var document = Parse(payload);
+        var root = document.RootElement;
+        Exact(root, "schema", "ok", "operation", "catalogDigest", "itemId", "artifact", "measurement", "provenance");
+        RequireString(root, "schema", ResponseSchema);
+        RequireBoolean(root, "ok", true);
+        RequireString(root, "operation", "createCatalogItem");
+        if (!FixedDigestEquals(String(root, "catalogDigest"), command.CatalogDigest))
+            throw Failure("catalog_digest_mismatch");
+        RequireString(root, "itemId", command.ItemId);
+        var artifact = Artifact(root.GetProperty("artifact"), "step", MaximumStepBytes);
+        var measurement = root.GetProperty("measurement");
+        Exact(measurement, "units", "volumeMm3", "solidCount", "bounds");
+        RequireString(measurement, "units", "millimeter");
+        _ = Integer(measurement, "solidCount", 1, 1024);
+        var volume = Number(measurement, "volumeMm3", double.Epsilon, double.MaxValue);
+        var bounds = Bounds(measurement.GetProperty("bounds"));
+        ValidateCatalogProvenance(root.GetProperty("provenance"), command);
         return new IndustrialPrimitiveResponse(artifact, bounds, volume);
     }
 
@@ -278,6 +414,38 @@ internal static class ProtocolV1
             SameNumber(parameters, "heightMm", command.HeightMm);
         }
     }
+
+    private static void ValidateCatalogProvenance(JsonElement value, IndustrialCatalogCommand command)
+    {
+        Exact(value, "generator", "catalogDigest", "itemId", "parameters");
+        RequireString(value, "generator", "catalog");
+        if (!FixedDigestEquals(String(value, "catalogDigest"), command.CatalogDigest))
+            throw Failure("catalog_provenance_digest_mismatch");
+        RequireString(value, "itemId", command.ItemId);
+        var parameters = value.GetProperty("parameters");
+        Exact(parameters, command.Parameters.Select(parameter => parameter.Id).ToArray());
+        foreach (var expected in command.Parameters)
+        {
+            if (!parameters.TryGetProperty(expected.Id, out var actual)
+                || !ScalarEquals(actual, expected.RawValue))
+                throw Failure("catalog_provenance_parameter_mismatch");
+        }
+    }
+
+    private static bool ScalarEquals(JsonElement actual, IndustrialCatalogScalar expected) => expected.Kind switch
+    {
+        PhotonCadIndustrialParameterKind.Number => actual.ValueKind == JsonValueKind.Number
+            && actual.TryGetDouble(out var number)
+            && BitConverter.DoubleToInt64Bits(number) == BitConverter.DoubleToInt64Bits((double)expected.Value),
+        PhotonCadIndustrialParameterKind.Integer => actual.ValueKind == JsonValueKind.Number
+            && actual.TryGetInt64(out var integer)
+            && integer == (long)expected.Value,
+        PhotonCadIndustrialParameterKind.Boolean => actual.ValueKind is JsonValueKind.True or JsonValueKind.False
+            && actual.GetBoolean() == (bool)expected.Value,
+        PhotonCadIndustrialParameterKind.Choice when expected.Value is string text =>
+            actual.ValueKind == JsonValueKind.String && StringComparer.Ordinal.Equals(actual.GetString(), text),
+        _ => false,
+    };
 
     private static void ValidatePreviewProvenance(JsonElement value, IndustrialPreviewCommand command)
     {

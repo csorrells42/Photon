@@ -335,6 +335,20 @@ await suite.RunAsync("desktop runtime authority persists one exact revision-zero
     Equal(4L, secondResult.SavedProject.Revision, "same-open attachment advanced to second suffix");
     Equal(2, provider.Calls, "provider called exactly twice");
     Equal(4L, codec.Decode(await File.ReadAllBytesAsync(path)).Revision, "second mutation persisted");
+    var resolved = await host.ResolveCommittedProjectAsync(
+        "runtime-verify-readback",
+        result.SavedProject.SessionId,
+        result.SavedProject.ProjectId,
+        secondResult.SavedProject.Revision);
+    Equal(secondResult.SavedProject.ContentDigest, resolved.ContentDigest, "committed resolver exact digest");
+    Equal(4L, resolved.Revision, "committed resolver exact revision");
+    await ThrowsCodeAsync(
+        () => host.ResolveCommittedProjectAsync(
+            "runtime-verify-stale",
+            resolved.SessionId,
+            resolved.ProjectId,
+            2).AsTask(),
+        "committed_project_binding_mismatch");
     await ThrowsCodeAsync(
         () => host.ApplyRuntimeMutationAsync(synchronizer, second).AsTask(),
         "runtime_project_revision_mismatch");
@@ -363,6 +377,12 @@ await suite.RunAsync("desktop runtime authority rejects changed storage before p
         "runtime_storage_content_mismatch");
     Equal(0, provider.Calls, "storage mismatch rejected before provider");
     Equal("foreign-content", await File.ReadAllTextAsync(path), "foreign bytes untouched");
+    var resolverFailure = await CaptureAsync(() => host.ResolveCommittedProjectAsync(
+        "tamper-verify",
+        created.Snapshot.SessionId,
+        created.Snapshot.ProjectId,
+        created.Snapshot.Revision).AsTask());
+    True(resolverFailure is PhotonCadProjectException, "committed resolver rejected changed storage");
 });
 
 await suite.RunAsync("desktop reset cancels drains and revokes an active runtime operation", async () =>
@@ -452,7 +472,7 @@ await suite.RunAsync("only New establishes runtime eligibility and Open actively
     Equal(0, providerAfterNew.Calls, "Open revoked New eligibility before provider");
 });
 
-await suite.RunAsync("refresh close and reopen revoke runtime eligibility", async () =>
+await suite.RunAsync("exact refresh preserves attachment while close and reopen revoke it", async () =>
 {
     var path = suite.PathFor("runtime-lifecycle.photoncad");
     var codec = RuntimeSmoke.Codec("lifecycle");
@@ -475,36 +495,88 @@ await suite.RunAsync("refresh close and reopen revoke runtime eligibility", asyn
         created.Snapshot.SessionId,
         created.Snapshot.ProjectId,
         created.Snapshot.Revision));
-    await ThrowsCodeAsync(
-        () => host.ApplyRuntimeMutationAsync(
-            registration,
-            RuntimeSmoke.Request(refreshed, "lifecycle-after-refresh")).AsTask(),
-        "runtime_project_attachment_unavailable");
-
-    var closed = await host.CloseProjectAsync(new PhotonCadProjectCloseRequest(
-        "lifecycle-close",
+    var mutated = await host.ApplyRuntimeMutationAsync(
+        registration,
+        RuntimeSmoke.Request(refreshed, "lifecycle-after-refresh"));
+    Equal(2L, mutated.SavedProject.Revision, "exact refresh retained runtime attachment");
+    var committed = await host.RefreshProjectAsync(new PhotonCadProjectRefreshRequest(
+        "lifecycle-refresh-committed",
         refreshed.ProjectHandle,
         refreshed.Snapshot.SessionId,
         refreshed.Snapshot.ProjectId,
-        refreshed.Snapshot.Revision,
-        refreshed.LastSavedRevision,
-        refreshed.ContentDigest,
-        refreshed.LastSavedContentDigest,
+        mutated.SavedProject.Revision));
+
+    var closed = await host.CloseProjectAsync(new PhotonCadProjectCloseRequest(
+        "lifecycle-close",
+        committed.ProjectHandle,
+        committed.Snapshot.SessionId,
+        committed.Snapshot.ProjectId,
+        committed.Snapshot.Revision,
+        committed.LastSavedRevision,
+        committed.ContentDigest,
+        committed.LastSavedContentDigest,
         false));
     await ThrowsCodeAsync(
         () => host.ApplyRuntimeMutationAsync(
             registration,
-            RuntimeSmoke.Request(refreshed, "lifecycle-after-close")).AsTask(),
+            RuntimeSmoke.Request(committed, "lifecycle-after-close")).AsTask(),
         "runtime_project_binding_unknown");
     var reopened = await host.ReopenProjectAsync(new PhotonCadProjectReopenRequest(
         "lifecycle-reopen",
         closed.Reopen.ReopenHandle));
+    var reopenedResolved = await host.ResolveCommittedProjectAsync(
+        "lifecycle-verify-reopened",
+        reopened.Snapshot.SessionId,
+        reopened.Snapshot.ProjectId,
+        reopened.Snapshot.Revision);
+    Equal(reopened.Snapshot.ContentDigest, reopenedResolved.ContentDigest, "reopened committed readback");
     await ThrowsCodeAsync(
         () => host.ApplyRuntimeMutationAsync(
             registration,
             RuntimeSmoke.Request(reopened, "lifecycle-after-reopen")).AsTask(),
         "runtime_project_attachment_unavailable");
-    Equal(0, provider.Calls, "lifecycle revocations all precede provider");
+    Equal(1, provider.Calls, "close and reopen revocations precede any later provider call");
+});
+
+await suite.RunAsync("two New projects retain independent exact runtime attachments", async () =>
+{
+    var pathA = suite.PathFor("runtime-multi-a.photoncad");
+    var pathB = suite.PathFor("runtime-multi-b.photoncad");
+    var codec = new PhotonCadCanonicalProjectCodecV1(new SequentialProjectIdentityIssuer("multi-attach"));
+    await using var host = new PhotonCadWindowsDesktopProjectHost(codec, new QueueDialog(pathA, pathB));
+
+    async Task<PhotonCadProjectDocument> CreateAsync(string suffix)
+    {
+        var selected = await host.ChooseWorkspaceAsync($"multi-select-{suffix}", "new");
+        return await host.CreateProjectAsync(new PhotonCadProjectCreateRequest(
+            $"multi-create-{suffix}", selected.Workspace!.WorkspaceHandle, $"Project {suffix}", PhotonCadProjectUnit.Millimeter));
+    }
+
+    var projectA = await CreateAsync("a");
+    var projectB = await CreateAsync("b");
+    True(projectA.ProjectHandle != projectB.ProjectHandle
+        && !StringComparer.Ordinal.Equals(projectA.Snapshot.ProjectId, projectB.Snapshot.ProjectId),
+        "two New projects have independent durable identities");
+    var provider = new RuntimeMutationProvider(request => ValueTask.FromResult(RuntimeSmoke.BoxMutation(request)));
+    var registration = host.CreateRuntimeProjectSynchronizer(
+        provider,
+        new RuntimeMutationCompensator(),
+        new PhotonCadRuntimeCanonicalMapperV1(codec));
+
+    var a2 = await host.ApplyRuntimeMutationAsync(registration, RuntimeSmoke.Request(projectA, "multi-a-0-to-2", "part-a"));
+    var b2 = await host.ApplyRuntimeMutationAsync(registration, RuntimeSmoke.Request(projectB, "multi-b-0-to-2", "part-b"));
+    Equal(2L, a2.SavedProject.Revision, "project A exact first revision");
+    Equal(2L, b2.SavedProject.Revision, "project B exact first revision");
+    var refreshedA = await host.RefreshProjectAsync(new PhotonCadProjectRefreshRequest(
+        "multi-refresh-a", projectA.ProjectHandle, projectA.Snapshot.SessionId, projectA.Snapshot.ProjectId, 2));
+    var refreshedB = await host.RefreshProjectAsync(new PhotonCadProjectRefreshRequest(
+        "multi-refresh-b", projectB.ProjectHandle, projectB.Snapshot.SessionId, projectB.Snapshot.ProjectId, 2));
+    var a4 = await host.ApplyRuntimeMutationAsync(registration, RuntimeSmoke.Request(refreshedA, "multi-a-return", "part-a-2"));
+    Equal(4L, a4.SavedProject.Revision, "returning to A retained only A attachment");
+    Equal(2L, codec.Decode(await File.ReadAllBytesAsync(pathB)).Revision, "project B remained exact revision two");
+    Equal(refreshedB.Snapshot.ContentDigest, codec.Decode(await File.ReadAllBytesAsync(pathB)).ContentDigest,
+        "project B bytes remained unchanged while mutating A");
+    Equal(3, provider.Calls, "no cross-project retry or mutation");
 });
 
 await suite.RunAsync("foreign generation revision and inch requests fail before provider", async () =>
@@ -1043,6 +1115,17 @@ sealed class ControlledReferenceRevoker : IPhotonCadDesktopProjectReferenceRevok
 sealed class FixedProjectIdentityIssuer(string suffix) : IPhotonCadProjectIdentityIssuerV1
 {
     public (string SessionId, string ProjectId) NewIdentity() => ($"pcsid:{suffix}", $"pcpid:{suffix}");
+}
+
+sealed class SequentialProjectIdentityIssuer(string suffix) : IPhotonCadProjectIdentityIssuerV1
+{
+    private int _sequence;
+
+    public (string SessionId, string ProjectId) NewIdentity()
+    {
+        var sequence = Interlocked.Increment(ref _sequence);
+        return ($"pcsid:{suffix}-{sequence}", $"pcpid:{suffix}-{sequence}");
+    }
 }
 
 sealed class SwitchableDecodeFailCodec(PhotonCadCanonicalProjectCodecV1 inner)

@@ -233,6 +233,41 @@ public sealed class PhotonCadProjectCoordinator : IAsyncDisposable
     }
 
     /// <summary>
+    /// Host-only committed readback evidence. The storage digest and length originate from the
+    /// versioned atomic read, not from a renderer request or a second digest of caller bytes.
+    /// </summary>
+    public async ValueTask<PhotonCadCommittedProjectReadback> ResolveCommittedReadbackAsync(
+        PhotonCadProjectHandle projectHandle,
+        string sessionId,
+        string projectId,
+        long revision,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(projectHandle);
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            var session = GetSession(projectHandle);
+            EnsureIdentity(session, sessionId, projectId);
+            if (session.Current.Dirty
+                || session.Current.Revision != revision
+                || session.LastSavedRevision != revision
+                || !ProjectGuards.FixedDigestEquals(session.Current.ContentDigest, session.LastSavedContentDigest)
+                || session.Current.CanonicalBytes.Length != session.LastStorageVersion.ByteLength
+                || !ProjectGuards.FixedDigestEquals(
+                    ProjectGuards.Sha256(session.Current.CanonicalBytes.Span),
+                    session.LastStorageVersion.StorageDigest))
+                throw Failure("committed_project_readback_mismatch", nameof(revision));
+            return new PhotonCadCommittedProjectReadback(
+                session.Current,
+                session.LastStorageVersion.StorageDigest,
+                session.LastStorageVersion.ByteLength);
+        }
+        finally { _mutationGate.Release(); }
+    }
+
+    /// <summary>
     /// Host-internal update seam. A renderer request cannot provide canonical bytes.
     /// </summary>
     public async ValueTask<PhotonCadProjectDocument> ApplyCurrentProjectAsync(
@@ -907,6 +942,26 @@ public sealed class PhotonCadProjectCoordinator : IAsyncDisposable
     {
         internal CancellationToken Token => Source.Token;
     }
+}
+
+public sealed class PhotonCadCommittedProjectReadback
+{
+    internal PhotonCadCommittedProjectReadback(
+        PhotonCadCanonicalProject project,
+        string storageDigest,
+        long byteLength)
+    {
+        Project = project ?? throw new ArgumentNullException(nameof(project));
+        StorageDigest = ProjectGuards.Digest(storageDigest, nameof(storageDigest));
+        if (byteLength is < 1 or > PhotonCadProjectContract.MaximumCanonicalProjectBytes
+            || byteLength != project.CanonicalBytes.Length)
+            throw new PhotonCadProjectException("invalid_content_length", nameof(byteLength));
+        ByteLength = byteLength;
+    }
+
+    public PhotonCadCanonicalProject Project { get; }
+    public string StorageDigest { get; }
+    public long ByteLength { get; }
 }
 
 public enum PhotonCadProjectApplyAndSaveStatus

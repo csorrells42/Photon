@@ -45,7 +45,7 @@ public sealed class BridgeApiClient : IDisposable
             return Task.FromResult(BridgeCommandResult.Failure(BridgeExitCode.UsageOrConfiguration,
                 "Send text exceeds the 64 KiB bridge limit."));
         return ExecuteAsync(settings.Endpoint, HttpMethod.Post, "v1/turns", settings.Authentication,
-            JsonContent.Create(new TurnRequest(text)), cancellationToken);
+            JsonContent.Create(new TurnRequest(text)), cancellationToken, _policy.EffectiveTurnTimeout);
     }
 
     private async Task<BridgeCommandResult> ExecuteAsync(
@@ -54,7 +54,8 @@ public sealed class BridgeApiClient : IDisposable
         string relativePath,
         BridgeAuthentication? authentication,
         HttpContent? content,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? commandTimeout = null)
     {
         try
         {
@@ -73,7 +74,7 @@ public sealed class BridgeApiClient : IDisposable
         authentication?.Apply(request);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(_policy.Timeout);
+        timeout.CancelAfter(commandTimeout ?? _policy.Timeout);
         HttpResponseMessage response;
         try
         {

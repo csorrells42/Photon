@@ -104,6 +104,48 @@
       },
       "required": ["schema", "operation", "sources", "occurrences"],
       "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "manualSketchExtrudeAdd" },
+        "profile": { "$ref": "#/$defs/manualProfile" },
+        "depthMm": { "$ref": "#/$defs/positiveDimension" }
+      },
+      "required": ["schema", "operation", "profile", "depthMm"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "manualSketchExtrudeCut" },
+        "source": { "$ref": "#/$defs/manualSource" },
+        "profile": { "$ref": "#/$defs/manualProfile" },
+        "depthMm": { "$ref": "#/$defs/positiveDimension" }
+      },
+      "required": ["schema", "operation", "source", "profile", "depthMm"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "manualHoleCut" },
+        "source": { "$ref": "#/$defs/manualSource" },
+        "hole": {
+          "type": "object",
+          "properties": {
+            "radiusMm": { "$ref": "#/$defs/positiveDimension" },
+            "depthMm": { "$ref": "#/$defs/positiveDimension" },
+            "xMm": { "$ref": "#/$defs/signedDimension" },
+            "yMm": { "$ref": "#/$defs/signedDimension" },
+            "zMm": { "$ref": "#/$defs/signedDimension" }
+          },
+          "required": ["radiusMm", "depthMm", "xMm", "yMm", "zMm"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema", "operation", "source", "hole"],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -111,6 +153,41 @@
     "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$" },
     "slot": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
     "positiveDimension": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 },
+    "signedDimension": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+    "manualSource": {
+      "type": "object",
+      "properties": {
+        "inputSlot": { "$ref": "#/$defs/slot" },
+        "expectedDigest": { "$ref": "#/$defs/digest" }
+      },
+      "required": ["inputSlot", "expectedDigest"],
+      "additionalProperties": false
+    },
+    "manualProfile": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "rectangle" },
+            "plane": { "const": "xy" },
+            "widthMm": { "$ref": "#/$defs/positiveDimension" },
+            "heightMm": { "$ref": "#/$defs/positiveDimension" }
+          },
+          "required": ["kind", "plane", "widthMm", "heightMm"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "circle" },
+            "plane": { "const": "xy" },
+            "radiusMm": { "$ref": "#/$defs/positiveDimension" }
+          },
+          "required": ["kind", "plane", "radiusMm"],
+          "additionalProperties": false
+        }
+      ]
+    },
     "source": {
       "type": "object",
       "properties": {

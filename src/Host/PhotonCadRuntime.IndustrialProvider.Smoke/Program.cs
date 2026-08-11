@@ -24,6 +24,8 @@ internal sealed class Smoke
             ("exact evidence receipt and redistribution block", EvidenceAsync),
             ("bound box emits copied STEP and GLB", BoundBoxAsync),
             ("first and second mutations round-trip preview CAS", FirstAndSecondMutationAsync),
+            ("assembly place nested transform preserves STEP and derives BOM", AssemblyPlaceTransformAsync),
+            ("assembly adversarial bindings fail closed", AssemblyAdversarialAsync),
             ("bound cylinder preserves normalized scalars", BoundCylinderAsync),
             ("equal foreign request identity rejected", ForeignRequestAsync),
             ("provider is one shot", OneShotAsync),
@@ -33,6 +35,8 @@ internal sealed class Smoke
             ("artifact digest mismatch rejected", DigestMismatchAsync),
             ("GLB external URI rejected", ExternalUriAsync),
             ("catalog cache copies and loads once", CatalogCacheAsync),
+            ("dynamic bearing and Spur Gear catalog item persists", DynamicCatalogItemAsync),
+            ("verified STEP part import persists with complete GLB preview", ImportedStepPartAsync),
             ("public mutation seam leaks no path or process type", PublicSurfaceAsync),
         };
         foreach (var test in tests)
@@ -165,6 +169,40 @@ internal sealed class Smoke
         Equal(2, secondPreviewRequest.RootElement.GetProperty("occurrences").GetArrayLength(), "complete preview occurrence count");
         var tags = ReadGlbEntityTags(secondPreview.Content.Span);
         True(tags.SetEquals(["first-root.occ", "second-root.occ"]), "complete preview entity tags");
+
+        var verified = await runtime.VerifyCommittedAsync(secondSaved,
+            [
+                PhotonCadCommittedVerificationCheck.ValidSolids,
+                PhotonCadCommittedVerificationCheck.Dimensions,
+                PhotonCadCommittedVerificationCheck.AssemblyStructure,
+                PhotonCadCommittedVerificationCheck.ExportReadiness,
+            ]);
+        True(verified.Available && verified.Passed && verified.Revision == 4, "committed revision-four verification");
+        var callsBeforeUnavailable = runner.Requests.Count;
+        var interference = await runtime.VerifyCommittedAsync(secondSaved,
+            [PhotonCadCommittedVerificationCheck.Interference]);
+        True(!interference.Available && !interference.Passed && interference.Reason == "interference_unavailable",
+            "interference must remain explicitly unavailable");
+        Equal(callsBeforeUnavailable, runner.Requests.Count, "unavailable interference invoked no container work");
+
+        runner.ForeignNextPreview = true;
+        var foreign = await runtime.VerifyCommittedAsync(secondSaved,
+            [PhotonCadCommittedVerificationCheck.ValidSolids]);
+        True(foreign.Available && !foreign.Passed,
+            "foreign rerun GLB reported a completed failed check");
+        var malformedBytes = secondSaved.CanonicalBytes.ToArray();
+        malformedBytes[^1] ^= 0x5a;
+        var malformedProject = new PhotonCadCanonicalProject(
+            secondSaved.SessionId, secondSaved.ProjectId, secondSaved.Revision, secondSaved.DisplayName,
+            secondSaved.Units, secondSaved.ContentDigest, secondSaved.BomDigest, secondSaved.Dirty,
+            malformedBytes, secondSaved.Bom);
+        var malformed = await runtime.VerifyCommittedAsync(malformedProject,
+            [PhotonCadCommittedVerificationCheck.ValidSolids]);
+        True(malformed.Available && !malformed.Passed, "malformed committed project reported a completed failed check");
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await ThrowsAsync<OperationCanceledException>(() => runtime.VerifyCommittedAsync(secondSaved,
+            [PhotonCadCommittedVerificationCheck.ExportReadiness], cancelled.Token).AsTask(), "canceled");
     }
 
     private static async Task BoundCylinderAsync()
@@ -179,6 +217,207 @@ internal sealed class Smoke
         Equal("heightMm", operation.Inputs[1].Id, "height input");
         True(runner.Requests[0].Contains("\"radiusMm\":5", StringComparison.Ordinal), "normalized radius not serialized");
     }
+
+    private static async Task AssemblyPlaceTransformAsync()
+    {
+        await using var runner = new FakeRunner();
+        var runtime = Runtime(runner);
+        const string sessionId = "pcsid:assembly-flow";
+        const string projectId = "pcpid:assembly-flow";
+        var codec = new PhotonCadCanonicalProjectCodecV1(new FixedIdentityIssuer(sessionId, projectId));
+        var mapper = new PhotonCadRuntimeCanonicalMapperV1(codec, IndustrialPolicy());
+        var handle = new PhotonCadProjectHandle("cad-project:22222222222222222222222222222222");
+        var initial = await codec.CreateAsync("Assembly flow", PhotonCadProjectUnit.Millimeter);
+        var root = runtime.BindBox("assembly-root-create", sessionId, projectId, 0, "assembly-root", 10, 20, 30, "ROOT");
+        var rootBinding = new PhotonCadCanonicalMutationBinding(handle, initial);
+        var rootMutation = await root.Provider.ApplyAsync(mapper.PrepareProviderRequest(rootBinding, root.Request));
+        var rootSaved = codec.MarkSaved(mapper.Apply(rootBinding, root.Request, rootMutation));
+        var rootState = codec.Inspect(rootSaved);
+        var originalStep = rootState.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry);
+        var originalPreview = rootState.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.ProjectPreview);
+        Equal(1d, rootState.Bom.Single().Quantity, "root BOM quantity");
+
+        var place = runtime.BindAssemblyPlace(
+            "assembly-place-one", sessionId, projectId, rootSaved.Revision,
+            "assembly-copy-1", "assembly-root", "assembly-root.occ", Translation(100, 0, 0));
+        var placeBinding = new PhotonCadCanonicalMutationBinding(handle, rootSaved);
+        var placeMutation = await place.Provider.ApplyAsync(mapper.PrepareProviderRequest(placeBinding, place.Request));
+        Equal(4L, placeMutation.ResultingRevision, "place resulting revision");
+        Equal(2, placeMutation.Operations.Count, "place operation count");
+        Equal(PhotonCadCollectionMergeMode.ReplaceAll, placeMutation.OccurrenceMergeMode, "place occurrence merge");
+        Equal(PhotonCadCollectionMergeMode.ReplaceAll, placeMutation.BomMergeMode, "place BOM merge");
+        Equal(0, placeMutation.Entities.Count, "place entity count");
+        Equal(2, placeMutation.Occurrences.Count, "place occurrence count");
+        Equal(2d, placeMutation.Bom.Single().Quantity, "place BOM 1 to 2");
+        Equal(1, placeMutation.Artifacts.Count, "place artifact count");
+        True(placeMutation.Artifacts.All(value => value.Kind == PhotonCadArtifactKindV1.Glb), "place emitted non-preview artifact");
+        Equal(originalPreview.Digest, placeMutation.Artifacts.Single().ReplacesContentDigest, "place preview CAS");
+        var placedSaved = codec.MarkSaved(mapper.Apply(placeBinding, place.Request, placeMutation));
+        AssertStepUnchanged(codec.Inspect(placedSaved), originalStep);
+
+        var transform = runtime.BindAssemblyTransform(
+            "assembly-transform-one", sessionId, projectId, placedSaved.Revision,
+            "assembly-copy-1", "assembly-root", Translation(100, 50, 0));
+        var transformBinding = new PhotonCadCanonicalMutationBinding(handle, placedSaved);
+        var transformMutation = await transform.Provider.ApplyAsync(mapper.PrepareProviderRequest(transformBinding, transform.Request));
+        Equal(2, transformMutation.Operations.Count, "transform operation count");
+        Equal(2d, transformMutation.Bom.Single().Quantity, "transform changed BOM quantity");
+        var transformedSaved = codec.MarkSaved(mapper.Apply(transformBinding, transform.Request, transformMutation));
+        var transformedState = codec.Inspect(transformedSaved);
+        Equal(6L, transformedState.Revision, "transform resulting revision");
+        True(transformedState.Occurrences.Single(value => value.OccurrenceId == "assembly-copy-1")
+            .Transform.SequenceEqual(Translation(100, 50, 0)), "transform was not persisted exactly");
+        AssertStepUnchanged(transformedState, originalStep);
+
+        var nested = runtime.BindAssemblyPlace(
+            "assembly-place-nested", sessionId, projectId, transformedSaved.Revision,
+            "assembly-copy-2", "assembly-root", "assembly-copy-1", Translation(0, 25, 0));
+        var nestedBinding = new PhotonCadCanonicalMutationBinding(handle, transformedSaved);
+        var nestedMutation = await nested.Provider.ApplyAsync(mapper.PrepareProviderRequest(nestedBinding, nested.Request));
+        Equal(2, nestedMutation.Operations.Count, "nested place operation count");
+        Equal(3d, nestedMutation.Bom.Single().Quantity, "nested place BOM quantity");
+        var nestedSaved = codec.MarkSaved(mapper.Apply(nestedBinding, nested.Request, nestedMutation));
+        var nestedState = codec.Inspect(codec.Decode(nestedSaved.CanonicalBytes));
+        Equal(8L, nestedState.Revision, "nested resulting revision");
+        Equal("assembly-copy-1", nestedState.Occurrences.Single(value => value.OccurrenceId == "assembly-copy-2").ParentOccurrenceId,
+            "nested parent binding");
+        AssertStepUnchanged(nestedState, originalStep);
+        using var nestedPreviewRequest = JsonDocument.Parse(runner.Requests[^1]);
+        Equal(1, nestedPreviewRequest.RootElement.GetProperty("sources").GetArrayLength(), "assembly source reuse count");
+        Equal(3, nestedPreviewRequest.RootElement.GetProperty("occurrences").GetArrayLength(), "nested preview occurrence count");
+
+        var remove = runtime.BindAssemblyRemove(
+            "assembly-remove-branch", sessionId, projectId, nestedSaved.Revision,
+            "assembly-copy-1", "assembly-root");
+        var removeBinding = new PhotonCadCanonicalMutationBinding(handle, nestedSaved);
+        var removeMutation = await remove.Provider.ApplyAsync(mapper.PrepareProviderRequest(removeBinding, remove.Request));
+        Equal(10L, removeMutation.ResultingRevision, "remove resulting revision");
+        Equal(2, removeMutation.Operations.Count, "remove operation count");
+        Equal(1, removeMutation.Occurrences.Count, "remove occurrence and descendants");
+        Equal("assembly-root.occ", removeMutation.Occurrences[0].OccurrenceId, "remove preserved root");
+        Equal(1d, removeMutation.Bom.Single().Quantity, "remove BOM quantity");
+        var removedSaved = codec.MarkSaved(mapper.Apply(removeBinding, remove.Request, removeMutation));
+        var removedState = codec.Inspect(codec.Decode(removedSaved.CanonicalBytes));
+        Equal(1, removedState.Occurrences.Count, "remove persisted occurrence count");
+        Equal(1, removedState.Bom.Count, "remove persisted BOM count");
+        Equal(1, removedState.Entities.Count(value => value.Kind == PhotonCadEntityKindV1.Body), "remove retained source body");
+        AssertStepUnchanged(removedState, originalStep);
+
+        var removeLast = runtime.BindAssemblyRemove(
+            "assembly-remove-last", sessionId, projectId, removedSaved.Revision,
+            "assembly-root.occ", "assembly-root");
+        await ThrowsAsync<InvalidOperationException>(() => removeLast.Provider.ApplyAsync(
+            mapper.PrepareProviderRequest(new PhotonCadCanonicalMutationBinding(handle, removedSaved), removeLast.Request)).AsTask(),
+            "last_occurrence");
+    }
+
+    private static async Task AssemblyAdversarialAsync()
+    {
+        await using var runner = new FakeRunner();
+        var runtime = Runtime(runner);
+        const string sessionId = "pcsid:assembly-hostile";
+        const string projectId = "pcpid:assembly-hostile";
+        var codec = new PhotonCadCanonicalProjectCodecV1(new FixedIdentityIssuer(sessionId, projectId));
+        var mapper = new PhotonCadRuntimeCanonicalMapperV1(codec, IndustrialPolicy());
+        var handle = new PhotonCadProjectHandle("cad-project:33333333333333333333333333333333");
+        var initial = await codec.CreateAsync("Assembly hostile", PhotonCadProjectUnit.Millimeter);
+        var root = runtime.BindBox("assembly-hostile-root", sessionId, projectId, 0, "hostile-root", 10, 20, 30, "ROOT");
+        var initialBinding = new PhotonCadCanonicalMutationBinding(handle, initial);
+        var rootMutation = await root.Provider.ApplyAsync(mapper.PrepareProviderRequest(initialBinding, root.Request));
+        var saved = codec.MarkSaved(mapper.Apply(initialBinding, root.Request, rootMutation));
+        var binding = new PhotonCadCanonicalMutationBinding(handle, saved);
+
+        Throws<ArgumentException>(() => runtime.BindAssemblyTransform(
+            "bad-reflection", sessionId, projectId, 2, "hostile-root.occ", "hostile-root", Reflection()), "orientation");
+        Throws<ArgumentException>(() => runtime.BindAssemblyTransform(
+            "bad-scale", sessionId, projectId, 2, "hostile-root.occ", "hostile-root", Scale()), "not_rigid");
+        Throws<ArgumentException>(() => runtime.BindAssemblyTransform(
+            "bad-shear", sessionId, projectId, 2, "hostile-root.occ", "hostile-root", Shear()), "not_rigid");
+        var nan = Translation(0, 0, 0); nan[0] = double.NaN;
+        Throws<ArgumentException>(() => runtime.BindAssemblyTransform(
+            "bad-nan", sessionId, projectId, 2, "hostile-root.occ", "hostile-root", nan), "number");
+
+        var stale = runtime.BindAssemblyTransform(
+            "assembly-stale", sessionId, projectId, 1, "hostile-root.occ", "hostile-root", Translation(0, 0, 0));
+        Throws<PhotonCadRuntimeSyncException>(() => mapper.PrepareProviderRequest(binding, stale.Request), "canonical_base_binding_mismatch");
+
+        var missing = runtime.BindAssemblyTransform(
+            "assembly-missing", sessionId, projectId, 2, "missing.occ", "hostile-root", Translation(0, 0, 0));
+        await ThrowsAsync<InvalidOperationException>(() => missing.Provider.ApplyAsync(
+            mapper.PrepareProviderRequest(binding, missing.Request)).AsTask(), "target_missing");
+        var duplicate = runtime.BindAssemblyPlace(
+            "assembly-duplicate", sessionId, projectId, 2, "hostile-root.occ", "hostile-root", "hostile-root.occ", Translation(0, 0, 0));
+        await ThrowsAsync<InvalidOperationException>(() => duplicate.Provider.ApplyAsync(
+            mapper.PrepareProviderRequest(binding, duplicate.Request)).AsTask(), "duplicate");
+        var missingParent = runtime.BindAssemblyPlace(
+            "assembly-parent-missing", sessionId, projectId, 2, "new.occ", "hostile-root", "missing-parent.occ", Translation(0, 0, 0));
+        await ThrowsAsync<InvalidOperationException>(() => missingParent.Provider.ApplyAsync(
+            mapper.PrepareProviderRequest(binding, missingParent.Request)).AsTask(), "parent_missing");
+
+        Throws<InvalidOperationException>(() => AssemblyMutationProvider.ValidateOccurrenceDag(
+        [
+            new PhotonCadOccurrenceV1("root.occ", null, "ROOT", "hostile-root", Translation(0, 0, 0)),
+            new PhotonCadOccurrenceV1("cycle-a.occ", "cycle-b.occ", "ROOT", "hostile-root", Translation(0, 0, 0)),
+            new PhotonCadOccurrenceV1("cycle-b.occ", "cycle-a.occ", "ROOT", "hostile-root", Translation(0, 0, 0)),
+        ]), "cycle");
+
+        var place = runtime.BindAssemblyPlace(
+            "assembly-cas", sessionId, projectId, 2, "cas-copy.occ", "hostile-root", "hostile-root.occ", Translation(10, 0, 0));
+        var mutation = await place.Provider.ApplyAsync(mapper.PrepareProviderRequest(binding, place.Request));
+        var preview = mutation.Artifacts.Single();
+        var wrongPreview = new PhotonCadSealedArtifactDelta(
+            preview.Role, preview.Kind, preview.OwnerEntityId, preview.Revision, preview.Content,
+            preview.ByteLength, preview.ContentDigest, preview.MediaType, preview.Bounds,
+            preview.OperationId, preview.Evidence, "sha256:" + new string('f', 64));
+        var wrongCas = new PhotonCadSealedMutationDelta(
+            "assembly-wrong-cas", mutation.RequestId, mutation.SessionId, mutation.ProjectId,
+            mutation.BaseRevision, mutation.ResultingRevision, mutation.Operations,
+            mutation.Entities, mutation.Occurrences, mutation.Issues, mutation.Bom, [wrongPreview],
+            mutation.OccurrenceMergeMode, mutation.IssueMergeMode, mutation.BomMergeMode);
+        Throws<PhotonCadRuntimeSyncException>(() => mapper.Apply(binding, place.Request, wrongCas), "replacement_binding");
+        await place.Compensator.CompensateAsync(mutation, "commit failed");
+        await place.Compensator.CompensateAsync(mutation, "commit retry failed");
+    }
+
+    private static void AssertStepUnchanged(PhotonCadProjectStateV1 state, PhotonCadArtifactV1 expected)
+    {
+        var actual = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry);
+        Equal(expected.Digest, actual.Digest, "assembly STEP digest changed");
+        Equal(expected.ByteLength, actual.ByteLength, "assembly STEP length changed");
+        True(expected.Content.Span.SequenceEqual(actual.Content.Span), "assembly STEP bytes changed");
+    }
+
+    private static double[] Translation(double x, double y, double z) =>
+    [
+        1, 0, 0, x,
+        0, 1, 0, y,
+        0, 0, 1, z,
+        0, 0, 0, 1,
+    ];
+
+    private static double[] Reflection() =>
+    [
+        -1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    ];
+
+    private static double[] Scale() =>
+    [
+        2, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    ];
+
+    private static double[] Shear() =>
+    [
+        1, 0, 0, 0,
+        .5, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    ];
 
     private static async Task ForeignRequestAsync()
     {
@@ -265,6 +504,46 @@ internal sealed class Smoke
         True(first.Span.SequenceEqual(second.Span), "catalog cache bytes");
     }
 
+    private static async Task DynamicCatalogItemAsync()
+    {
+        await using var runner = new FakeRunner();
+        var runtime = Runtime(runner);
+        var catalog = await runtime.GetCatalogAsync();
+        Equal(3, catalog.Items.Count, "mounted catalog item count");
+        var bearing = catalog.Items.Single(item => item.Category == "bearings");
+        var gear = catalog.Items.Single(item => item.Title == "Spur Gear");
+        var fastener = catalog.Items.Single(item => item.Category == "fasteners");
+        Equal(1, bearing.Parameters.Count, "bearing parameter count");
+        Equal(1, bearing.Parameters[0].Choices.Count, "bearing choice count");
+        Equal(4, gear.Parameters.Count, "gear required parameter count");
+        Equal("Socket Head Cap Screw", fastener.Title, "fastener title");
+
+        var bound = await runtime.BindCatalogItemAsync(
+            "request-catalog-gear",
+            "pcsid:catalog-gear",
+            "pcpid:catalog-gear",
+            0,
+            "catalog-gear-root",
+            gear.CapabilityId,
+            new Dictionary<string, PhotonCadIndustrialCatalogInputValue?>
+            {
+                ["module"] = PhotonCadIndustrialCatalogInputValue.Number(2),
+                ["pressure_angle"] = PhotonCadIndustrialCatalogInputValue.Number(20),
+                ["thickness"] = PhotonCadIndustrialCatalogInputValue.Number(10),
+                ["tooth_count"] = PhotonCadIndustrialCatalogInputValue.Integer(24),
+            });
+        var request = await ProviderRequestAsync(bound.Request);
+        var mutation = await bound.Provider.ApplyAsync(request);
+        Equal(2L, mutation.ResultingRevision, "catalog result revision");
+        Equal(PhotonCadEntityKindV1.Part, mutation.Entities.Single().Kind, "catalog entity kind");
+        Equal("Spur Gear", mutation.Entities.Single().Name, "catalog entity name");
+        Equal(1, mutation.Bom.Count, "catalog BOM count");
+        True(runner.Requests.Any(value => value.Contains("\"operation\":\"createCatalogItem\"", StringComparison.Ordinal)),
+            "catalog item request missing");
+        True(runner.Requests.Count(value => value.Contains("\"operation\":\"catalog\"", StringComparison.Ordinal)) == 1,
+            "catalog cache did not load exactly once");
+    }
+
     private static Task PublicSurfaceAsync()
     {
         var forbidden = new[]
@@ -272,11 +551,72 @@ internal sealed class Smoke
             typeof(Process), typeof(Stream), typeof(FileInfo), typeof(DirectoryInfo),
             typeof(System.Runtime.InteropServices.SafeHandle),
         };
-        foreach (var property in typeof(PhotonCadIndustrialBoundMutation).GetProperties(BindingFlags.Public | BindingFlags.Instance))
-            True(forbidden.All(type => !type.IsAssignableFrom(property.PropertyType)), $"forbidden property type: {property.Name}");
+        foreach (var boundType in new[] { typeof(PhotonCadIndustrialBoundMutation), typeof(PhotonCadAssemblyBoundMutation) })
+            foreach (var property in boundType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                True(forbidden.All(type => !type.IsAssignableFrom(property.PropertyType)), $"forbidden property type: {boundType.Name}.{property.Name}");
         var providerMethod = typeof(IPhotonCadSealedMutationProvider).GetMethod(nameof(IPhotonCadSealedMutationProvider.ApplyAsync))!;
         True(providerMethod.GetParameters().All(parameter => forbidden.All(type => !type.IsAssignableFrom(parameter.ParameterType))), "provider process/path parameter leak");
         return Task.CompletedTask;
+    }
+
+    private static async Task ImportedStepPartAsync()
+    {
+        await using var runner = new FakeRunner();
+        var runtime = Runtime(runner);
+        const string sessionId = "pcsid:step-import";
+        const string projectId = "pcpid:step-import";
+        var codec = new PhotonCadCanonicalProjectCodecV1(new FixedIdentityIssuer(sessionId, projectId));
+        var initial = await codec.CreateAsync("Imported part", PhotonCadProjectUnit.Millimeter);
+        var step = Step();
+        var digest = ProtocolV1.Sha256(step);
+        var importEvidence = new PhotonCadProviderEvidence(
+            PhotonCadBackendV1.Geometry,
+            "photon.cad.step.import.v1",
+            ["iso-10303-21"],
+            digest,
+            "external.step.part21.v1",
+            digest,
+            digest,
+            digest,
+            digest,
+            new PhotonCadSourceIdentityV1("user-supplied-step", "part21", digest, "user-supplied"));
+        var bound = runtime.BindImportedStepPart(
+            "request-step-import",
+            sessionId,
+            projectId,
+            0,
+            "imported-part",
+            "IMPORTED-PART",
+            "Imported STEP part",
+            step,
+            digest,
+            importEvidence);
+        var mapper = new PhotonCadRuntimeCanonicalMapperV1(codec, IndustrialPolicy());
+        var binding = new PhotonCadCanonicalMutationBinding(
+            new PhotonCadProjectHandle("cad-project:33333333333333333333333333333333"),
+            initial);
+        var mutation = await bound.Provider.ApplyAsync(mapper.PrepareProviderRequest(binding, bound.Request));
+        Equal(2L, mutation.ResultingRevision, "import revision");
+        Equal(2, mutation.Operations.Count, "import operation count");
+        Equal(ImportedStepPartCommand.Capability, mutation.Operations[0].CapabilityId, "import capability");
+        Equal("industrial.preview.glb.v1", mutation.Operations[1].CapabilityId, "import preview capability");
+        Equal(2, mutation.Artifacts.Count, "import artifact count");
+        var stepArtifact = mutation.Artifacts.Single(value => value.Kind == PhotonCadArtifactKindV1.Step);
+        True(stepArtifact.Content.Span.SequenceEqual(step), "imported STEP bytes changed");
+        True(stepArtifact.Bounds is null, "imported STEP bounds must remain null");
+        Equal("user-supplied-step", stepArtifact.Evidence.Source.Package, "import source package");
+        var saved = codec.MarkSaved(mapper.Apply(binding, bound.Request, mutation));
+        var reopened = codec.Inspect(codec.Decode(saved.CanonicalBytes));
+        Equal(2L, reopened.Revision, "reopened import revision");
+        Equal("Imported STEP part", reopened.Entities.Single().Name, "reopened import name");
+        Equal("IMPORTED-PART", reopened.Bom.Single().PartNumber, "reopened import BOM");
+        True(reopened.Artifacts.Single(value => value.Kind == PhotonCadArtifactKindV1.Step).Content.Span.SequenceEqual(step),
+            "reopened STEP bytes changed");
+        True(ReadGlbEntityTags(reopened.Artifacts.Single(value => value.Kind == PhotonCadArtifactKindV1.Glb).Content.Span)
+            .SetEquals(["imported-part.occ"]), "imported GLB entity tag");
+        Equal(1, runner.Requests.Count, "import should invoke preview only");
+        True(runner.Requests[0].Contains("\"operation\":\"createPreview\"", StringComparison.Ordinal),
+            "import invoked non-preview container operation");
     }
 
     private static async Task<(PhotonCadIndustrialBoundMutation Bound, PhotonCadSealedMutationProviderRequest Request)> BoxAsync(
@@ -296,7 +636,7 @@ internal sealed class Smoke
             PhotonCadBackendV1.Assembly,
             "photon.cad.industrial.docker.v1",
             ["photon.cad.industrial.protocol.v1"],
-            EvidenceVerifier.AcceptedCatalogDigest,
+            runner.CatalogDigest,
             "photon.cad.industrial.container.v1",
             receipt,
             receipt,
@@ -305,7 +645,7 @@ internal sealed class Smoke
             new PhotonCadSourceIdentityV1("photon-cad-industrial", "0.1.0", image, "redistribution-blocked"));
         return PhotonCadIndustrialProviderRuntime.CreateForSmoke(
             runner,
-            new VerifiedIndustrialEvidence(receipt, image, EvidenceVerifier.AcceptedBaseImageId, EvidenceVerifier.AcceptedCatalogDigest, evidence));
+            new VerifiedIndustrialEvidence(receipt, image, EvidenceVerifier.AcceptedBaseImageId, runner.CatalogDigest, evidence));
     }
 
     private static async Task<PhotonCadSealedMutationProviderRequest> ProviderRequestAsync(PhotonCadRuntimeSyncRequest request)
@@ -467,6 +807,54 @@ internal sealed class FakeRunner : IIndustrialContainerRunner, IAsyncDisposable
     private string? _lastOutput;
     internal List<string> Requests { get; } = [];
     internal bool CorruptPrimitiveDigest { get; set; }
+    internal bool ForeignNextPreview { get; set; }
+    internal string CatalogDigest => ProtocolV1.Sha256(CatalogBytes);
+
+    private static byte[] CatalogBytes => JsonSerializer.SerializeToUtf8Bytes(new
+    {
+        schema = "photon.cad.industrial.catalog/v1",
+        runtime = new { identity = "fake" },
+        categories = Array.Empty<object>(),
+        items = new object[]
+        {
+            new
+            {
+                availability = "supported",
+                category = "bearings",
+                id = "bdw_111111111111111111111111111111111111111111111111",
+                parameters = new object[]
+                {
+                    new { choices = new[] { "M10-30-9" }, id = "size", kind = "choice", label = "Size", nullable = false, required = true },
+                },
+                title = "Smoke Bearing",
+            },
+            new
+            {
+                availability = "supported",
+                category = "gears",
+                id = "bdw_222222222222222222222222222222222222222222222222",
+                parameters = new object[]
+                {
+                    new { id = "module", kind = "number", label = "Module", maximum = 1000000d, minimum = 0.000001d, nullable = false, required = true },
+                    new { id = "pressure_angle", kind = "number", label = "Pressure angle", maximum = 89d, minimum = 0.1d, nullable = false, required = true },
+                    new { id = "thickness", kind = "number", label = "Thickness", maximum = 1000000d, minimum = 0.000001d, nullable = false, required = true },
+                    new { id = "tooth_count", kind = "integer", label = "Tooth count", maximum = 1000, minimum = 3, nullable = false, required = true },
+                },
+                title = "Spur Gear",
+            },
+            new
+            {
+                availability = "supported",
+                category = "fasteners",
+                id = "bdw_333333333333333333333333333333333333333333333333",
+                parameters = new object[]
+                {
+                    new { choices = new[] { "M6-1x20" }, id = "size", kind = "choice", label = "Size", nullable = false, required = true },
+                },
+                title = "Socket Head Cap Screw",
+            },
+        },
+    });
 
     public ValueTask<IndustrialContainerInvocation> ExecuteAsync(
         ReadOnlyMemory<byte> request,
@@ -482,6 +870,20 @@ internal sealed class FakeRunner : IIndustrialContainerRunner, IAsyncDisposable
         var output = Path.Combine(job, "output");
         Directory.CreateDirectory(output);
         _lastOutput = output;
+        if (operation == "catalog")
+        {
+            using var catalog = JsonDocument.Parse(CatalogBytes);
+            var response = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema = ProtocolV1.ResponseSchema,
+                ok = true,
+                operation = "catalog",
+                catalogDigest = CatalogDigest,
+                catalog = catalog.RootElement,
+            });
+            return ValueTask.FromResult(new IndustrialContainerInvocation(
+                response, output, () => ValueTask.CompletedTask));
+        }
         if (operation == "createPrimitive")
         {
             var primitive = document.RootElement.GetProperty("primitive");
@@ -507,6 +909,34 @@ internal sealed class FakeRunner : IIndustrialContainerRunner, IAsyncDisposable
                 response = response.Replace(ProtocolV1.Sha256(step), "sha256:" + new string('0', 64), StringComparison.Ordinal);
             return ValueTask.FromResult(new IndustrialContainerInvocation(
                 Encoding.UTF8.GetBytes(response), output, () => ValueTask.CompletedTask));
+        }
+        if (operation == "createCatalogItem")
+        {
+            var root = document.RootElement;
+            var step = Smoke.Step();
+            File.WriteAllBytes(Path.Combine(output, "model.step"), step);
+            var parameters = root.GetProperty("parameters").Clone();
+            var itemId = root.GetProperty("itemId").GetString()!;
+            var digest = root.GetProperty("catalogDigest").GetString()!;
+            var response = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema = ProtocolV1.ResponseSchema,
+                ok = true,
+                operation = "createCatalogItem",
+                catalogDigest = digest,
+                itemId,
+                artifact = new { format = "step", contentDigest = ProtocolV1.Sha256(step), byteLength = step.Length },
+                measurement = new
+                {
+                    units = "millimeter",
+                    volumeMm3 = 100d,
+                    solidCount = 4,
+                    bounds = new { minimum = new[] { 0d, 0d, 0d }, maximum = new[] { 10d, 20d, 30d } },
+                },
+                provenance = new { generator = "catalog", catalogDigest = digest, itemId, parameters },
+            });
+            return ValueTask.FromResult(new IndustrialContainerInvocation(
+                response, output, () => ValueTask.CompletedTask));
         }
         if (operation == "createPreview")
         {
@@ -534,6 +964,11 @@ internal sealed class FakeRunner : IIndustrialContainerRunner, IAsyncDisposable
             var command = new IndustrialPreviewCommand(sources, occurrences);
             EqualInputs(inputs, command);
             var glb = Smoke.Glb(command);
+            if (ForeignNextPreview)
+            {
+                ForeignNextPreview = false;
+                glb = Smoke.Glb(new IndustrialPreviewCommand(command.Sources, command.Occurrences.Reverse().ToArray()));
+            }
             File.WriteAllBytes(Path.Combine(output, "preview.glb"), glb);
             var response = JsonSerializer.Serialize(new
             {

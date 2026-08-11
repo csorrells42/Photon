@@ -36,6 +36,12 @@ public sealed partial class RaspberryPiTrustedHostProvider
     public Task<EmbeddedHostOperationResult> ProbeAsync(RaspberryPiTrustedHost target, CancellationToken cancellationToken = default) =>
         ExecuteReadAsync(target, "probe", ["/usr/bin/uname", "-a"], TimeSpan.FromMinutes(1), cancellationToken);
 
+    internal void VerifyTargetAuthority(RaspberryPiTrustedHost target)
+    {
+        ValidateTarget(target);
+        using var authority = AcquireAuthority(target);
+    }
+
     public Task<EmbeddedHostOperationResult> SearchLibrariesAsync(RaspberryPiPackageQuery request, CancellationToken cancellationToken = default) =>
         SearchAsync(request, "search_libraries", cancellationToken);
 
@@ -304,7 +310,7 @@ public sealed partial class RaspberryPiTrustedHostProvider
             ? value : throw new ArgumentException("Use one absolute remote file path.");
     }
 
-    private static void ValidateTarget(RaspberryPiTrustedHost target)
+    internal static void ValidateTarget(RaspberryPiTrustedHost target)
     {
         ArgumentNullException.ThrowIfNull(target);
         if (!HostPattern().IsMatch(target.Host) || !UserPattern().IsMatch(target.User) || target.Port is < 1 or > 65535

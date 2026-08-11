@@ -15,6 +15,7 @@
   <ItemGroup>
     <Compile Include="LanguageToolingSmoke.cs" />
     <Compile Include="ConcreteOperationHandlersSmoke.cs" />
+    <Compile Include="ContainerGccAuthoritySmoke.cs" />
     <ProjectReference Include="..\..\HermesDeveloperServices.csproj" />
   </ItemGroup>
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />

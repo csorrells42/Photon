@@ -86,6 +86,8 @@ export type PhotonCadProjectSnapshot = {
   units: PhotonCadUnit
   mode: 'canonical' | 'scratch'
   entities: PhotonCadEntity[]
+  /** Present on authoritative desktop frames; optional only for source-compatible in-memory fixtures. */
+  occurrences?: PhotonCadAssemblyOccurrence[]
   operations: PhotonCadOperationRecord[]
   issues: PhotonCadIssue[]
   dirty: boolean
@@ -181,6 +183,27 @@ export type PhotonCadReleaseCommitResult = {
   packageId?: string
   packageFingerprint?: string
 }
+export type PhotonCadStepExportRequest = {
+  contractVersion: typeof PHOTON_CAD_CONTRACT_VERSION
+  requestId: string
+  sessionId: string
+  projectId: string
+  revision: number
+  contentDigest: string
+  entityId: string
+}
+export type PhotonCadStepExportResult = {
+  contractVersion: typeof PHOTON_CAD_CONTRACT_VERSION
+  requestId: string
+  projectId: string
+  revision: number
+  status: 'committed' | 'cancelled' | 'rejected' | 'unavailable'
+  reason: string
+  entityId?: string
+  contentDigest?: string
+  byteLength?: number
+  destinationLabel?: string
+}
 export type PhotonCadRuntimeDescription = {
   contractVersion: typeof PHOTON_CAD_CONTRACT_VERSION
   status: 'available' | 'unavailable' | 'checking' | 'error'
@@ -196,6 +219,7 @@ export type PhotonCadController = {
   reviewRelease(request: PhotonCadReleaseReviewRequest): Promise<PhotonCadReleaseReviewResult>
   commitRelease(request: PhotonCadReleaseCommitRequest): Promise<PhotonCadReleaseCommitResult>
   discardRelease(reviewHandle: string): Promise<void> | void
+  exportStep?(request: PhotonCadStepExportRequest): Promise<PhotonCadStepExportResult>
 }
 
 export type PhotonCadPackageFile = {
@@ -481,6 +505,18 @@ export function normalizePhotonCadCatalog(value: unknown): PhotonCadCatalog | nu
 
 export function isOpaquePhotonCadReviewHandle(value: unknown): value is string {
   return typeof value === 'string' && /^cad-review:[A-Za-z0-9_-]{32,160}$/u.test(value)
+}
+
+export function validatePhotonCadStepExportRequest(request: PhotonCadStepExportRequest): string[] {
+  const issues: string[] = []
+  if (request.contractVersion !== PHOTON_CAD_CONTRACT_VERSION) issues.push('unsupported-contract')
+  if (!isPhotonCadIdentifier(request.requestId)) issues.push('invalid-request-id')
+  if (!isPhotonCadIdentifier(request.sessionId)) issues.push('invalid-session-id')
+  if (!isPhotonCadIdentifier(request.projectId)) issues.push('invalid-project-id')
+  if (boundedRevision(request.revision) === null) issues.push('invalid-revision')
+  if (!isPhotonCadDigest(request.contentDigest)) issues.push('invalid-content-digest')
+  if (!isPhotonCadIdentifier(request.entityId)) issues.push('invalid-entity-id')
+  return issues
 }
 
 export function canonicalPhotonCadReleaseBinding(request: PhotonCadReleaseReviewRequest) {

@@ -17,6 +17,9 @@ public sealed record ArduinoProviderOptions(
 {
     public const string ToolchainId = "arduino-cli";
     public const string ExecutableLogicalName = "arduino-cli";
+    public const string SupportedCore = "arduino:avr";
+    public const string SupportedCoreVersion = "1.8.8";
+    public const string SupportedFqbn = "arduino:avr:uno";
 }
 
 public sealed record ArduinoCompileRequest(

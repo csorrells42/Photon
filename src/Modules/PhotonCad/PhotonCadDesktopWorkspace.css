@@ -253,10 +253,36 @@
 .photon-cad-desktop__actions {
   display: flex;
   min-width: 0;
-  gap: 6px;
+  gap: 4px;
   overflow-x: auto;
+  padding: 2px;
   scrollbar-width: thin;
 }
+
+.photon-cad-desktop__actions > button {
+  min-height: 28px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border-color: color-mix(in srgb, var(--pcad-desktop-border) 78%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pcad-desktop-panel) 94%, #22314a);
+  padding: 4px 8px;
+  color: color-mix(in srgb, var(--text-primary, #e5e7eb) 84%, #8291aa);
+  font-size: 12px;
+  transition: border-color .12s ease, background .12s ease, color .12s ease, transform .12s ease;
+}
+
+.photon-cad-desktop__actions > button svg { color: #75829a; }
+.photon-cad-desktop__actions > button[data-command=new],
+.photon-cad-desktop__actions > button[data-command=open] { border-color: rgba(116, 94, 205, .28); background: linear-gradient(180deg, rgba(112, 85, 208, .11), rgba(36, 48, 75, .15)); }
+.photon-cad-desktop__actions > button[data-command=new] svg,
+.photon-cad-desktop__actions > button[data-command=open] svg { color: #9a88e4; }
+.photon-cad-desktop__actions > button[data-command=close] { margin-left: 2px; }
+.photon-cad-desktop__actions > button[data-command=close]:hover:not(:disabled) { border-color: rgba(221, 108, 122, .3); color: #e2a0aa; background: rgba(116, 41, 55, .12); }
+.photon-cad-desktop__actions > button:hover:not(:disabled) { transform: translateY(-1px); }
+.photon-cad-desktop__actions > button:active:not(:disabled) { transform: translateY(0); }
 
 .photon-cad-desktop__status {
   max-width: 260px;
@@ -290,6 +316,7 @@
 
 .photon-cad-desktop__tab.is-active {
   border-color: var(--pcad-desktop-border);
+  border-top-color: #8064ff;
   background: var(--app-bg, #07111c);
 }
 
@@ -301,6 +328,11 @@
   border: 0;
   border-radius: 5px 0 0;
   background: transparent;
+}
+
+.photon-cad-desktop__tab-icon {
+  flex: 0 0 auto;
+  color: #63cbb4;
 }
 
 .photon-cad-desktop__tab > button[role="tab"] > span:first-child {
@@ -332,6 +364,9 @@
 }
 
 .photon-cad-desktop__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -341,6 +376,30 @@
   width: 100%;
   height: 100%;
   min-height: 0;
+}
+
+.photon-cad-desktop__content > [data-photon-cad-project-workspace] {
+  grid-area: 1 / 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.photon-cad-desktop__content > [data-photon-cad-project-workspace] > .photon-cad-workspace {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.photon-cad-desktop__content > [data-photon-cad-project-workspace][hidden] {
+  display: none;
 }
 
 .photon-cad-desktop__empty {
@@ -358,34 +417,6 @@
   color: var(--text-secondary, #9ca3af);
 }
 
-.photon-cad-desktop__recent {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px 14px;
-  align-items: center;
-  padding: 7px 10px;
-  border-top: 1px solid var(--pcad-desktop-border);
-  background: var(--pcad-desktop-panel);
-  font-size: 12px;
-}
-
-.photon-cad-desktop__recent ul {
-  display: flex;
-  min-width: 0;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  overflow-x: auto;
-  list-style: none;
-}
-
-.photon-cad-desktop__recent li {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-}
-
 @media (max-width: 760px) {
   .photon-cad-desktop__toolbar {
     grid-template-columns: minmax(0, 1fr);
@@ -400,9 +431,6 @@
     text-align: left;
   }
 
-  .photon-cad-desktop__recent {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 520px) {

@@ -8,8 +8,8 @@ public sealed class PhotonCadIndustrialBoundMutation
 {
     internal PhotonCadIndustrialBoundMutation(
         PhotonCadRuntimeSyncRequest request,
-        SealedMutationProvider provider,
-        Compensator compensator)
+        IPhotonCadSealedMutationProvider provider,
+        IPhotonCadSealedMutationCompensator compensator)
     {
         Request = request;
         Provider = provider;
@@ -29,11 +29,15 @@ public sealed class PhotonCadIndustrialProviderRuntime
 {
     private readonly IIndustrialContainerRunner _runner;
     private readonly VerifiedIndustrialEvidence _evidence;
+    private readonly CatalogCache _catalogCache;
+    private readonly object _catalogLock = new();
+    private PhotonCadIndustrialCatalog? _catalog;
 
     private PhotonCadIndustrialProviderRuntime(IIndustrialContainerRunner runner, VerifiedIndustrialEvidence evidence)
     {
         _runner = runner;
         _evidence = evidence;
+        _catalogCache = new CatalogCache(LoadCatalogBytesAsync, evidence.CatalogDigest);
     }
 
     public static async ValueTask<PhotonCadIndustrialProviderRuntime> CreateLocalEngineeringAsync(
@@ -57,6 +61,27 @@ public sealed class PhotonCadIndustrialProviderRuntime
     internal static PhotonCadIndustrialProviderRuntime CreateForSmoke(
         IIndustrialContainerRunner runner,
         VerifiedIndustrialEvidence evidence) => new(runner, evidence);
+
+    public async ValueTask<PhotonCadIndustrialCatalog> GetCatalogAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_catalogLock)
+        {
+            if (_catalog is not null) return _catalog;
+        }
+        var bytes = await _catalogCache.GetAsync(cancellationToken).ConfigureAwait(false);
+        var projected = CatalogProjection.Parse(bytes, _evidence.CatalogDigest);
+        lock (_catalogLock)
+        {
+            _catalog ??= projected;
+            return _catalog;
+        }
+    }
+
+    public ValueTask<PhotonCadCommittedVerificationResult> VerifyCommittedAsync(
+        PhotonCadCanonicalProject project,
+        IReadOnlyList<PhotonCadCommittedVerificationCheck> checks,
+        CancellationToken cancellationToken = default) =>
+        CommittedVerification.VerifyAsync(project, checks, _runner, cancellationToken);
 
     public PhotonCadIndustrialBoundMutation BindBox(
         string requestId,
@@ -109,6 +134,180 @@ public sealed class PhotonCadIndustrialProviderRuntime
                 PartNumber(partNumber),
                 "Create industrial cylinder"));
 
+    public async ValueTask<PhotonCadIndustrialBoundMutation> BindCatalogItemAsync(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        string entityId,
+        string capabilityId,
+        IReadOnlyDictionary<string, PhotonCadIndustrialCatalogInputValue?> inputs,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        var catalog = await GetCatalogAsync(cancellationToken).ConfigureAwait(false);
+        var definition = catalog.RequireDefinition(capabilityId);
+        if (inputs.Count > definition.Parameters.Count
+            || inputs.Keys.Any(key => !definition.Parameters.ContainsKey(key)))
+            throw new ArgumentException("industrial_catalog_input_set_invalid", nameof(inputs));
+        var values = new List<IndustrialCatalogParameterValue>();
+        foreach (var parameter in definition.Parameters.Values.OrderBy(value => value.Public.Id, StringComparer.Ordinal))
+        {
+            inputs.TryGetValue(parameter.Public.Id, out var supplied);
+            supplied ??= parameter.Public.DefaultValue;
+            if (supplied is null)
+            {
+                if (parameter.Public.Required)
+                    throw new ArgumentException("industrial_catalog_required_input_missing", nameof(inputs));
+                continue;
+            }
+            var raw = CatalogProjection.Resolve(parameter, supplied);
+            var sync = supplied.Kind switch
+            {
+                PhotonCadIndustrialParameterKind.Number => PhotonCadSyncInputValue.Number(supplied.NumberValue),
+                PhotonCadIndustrialParameterKind.Integer => PhotonCadSyncInputValue.Integer(supplied.IntegerValue),
+                PhotonCadIndustrialParameterKind.Boolean => PhotonCadSyncInputValue.Boolean(supplied.BooleanValue),
+                PhotonCadIndustrialParameterKind.Choice => PhotonCadSyncInputValue.Choice(supplied.ChoiceToken),
+                _ => throw new ArgumentException("industrial_catalog_input_kind_invalid", nameof(inputs)),
+            };
+            values.Add(new IndustrialCatalogParameterValue(parameter.Public.Id, raw, sync));
+        }
+        var partNumber = PartNumber($"BDW-{definition.Public.CapabilityId[4..16].ToUpperInvariant()}");
+        return Bind(
+            requestId,
+            sessionId,
+            projectId,
+            baseRevision,
+            entityId,
+            partNumber,
+            new IndustrialCatalogCommand(
+                catalog.Digest,
+                definition.Public.CapabilityId,
+                values.ToArray(),
+                entityId,
+                partNumber,
+                $"Create {definition.Public.Title}",
+                definition.Public.Title));
+    }
+
+    /// <summary>
+    /// Binds one already validated, byte-preserved generic STEP Part-21 part to the same canonical
+    /// transaction used by generated parts. The imported STEP bytes remain authoritative while the
+    /// exact industrial image is used only to create the complete-project GLB preview.
+    /// </summary>
+    public PhotonCadIndustrialBoundMutation BindImportedStepPart(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        string entityId,
+        string partNumber,
+        string displayName,
+        ReadOnlyMemory<byte> stepContent,
+        string stepContentDigest,
+        PhotonCadProviderEvidence importEvidence)
+    {
+        var command = new ImportedStepPartCommand(
+            entityId,
+            PartNumber(partNumber),
+            DisplayName(displayName),
+            stepContent,
+            stepContentDigest,
+            importEvidence);
+        var request = new PhotonCadRuntimeSyncRequest(
+            requestId,
+            sessionId,
+            projectId,
+            baseRevision,
+            ImportedStepPartCommand.Capability,
+            PhotonCadOperationModeV1.Scratch,
+            [
+                new PhotonCadSyncOperationInput("sourceDigest", PhotonCadSyncInputValue.Text(command.StepContentDigest)),
+                new PhotonCadSyncOperationInput("sourceByteLength", PhotonCadSyncInputValue.Integer(command.StepContent.Length)),
+            ],
+            [entityId]);
+        var provider = new ImportedStepMutationProvider(request, command, _runner, _evidence);
+        return new PhotonCadIndustrialBoundMutation(request, provider, new ImportedStepMutationCompensator(provider));
+    }
+
+    public PhotonCadAssemblyBoundMutation BindAssemblyPlace(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        string occurrenceId,
+        string sourceEntityId,
+        string parentOccurrenceId,
+        IReadOnlyList<double> transform) => BindAssembly(
+            requestId,
+            sessionId,
+            projectId,
+            baseRevision,
+            new AssemblyMutationCommand(
+                AssemblyMutationKind.Place,
+                occurrenceId,
+                sourceEntityId,
+                parentOccurrenceId,
+                transform));
+
+    public PhotonCadAssemblyBoundMutation BindAssemblyTransform(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        string occurrenceId,
+        string sourceEntityId,
+        IReadOnlyList<double> transform) => BindAssembly(
+            requestId,
+            sessionId,
+            projectId,
+            baseRevision,
+            new AssemblyMutationCommand(
+                AssemblyMutationKind.Transform,
+                occurrenceId,
+                sourceEntityId,
+                parentOccurrenceId: null,
+                transform));
+
+    public PhotonCadAssemblyBoundMutation BindAssemblyRemove(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        string occurrenceId,
+        string sourceEntityId) => BindAssembly(
+            requestId,
+            sessionId,
+            projectId,
+            baseRevision,
+            new AssemblyMutationCommand(
+                AssemblyMutationKind.Remove,
+                occurrenceId,
+                sourceEntityId,
+                parentOccurrenceId: null,
+                MutationMapperV1.IdentityTransform));
+
+    private PhotonCadAssemblyBoundMutation BindAssembly(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        AssemblyMutationCommand command)
+    {
+        var request = new PhotonCadRuntimeSyncRequest(
+            requestId,
+            sessionId,
+            projectId,
+            baseRevision,
+            command.CapabilityId,
+            PhotonCadOperationModeV1.Scratch,
+            command.Inputs(),
+            [command.SourceEntityId]);
+        return new PhotonCadAssemblyBoundMutation(
+            request,
+            new AssemblyMutationProvider(request, command, _runner, _evidence));
+    }
+
     private PhotonCadIndustrialBoundMutation Bind(
         string requestId,
         string sessionId,
@@ -116,47 +315,31 @@ public sealed class PhotonCadIndustrialProviderRuntime
         long baseRevision,
         string entityId,
         string partNumber,
-        IndustrialPrimitiveCommand command)
+        IIndustrialPartCommand command)
     {
         _ = PartNumber(partNumber);
-        var capabilityId = command.Kind == IndustrialPrimitiveKind.Box
-            ? "geometry.box.create.v1"
-            : "geometry.cylinder.create.v1";
-        var inputs = command.Kind == IndustrialPrimitiveKind.Box
-            ? new[]
-            {
-                new PhotonCadSyncOperationInput("lengthMm", PhotonCadSyncInputValue.Number(command.LengthMm)),
-                new PhotonCadSyncOperationInput("widthMm", PhotonCadSyncInputValue.Number(command.WidthMm)),
-                new PhotonCadSyncOperationInput("heightMm", PhotonCadSyncInputValue.Number(command.HeightMm)),
-            }
-            : new[]
-            {
-                new PhotonCadSyncOperationInput("radiusMm", PhotonCadSyncInputValue.Number(command.RadiusMm)),
-                new PhotonCadSyncOperationInput("heightMm", PhotonCadSyncInputValue.Number(command.HeightMm)),
-            };
         var request = new PhotonCadRuntimeSyncRequest(
             requestId,
             sessionId,
             projectId,
             baseRevision,
-            capabilityId,
+            command.CapabilityId,
             PhotonCadOperationModeV1.Scratch,
-            inputs,
+            command.SyncInputs,
             [entityId]);
-        var provider = new SealedMutationProvider(request, Copy(command), _runner, _evidence);
+        var provider = new SealedMutationProvider(request, command, _runner, _evidence);
         var compensator = new Compensator(provider);
         return new PhotonCadIndustrialBoundMutation(request, provider, compensator);
     }
 
-    private static IndustrialPrimitiveCommand Copy(IndustrialPrimitiveCommand value) => new(
-        value.Kind,
-        value.LengthMm,
-        value.WidthMm,
-        value.HeightMm,
-        value.RadiusMm,
-        value.EntityId,
-        value.PartNumber,
-        value.Label);
+    private async ValueTask<byte[]> LoadCatalogBytesAsync(CancellationToken cancellationToken)
+    {
+        await using var invocation = await _runner.ExecuteAsync(
+            ProtocolV1.SerializeCatalog(),
+            [],
+            cancellationToken).ConfigureAwait(false);
+        return ProtocolV1.ParseCatalogResponse(invocation.Response, _evidence.CatalogDigest);
+    }
 
     private static double Dimension(double value, string field)
     {
@@ -172,12 +355,19 @@ public sealed class PhotonCadIndustrialProviderRuntime
             throw new ArgumentException("part_number_invalid", nameof(value));
         return value;
     }
+
+    private static string DisplayName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 256 || value.Any(char.IsControl))
+            throw new ArgumentException("display_name_invalid", nameof(value));
+        return value.Trim();
+    }
 }
 
 internal sealed class SealedMutationProvider : IPhotonCadSealedMutationProvider
 {
     private readonly PhotonCadRuntimeSyncRequest _boundRequest;
-    private readonly IndustrialPrimitiveCommand _command;
+    private readonly IIndustrialPartCommand _command;
     private readonly IIndustrialContainerRunner _runner;
     private readonly VerifiedIndustrialEvidence _evidence;
     private int _started;
@@ -186,7 +376,7 @@ internal sealed class SealedMutationProvider : IPhotonCadSealedMutationProvider
 
     internal SealedMutationProvider(
         PhotonCadRuntimeSyncRequest boundRequest,
-        IndustrialPrimitiveCommand command,
+        IIndustrialPartCommand command,
         IIndustrialContainerRunner runner,
         VerifiedIndustrialEvidence evidence)
     {
@@ -205,12 +395,12 @@ internal sealed class SealedMutationProvider : IPhotonCadSealedMutationProvider
         if (Volatile.Read(ref _revoked) != 0) throw Failure("industrial_provider_revoked");
         RequireBoundRequest(request);
         var priorPreviewDigest = RequirePriorPreviewDigest(request);
-        var primitivePayload = ProtocolV1.SerializePrimitive(_command);
+        var primitivePayload = _command.SerializeRequest();
         byte[] step;
         IndustrialPrimitiveResponse primitive;
         await using (var invocation = await _runner.ExecuteAsync(primitivePayload, [], cancellationToken).ConfigureAwait(false))
         {
-            primitive = ProtocolV1.ParsePrimitiveResponse(invocation.Response, _command);
+            primitive = _command.ParseResponse(invocation.Response);
             step = await ArtifactReader.ReadSealedAsync(
                 invocation.OutputDirectory,
                 "model.step",

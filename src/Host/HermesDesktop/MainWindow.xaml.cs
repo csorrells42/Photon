@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using PhotonCadProjects.Windows;
+using HermesDeveloperServices;
 
 namespace HermesDesktop;
 
@@ -234,6 +235,8 @@ public partial class MainWindow : Window
             response.StatusCode,
             response.Reason,
             serializedHeaders);
+        response.Headers.TryGetValue("Content-Length", out var contentLength);
+        DesktopLog.Write($"Photon CAD preview resource response: status={response.StatusCode}, length={contentLength ?? "unknown"}");
     }
 
     private async Task<bool> IsWorkbenchAvailableAsync()
@@ -492,6 +495,99 @@ public partial class MainWindow : Window
                         GetString(document.RootElement, "sessionId"),
                         GetString(document.RootElement, "documentPath"));
                     break;
+                case "developerServices.language.request":
+                    await _developerServicesBridge.RunLanguageOperationAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "sessionId"),
+                        GetInteger(document.RootElement, "revision", -1),
+                        GetString(document.RootElement, "documentPath"),
+                        GetString(document.RootElement, "operation"),
+                        GetInteger(document.RootElement, "line", -1),
+                        GetInteger(document.RootElement, "character", -1),
+                        GetInteger(document.RootElement, "endLine", -1),
+                        GetInteger(document.RootElement, "endCharacter", -1),
+                        GetString(document.RootElement, "newName"),
+                        GetBoolean(document.RootElement, "includeDeclaration", true));
+                    break;
+                case "developerServices.language.cancel":
+                    _developerServicesBridge.CancelLanguageOperation(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "targetRequestId"));
+                    break;
+                case "developerServices.debug.targets":
+                    await _developerServicesBridge.DescribeDebugTargetsAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "configuration"));
+                    break;
+                case "developerServices.debug.launch":
+                    await _developerServicesBridge.LaunchDebugAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "programPath"),
+                        GetString(document.RootElement, "workingDirectory"),
+                        GetBoundedStringArray(document.RootElement, "arguments", 128, 4_096, 32 * 1024),
+                        GetBoolean(document.RootElement, "stopAtEntry", false));
+                    break;
+                case "developerServices.debug.attach":
+                    await _developerServicesBridge.AttachDebugAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetInteger(document.RootElement, "processId", -1));
+                    break;
+                case "developerServices.debug.setBreakpoints":
+                    await _developerServicesBridge.SetDebugBreakpointsAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "sourcePath"),
+                        GetDebugBreakpoints(document.RootElement));
+                    break;
+                case "developerServices.debug.configurationDone":
+                    await _developerServicesBridge.ConfigurationDoneDebugAsync(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "developerServices.debug.threads":
+                    await _developerServicesBridge.GetDebugThreadsAsync(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "developerServices.debug.stackTrace":
+                    await _developerServicesBridge.GetDebugStackTraceAsync(
+                        GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"),
+                        GetInteger(document.RootElement, "threadId", -1), GetInteger(document.RootElement, "startFrame", -1), GetInteger(document.RootElement, "levels", -1));
+                    break;
+                case "developerServices.debug.scopes":
+                    await _developerServicesBridge.GetDebugScopesAsync(
+                        GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetInteger(document.RootElement, "frameId", -1));
+                    break;
+                case "developerServices.debug.variables":
+                    await _developerServicesBridge.GetDebugVariablesAsync(
+                        GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"),
+                        GetInteger(document.RootElement, "variablesReference", -1), GetInteger(document.RootElement, "start", -1), GetInteger(document.RootElement, "count", -1));
+                    break;
+                case "developerServices.debug.evaluate":
+                    await _developerServicesBridge.EvaluateDebugAsync(
+                        GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "expression"), GetInteger(document.RootElement, "frameId", -1), GetString(document.RootElement, "context"));
+                    break;
+                case "developerServices.debug.continue":
+                    await _developerServicesBridge.ContinueDebugAsync(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetInteger(document.RootElement, "threadId", -1));
+                    break;
+                case "developerServices.debug.stepOver":
+                    await _developerServicesBridge.StepOverDebugAsync(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetInteger(document.RootElement, "threadId", -1));
+                    break;
+                case "developerServices.debug.stepInto":
+                    await _developerServicesBridge.StepIntoDebugAsync(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetInteger(document.RootElement, "threadId", -1));
+                    break;
+                case "developerServices.debug.stepOut":
+                    await _developerServicesBridge.StepOutDebugAsync(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetInteger(document.RootElement, "threadId", -1));
+                    break;
+                case "developerServices.debug.disconnect":
+                    await _developerServicesBridge.DisconnectDebugAsync(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "developerServices.debug.cancel":
+                    _developerServicesBridge.CancelDebugOperation(
+                        GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetString(document.RootElement, "targetRequestId"));
+                    break;
                 case "developerServices.languageTooling.inspect":
                     await _developerServicesBridge.InspectLanguageToolingProviderAsync(
                         GetInteger(document.RootElement, "version", 0),
@@ -505,6 +601,20 @@ public partial class MainWindow : Window
                         GetString(document.RootElement, "providerId"),
                         GetString(document.RootElement, "projectPath"));
                     break;
+                case "developerServices.languageTooling.session.start":
+                    await _developerServicesBridge.StartLanguageToolingSessionAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "providerId"),
+                        GetString(document.RootElement, "documentPath"));
+                    break;
+                case "developerServices.languageTooling.session.stop":
+                    await _developerServicesBridge.StopLanguageToolingSessionAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "providerId"),
+                        GetString(document.RootElement, "sessionId"));
+                    break;
                 case "developerServices.languageTooling.compile":
                     await _developerServicesBridge.CompileLanguageToolingAsync(
                         GetInteger(document.RootElement, "version", 0),
@@ -513,6 +623,14 @@ public partial class MainWindow : Window
                         GetString(document.RootElement, "targetPath"),
                         GetString(document.RootElement, "mode"),
                         GetString(document.RootElement, "boardFqbn"));
+                    break;
+                case "developerServices.languageTooling.tests":
+                    await _developerServicesBridge.RunLanguageToolingTestsAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "providerId"),
+                        GetString(document.RootElement, "targetPath"),
+                        GetString(document.RootElement, "selection"));
                     break;
                 case "developerServices.languageTooling.cancel":
                     _developerServicesBridge.CancelLanguageTooling(
@@ -601,6 +719,7 @@ public partial class MainWindow : Window
                 case "photonCad.project.saveAs":
                 case "photonCad.project.close":
                 case "photonCad.project.cancel":
+                case "photonCad.step.import":
                 case "photonCad.commercial.bom.review":
                 case "photonCad.commercial.bom.commit":
                 case "photonCad.commercial.bom.discard":
@@ -1050,6 +1169,11 @@ public partial class MainWindow : Window
     private static int GetInteger(JsonElement root, string name, int fallback) =>
         root.TryGetProperty(name, out var value) && value.TryGetInt32(out var parsed) ? parsed : fallback;
 
+    private static bool GetBoolean(JsonElement root, string name, bool fallback) =>
+        root.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
+            : fallback;
+
     private static string? GetString(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
@@ -1063,6 +1187,38 @@ public partial class MainWindow : Window
             if (item.ValueKind != JsonValueKind.String || item.GetString() is not { Length: > 0 and <= 128 } text)
                 return [];
             result.Add(text);
+        }
+        return [.. result];
+    }
+
+    private static string[] GetBoundedStringArray(JsonElement root, string name, int maximumItems, int maximumItemCharacters, int maximumTotalCharacters)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Array || value.GetArrayLength() > maximumItems) return [];
+        var result = new List<string>(value.GetArrayLength());
+        var total = 0;
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || item.GetString() is not { } text || text.Length > maximumItemCharacters || text.Contains('\0')) return [];
+            total += text.Length;
+            if (total > maximumTotalCharacters) return [];
+            result.Add(text);
+        }
+        return [.. result];
+    }
+
+    private static DapSourceBreakpoint[] GetDebugBreakpoints(JsonElement root)
+    {
+        if (!root.TryGetProperty("breakpoints", out var value) || value.ValueKind != JsonValueKind.Array || value.GetArrayLength() > 2_048) return [];
+        var result = new List<DapSourceBreakpoint>(value.GetArrayLength());
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object) return [];
+            result.Add(new DapSourceBreakpoint(
+                GetInteger(item, "line", -1),
+                GetInteger(item, "column", -1) is var column && column > 0 ? column : null,
+                GetString(item, "condition"),
+                GetString(item, "hitCondition"),
+                GetString(item, "logMessage")));
         }
         return [.. result];
     }

@@ -5,25 +5,31 @@ public static class PythonLanguageToolingProvider
     public static PythonLanguageToolingComponents CreateFailClosed(string workspaceRoot)
     {
         var authority = new UnavailablePythonToolingAuthority();
-        return new(new PythonToolingEvidenceSource(authority), new PythonLanguageToolingOperationHandler(authority, workspaceRoot));
+        return new(new PythonToolingEvidenceSource(authority), new PythonLanguageToolingOperationHandler(authority, null, workspaceRoot));
     }
 
     public static PythonLanguageToolingComponents CreateReceiptBound(
         string workspaceRoot,
-        IPythonToolingAuthority authority)
+        IPythonToolingAuthority authority,
+        IPythonTestAuthority? testAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(authority);
-        return new(new PythonToolingEvidenceSource(authority), new PythonLanguageToolingOperationHandler(authority, workspaceRoot));
+        return new(
+            new PythonToolingEvidenceSource(authority, testAuthority),
+            new PythonLanguageToolingOperationHandler(authority, testAuthority, workspaceRoot));
     }
 }
 
-public sealed class PythonToolingEvidenceSource(IPythonToolingAuthority authority) : ILanguageToolingEvidenceSource
+public sealed class PythonToolingEvidenceSource(
+    IPythonToolingAuthority authority,
+    IPythonTestAuthority? testAuthority = null) : ILanguageToolingEvidenceSource
 {
     private readonly IPythonToolingAuthority _authority = authority ?? throw new ArgumentNullException(nameof(authority));
+    private readonly IPythonTestAuthority? _testAuthority = testAuthority;
 
     public string ProviderId => LanguageToolingCatalog.Python;
 
-    public IReadOnlyCollection<string> CapabilityIds { get; } = ["python.project", "python.lsp", "python.compiler", "python.tests"];
+    public IReadOnlyCollection<string> CapabilityIds { get; } = ["python.project", "python.compiler", "python.tests"];
 
     public async ValueTask<IReadOnlyList<LanguageToolingCapabilityStatus>> InspectAsync(
         string workspaceRoot,
@@ -39,13 +45,25 @@ public sealed class PythonToolingEvidenceSource(IPythonToolingAuthority authorit
         {
             var receipt = await _authority.VerifyAsync(cancellationToken).ConfigureAwait(false);
             ArgumentNullException.ThrowIfNull(receipt);
+            if (_testAuthority is not null)
+            {
+                var testReceipt = await _testAuthority.VerifyAsync(cancellationToken).ConfigureAwait(false);
+                ArgumentNullException.ThrowIfNull(testReceipt);
+                if (!string.Equals(testReceipt.ImmutableRuntimeId, receipt.ImmutableRuntimeId, StringComparison.Ordinal)
+                    || !string.Equals(testReceipt.ReceiptSha256, receipt.ReceiptSha256, StringComparison.Ordinal))
+                    throw new PythonToolingAuthorityException(
+                        "python-test-runtime-binding-mismatch",
+                        "The Python test authority is not bound to the verified syntax runtime.");
+            }
             return
             [
                 project,
-                Unavailable("python.lsp", "python-lsp-not-provisioned", "No receipt-bound Python language server is provisioned."),
                 new("python.compiler", LanguageToolingCapabilityState.Available, "verified-pinned-runtime",
                     "The trusted host verified an immutable receipt-bound Python syntax authority.", receipt.PythonVersion),
-                Unavailable("python.tests", "python-tests-not-provisioned", "Python test execution is unavailable because it would execute workspace code."),
+                _testAuthority is null
+                    ? Unavailable("python.tests", "python-tests-not-provisioned", "No explicit Python test authority is provisioned.")
+                    : new("python.tests", LanguageToolingCapabilityState.Available, "verified-pinned-test-runtime",
+                        "The trusted host verified an explicit Python unittest authority.", receipt.PythonVersion),
             ];
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -75,17 +93,22 @@ public sealed class PythonToolingEvidenceSource(IPythonToolingAuthority authorit
 public sealed class PythonLanguageToolingOperationHandler : ILanguageToolingOperationHandler
 {
     private readonly IPythonToolingAuthority _authority;
+    private readonly IPythonTestAuthority? _testAuthority;
     private readonly PythonProjectInspector _inspector;
 
-    public PythonLanguageToolingOperationHandler(IPythonToolingAuthority authority, string workspaceRoot)
+    public PythonLanguageToolingOperationHandler(
+        IPythonToolingAuthority authority,
+        IPythonTestAuthority? testAuthority,
+        string workspaceRoot)
     {
         _authority = authority ?? throw new ArgumentNullException(nameof(authority));
+        _testAuthority = testAuthority;
         _inspector = new PythonProjectInspector(workspaceRoot);
     }
 
     public string ProviderId => LanguageToolingCatalog.Python;
 
-    public IReadOnlyCollection<string> Operations { get; } = ["inspect-project", "compile"];
+    public IReadOnlyCollection<string> Operations { get; } = ["inspect-project", "compile", "run-tests"];
 
     public async ValueTask<LanguageToolingOperationResult> ExecuteAsync(
         LanguageToolingHostRequest request,
@@ -98,9 +121,53 @@ public sealed class PythonLanguageToolingOperationHandler : ILanguageToolingOper
         {
             InspectLanguageToolingProjectRequest inspect => InspectProject(inspect),
             CompileLanguageToolingRequest compile => await CheckSyntaxAsync(compile, cancellationToken).ConfigureAwait(false),
+            RunLanguageToolingTestsRequest tests => await RunTestsAsync(tests, cancellationToken).ConfigureAwait(false),
             _ => throw new LanguageToolingRequestException(
-                "operation-mismatch", "The Python handler accepts only project inspection and syntax-check requests."),
+                "operation-mismatch", "The Python handler accepts only project inspection, syntax-check, and test requests."),
         };
+    }
+
+    private async ValueTask<LanguageToolingOperationResult> RunTestsAsync(
+        RunLanguageToolingTestsRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (_testAuthority is null)
+            return new(false, "python-tests-not-provisioned", "No explicit Python test authority is provisioned.");
+        try
+        {
+            var inspection = _inspector.Inspect(request.TargetPath);
+            var receipt = await _testAuthority.VerifyAsync(cancellationToken).ConfigureAwait(false);
+            var outcome = await _testAuthority.RunTestsAsync(
+                receipt,
+                inspection.SourcePaths.Count == 1 ? inspection.SourcePaths[0] : request.TargetPath,
+                request.Selection,
+                cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(outcome.ImmutableRuntimeId, receipt.ImmutableRuntimeId, StringComparison.Ordinal)
+                || !string.Equals(outcome.ReceiptSha256, receipt.ReceiptSha256, StringComparison.Ordinal))
+                throw new PythonToolingAuthorityException("python-runtime-binding-mismatch", "The Python test result was not bound to the verified runtime receipt.");
+            if (outcome.TestsRun < 0 || outcome.Failures < 0 || outcome.Errors < 0 || outcome.Skipped < 0
+                || outcome.Failures + outcome.Errors > outcome.TestsRun)
+                throw new PythonToolingAuthorityException("python-test-result-invalid", "The Python test authority returned invalid counters.");
+            if (outcome.TestsRun == 0)
+                return new(false, "python-no-tests", "The Python unittest authority found no tests in the selected target.");
+            return new(
+                outcome.Succeeded,
+                outcome.Succeeded ? "ok" : "python-tests-failed",
+                outcome.Succeeded
+                    ? $"Python unittest passed {outcome.TestsRun} test{(outcome.TestsRun == 1 ? string.Empty : "s")}."
+                    : $"Python unittest ran {outcome.TestsRun} tests with {outcome.Failures} failure{(outcome.Failures == 1 ? string.Empty : "s")} and {outcome.Errors} error{(outcome.Errors == 1 ? string.Empty : "s")}.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception) when (exception is PythonToolingAuthorityException
+            or TrustedToolchainValidationException or IOException or UnauthorizedAccessException
+            or ArgumentException or System.Security.SecurityException
+            or System.Security.Cryptography.CryptographicException)
+        {
+            var code = exception is PythonToolingAuthorityException authorityException
+                ? authorityException.Code
+                : "python-tests-failed";
+            return new(false, code, "The explicit Python test authority could not complete safely.");
+        }
     }
 
     private LanguageToolingOperationResult InspectProject(InspectLanguageToolingProjectRequest request)

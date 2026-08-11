@@ -38,7 +38,10 @@
     <ProjectReference Include="..\HermesCredentialBroker.Runtime\HermesCredentialBroker.Runtime.csproj" />
     <ProjectReference Include="..\PhotonCadRuntime\PhotonCadRuntime.csproj" />
     <ProjectReference Include="..\PhotonCadRuntime.IndustrialProvider\PhotonCadRuntime.IndustrialProvider.csproj" />
+    <ProjectReference Include="..\PhotonCadFileConversion\PhotonCadFileConversion.csproj" />
     <ProjectReference Include="..\PhotonCadPreviews\PhotonCadPreviews.csproj" />
+    <ProjectReference Include="..\PhotonCadVerification\PhotonCadVerification.csproj" />
+    <ProjectReference Include="..\PhotonCadArtifacts\PhotonCadArtifacts.csproj" />
     <ProjectReference Include="..\PhotonCadProjects.Codec\PhotonCadProjects.Codec.csproj" />
     <ProjectReference Include="..\PhotonCadProjects.RuntimeSync\PhotonCadProjects.RuntimeSync.csproj" />
     <ProjectReference Include="..\PhotonCadProjects.Windows\PhotonCadProjects.Windows.csproj" />

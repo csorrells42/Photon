@@ -30,6 +30,7 @@ function document(dirty = false): PhotonCadProjectDocument {
     snapshot: {
       contractVersion: 1, sessionId: 'session:1', projectId: 'project:gearbox', revision: 4, title: 'Gearbox', units: 'millimeter', mode: 'canonical',
       entities: [{ id: 'part:shaft', parentId: null, kind: 'part', name: 'Shaft', visible: true, suppressed: false }],
+      occurrences: [],
       operations: [], issues: [], dirty,
     },
     contentDigest: digestA,
@@ -91,6 +92,24 @@ describe('Photon CAD project protocol normalization', () => {
     malformed.snapshot.entities = [{ id: 'part:shaft', kind: 'part', name: 'Shaft', visible: true, suppressed: false }]
     expect(normalizePhotonCadProjectDocument(malformed)).toBeNull()
     expect(normalizePhotonCadProjectHostFrame(saveFrame('save:1', { atomic: false }))).toBeNull()
+  })
+
+  it('projects explicit occurrence hierarchy and transform data through persisted documents', () => {
+    const value = document()
+    value.snapshot.entities.push({
+      id: 'occurrence:shaft', parentId: null, kind: 'occurrence', name: 'SHAFT-001', visible: true, suppressed: false,
+    })
+    value.snapshot.occurrences = [{
+      occurrenceId: 'occurrence:shaft', parentOccurrenceId: null, partNumber: 'SHAFT-001', sourceEntityId: 'part:shaft',
+      transform: [0, -1, 0, 125, 1, 0, 0, -30, 0, 0, 1, 8, 0, 0, 0, 1],
+    }]
+    const normalized = normalizePhotonCadProjectDocument(value)
+    expect(normalized?.snapshot.occurrences).toEqual(value.snapshot.occurrences)
+    expect(normalized?.snapshot.entities.at(-1)?.id).toBe('occurrence:shaft')
+
+    const mismatched = structuredClone(value)
+    mismatched.snapshot.entities.at(-1)!.name = 'WRONG'
+    expect(normalizePhotonCadProjectDocument(mismatched)).toBeNull()
   })
 
   it('rejects picker results that expose a filesystem path instead of an opaque selection', () => {

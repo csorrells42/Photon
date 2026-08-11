@@ -12,6 +12,7 @@ describe('PhotonCadDesktopPreviewSurface', () => {
       receipt: null,
       selectedEntityIds: [],
       stage: 'design',
+      acceptHydratedReceipt: () => false,
     }} />)
     expect(markup).toContain('No verified preview asset is available.')
     expect(markup).not.toContain('blob:')

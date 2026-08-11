@@ -65,9 +65,20 @@ export function WorkspaceSearchPanel({ controller, heading = 'Search' }: Workspa
       : state.attribution === 'literal'
         ? 'Literal results'
         : ''
+  const stateHint = state.status === 'searching'
+    ? 'Searching workspace files and preparing matching evidence.'
+    : state.status === 'empty'
+      ? 'No matching workspace evidence was found for this query.'
+      : state.status === 'unavailable'
+        ? 'This search mode needs a configured provider before it can run.'
+        : state.status === 'error'
+          ? 'The search stopped safely. Refine the query or try again.'
+          : state.status === 'cancelled'
+            ? 'The search was cancelled. Update the query when you are ready.'
+            : 'Choose Literal for exact text or Semantic for intent-based search.'
 
   return (
-    <section className="workspace-search" aria-label="Workspace search" aria-busy={state.status === 'searching'}>
+    <section className={`workspace-search workspace-search--${state.status}`} aria-label="Workspace search" aria-busy={state.status === 'searching'}>
       <header className="workspace-search__header">
         <div>
           <p className="workspace-search__eyebrow">Workspace</p>
@@ -112,21 +123,26 @@ export function WorkspaceSearchPanel({ controller, heading = 'Search' }: Workspa
             : <button type="submit" disabled={!state.query.trim() || controller.availabilityFor(state.mode).state !== 'available'}>Search</button>}
         </div>
 
-        <div className="workspace-search__modes" role="group" aria-label="Search mode">
-          <button
-            type="button"
-            aria-pressed={state.mode === 'literal'}
-            disabled={literalAvailability.state !== 'available'}
-            title={literalAvailability.state === 'available' ? 'Exact text search' : 'Literal search is unavailable'}
-            onClick={() => controller.setMode('literal')}
-          >Literal</button>
-          <button
-            type="button"
-            aria-pressed={state.mode === 'semantic'}
-            disabled={semanticAvailability.state !== 'available'}
-            title={semanticAvailability.state === 'available' ? 'Intent-based search' : 'Semantic search is unavailable'}
-            onClick={() => controller.setMode('semantic')}
-          >Semantic</button>
+        <div className="workspace-search__modes" role="group" aria-labelledby={`${listId}-modes`}>
+          <span id={`${listId}-modes`} className="workspace-search__modes-label">Search mode</span>
+          <div className="workspace-search__mode-options">
+            <button
+              type="button"
+              className="workspace-search__mode"
+              aria-pressed={state.mode === 'literal'}
+              disabled={literalAvailability.state !== 'available'}
+              title={literalAvailability.state === 'available' ? 'Exact text search' : 'Literal search is unavailable'}
+              onClick={() => controller.setMode('literal')}
+            ><span>Literal</span><small>Exact text</small></button>
+            <button
+              type="button"
+              className="workspace-search__mode"
+              aria-pressed={state.mode === 'semantic'}
+              disabled={semanticAvailability.state !== 'available'}
+              title={semanticAvailability.state === 'available' ? 'Intent-based search' : 'Semantic search is unavailable'}
+              onClick={() => controller.setMode('semantic')}
+            ><span>Semantic</span><small>Intent-based</small></button>
+          </div>
         </div>
       </form>
 
@@ -142,8 +158,9 @@ export function WorkspaceSearchPanel({ controller, heading = 'Search' }: Workspa
       {state.results.length > 0 && (
         <div className="workspace-search__results-wrap">
           <div className="workspace-search__summary">
-            <span>{attribution}</span>
-            {state.truncated && <span>Showing bounded results</span>}
+            <span className="workspace-search__result-count">{state.results.length} {state.results.length === 1 ? 'result' : 'results'}</span>
+            {attribution && <span>{attribution}</span>}
+            {state.truncated && <span className="workspace-search__bounded">Showing bounded results</span>}
           </div>
           <div id={listId} className="workspace-search__results" role="listbox" aria-label="Search results">
             {state.results.map((result, index) => (
@@ -170,8 +187,10 @@ export function WorkspaceSearchPanel({ controller, heading = 'Search' }: Workspa
                   }
                 }}
               >
-                <span className="workspace-search__path">{result.path}</span>
-                <span className="workspace-search__position">Ln {result.line}, Col {result.column}</span>
+                <span className="workspace-search__result-heading">
+                  <span className="workspace-search__path">{result.path}</span>
+                  <span className="workspace-search__position">Ln {result.line}, Col {result.column}</span>
+                </span>
                 <code className="workspace-search__preview">{highlightedPreview(result.preview, result.matches)}</code>
               </button>
             ))}
@@ -179,9 +198,10 @@ export function WorkspaceSearchPanel({ controller, heading = 'Search' }: Workspa
         </div>
       )}
 
-      {state.status === 'idle' && !state.results.length && (
-        <div className="workspace-search__empty" aria-hidden="true">
-          <span>⌕</span><p>Literal search finds exact text. Semantic search accepts intent when a trusted provider is available.</p>
+      {!state.results.length && (
+        <div className={`workspace-search__state workspace-search__state--${state.status}`} aria-hidden="true">
+          <span className="workspace-search__state-mark" />
+          <p>{stateHint}</p>
         </div>
       )}
     </section>

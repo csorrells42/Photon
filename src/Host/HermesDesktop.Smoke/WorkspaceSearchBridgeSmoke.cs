@@ -84,8 +84,11 @@ internal static class WorkspaceSearchBridgeSmoke
         await bridge.SearchSemanticAsync(1, "semantic:smoke", "find SessionController", 20, 5, 256);
         var result = frames.Single(frame => Text(frame, "type") == "workspaceSearch.semantic.result");
         var payload = result.GetProperty("results").EnumerateArray().ToArray();
-        if (payload.Length != 1 || Text(payload[0], "path") != "src/SessionController.cs"
+        if (payload.Length != 2 || Text(payload[0], "path") != "src/SessionController.cs"
             || payload[0].GetProperty("line").GetInt32() != 1
+            || payload[0].GetProperty("column").GetInt32() < 1
+            || payload[1].GetProperty("line").GetInt32() != 2
+            || payload[1].GetProperty("column").GetInt32() != 1
             || handler.ObservedEndpoint != SerenaWorkspaceSearchClient.Endpoint
             || !string.Equals(handler.ObservedHost, "localhost:9121", StringComparison.Ordinal)
             || handler.ToolName != "find_symbol"
@@ -257,7 +260,7 @@ internal static class WorkspaceSearchBridgeSmoke
                 var parameters = document.RootElement.GetProperty("params");
                 ToolName = Text(parameters, "name");
                 ToolArguments = parameters.GetProperty("arguments").Clone();
-                var symbols = """[{"relative_path":"src/SessionController.cs","body_location":{"start_line":0,"end_line":0}},{"relative_path":".ENV","body_location":{"start_line":0,"end_line":0}},{"relative_path":"C:/outside.cs","body_location":{"start_line":0,"end_line":0}}]""";
+                var symbols = """[{"relative_path":"src/SessionController.cs","body_location":{"start_line":0,"end_line":0}},{"relative_path":"src/SessionController.cs","body_location":{"start_line":1,"end_line":1}},{"relative_path":".ENV","body_location":{"start_line":0,"end_line":0}},{"relative_path":"C:/outside.cs","body_location":{"start_line":0,"end_line":0}}]""";
                 var resultJson = JsonSerializer.Serialize(new { content = new[] { new { type = "text", text = symbols } }, isError = false });
                 var idJson = JsonSerializer.Serialize(requestId);
                 return mutation == SerenaResponseMutation.DuplicateToolCallId

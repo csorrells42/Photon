@@ -1,4 +1,5 @@
 import { isPhotonCadDigest, isPhotonCadIdentifier } from './PhotonCadContract'
+import type { PhotonCadPreviewReceipt } from './PhotonCadContract'
 import type { PhotonCadPreviewAsset, PhotonCadPreviewAssetRequest } from './PhotonCadPreviewAsset'
 import type { PhotonCadWebViewBridge } from './DesktopPhotonCadClient'
 
@@ -38,6 +39,78 @@ export class DesktopPhotonCadPreviewClient {
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1_000 || this.timeoutMs > 120_000) {
       throw new Error('invalid-preview-timeout')
     }
+  }
+
+  hydrate(context: PreviewContext, signal: AbortSignal): Promise<PhotonCadPreviewReceipt> {
+    if (!isPhotonCadIdentifier(context.sessionId) || !isPhotonCadIdentifier(context.projectId)
+      || !Number.isSafeInteger(context.revision) || context.revision < 1) {
+      return Promise.reject(new Error('invalid-preview-hydration-request'))
+    }
+    const bridge = this.getBridge()
+    if (!bridge) return Promise.reject(new Error('preview-bridge-unavailable'))
+    const requestId = this.createRequestId()
+    if (!isPhotonCadIdentifier(requestId)) return Promise.reject(new Error('invalid-preview-request-id'))
+
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (error?: Error, value?: PhotonCadPreviewReceipt) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        signal.removeEventListener('abort', abort)
+        bridge.removeEventListener('message', receive)
+        if (error) reject(error)
+        else if (value) resolve(value)
+        else reject(new Error('preview-unavailable'))
+      }
+      const cancel = () => bridge.postMessage({
+        type: 'photonCad.preview.cancel', version: 1, contractVersion: 1,
+        requestId: `${requestId}:cancel`, targetRequestId: requestId,
+      })
+      const abort = () => { cancel(); finish(new Error('preview-request-cancelled')) }
+      const receive = (event: MessageEvent) => {
+        const frame = record(event.data)
+        const value = record(frame?.value)
+        if (frame?.type !== 'photonCad.preview.hydrate.result' || value?.requestId !== requestId) return
+        const preview = record(value.preview)
+        const bounds = record(preview?.bounds)
+        const minimum = record(bounds?.minimum)
+        const maximum = record(bounds?.maximum)
+        const revision = preview?.revision
+        const entityCount = preview?.entityCount
+        const finiteVector = (vector: Record<string, unknown> | null) => vector
+          && ['x', 'y', 'z'].every((axis) => typeof vector[axis] === 'number' && Number.isFinite(vector[axis]))
+        if (frame.version !== 1 || value.contractVersion !== 1 || value.status !== 'available' || !preview
+          || !isPhotonCadIdentifier(preview.previewId) || preview.projectId !== context.projectId
+          || revision !== context.revision || !isPhotonCadDigest(preview.contentDigest)
+          || (preview.units !== 'millimeter' && preview.units !== 'inch')
+          || !finiteVector(minimum) || !finiteVector(maximum)
+          || !Number.isSafeInteger(entityCount) || (entityCount as number) < 1) {
+          finish(new Error(value.status === 'unavailable' ? 'preview-unavailable' : 'invalid-preview-hydration-response'))
+          return
+        }
+        finish(undefined, {
+          previewId: preview.previewId as string,
+          projectId: preview.projectId as string,
+          revision: revision as number,
+          contentDigest: (preview.contentDigest as string).toLowerCase(),
+          units: preview.units as 'millimeter' | 'inch',
+          bounds: {
+            minimum: minimum as { x: number; y: number; z: number },
+            maximum: maximum as { x: number; y: number; z: number },
+          },
+          entityCount: entityCount as number,
+        })
+      }
+      const timeout = setTimeout(() => { cancel(); finish(new Error('preview-request-timeout')) }, this.timeoutMs)
+      bridge.addEventListener('message', receive)
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) { abort(); return }
+      bridge.postMessage({
+        type: 'photonCad.preview.hydrate', version: 1, contractVersion: 1,
+        requestId, sessionId: context.sessionId, projectId: context.projectId, revision: context.revision,
+      })
+    })
   }
 
   resolve(context: PreviewContext, request: PhotonCadPreviewAssetRequest, signal: AbortSignal): Promise<unknown> {

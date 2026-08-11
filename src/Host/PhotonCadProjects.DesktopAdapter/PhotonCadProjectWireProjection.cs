@@ -20,7 +20,7 @@ public sealed class PhotonCadProjectWireProjection
             workspaceHandle = document.WorkspaceHandle.Value,
             projectHandle = document.ProjectHandle.Value,
             displayName = document.DisplayName,
-            snapshot = Snapshot(state),
+            snapshot = PhotonCadSnapshotWireProjection.Snapshot(state, PhotonCadProjectContract.Version),
             contentDigest = document.ContentDigest,
             lastSavedContentDigest = document.LastSavedContentDigest,
             bomDigest = document.BomDigest,
@@ -62,59 +62,6 @@ public sealed class PhotonCadProjectWireProjection
         };
     }
 
-    private static object Snapshot(PhotonCadProjectStateV1 state) => new
-    {
-        contractVersion = PhotonCadProjectContract.Version,
-        sessionId = state.SessionId,
-        projectId = state.ProjectId,
-        revision = state.Revision,
-        title = state.Title,
-        units = Unit(state.Units),
-        mode = "canonical",
-        entities = state.Entities.Select(Entity).ToArray(),
-        operations = state.Operations.Select(Operation).ToArray(),
-        issues = state.Issues.Select(Issue).ToArray(),
-        dirty = state.Dirty,
-    };
-
-    private static object Entity(PhotonCadEntityV1 entity)
-    {
-        var value = new Dictionary<string, object?>
-        {
-            ["id"] = entity.Id,
-            ["parentId"] = entity.ParentId,
-            ["kind"] = entity.Kind.ToString().ToLowerInvariant(),
-            ["name"] = entity.Name,
-            ["visible"] = entity.Visible,
-            ["suppressed"] = entity.Suppressed,
-        };
-        if (entity.SourceCapabilityId is not null) value["sourceCapabilityId"] = entity.SourceCapabilityId;
-        return value;
-    }
-
-    private static object Operation(PhotonCadOperationV1 operation) => new
-    {
-        id = operation.Id,
-        capabilityId = operation.CapabilityId,
-        label = operation.Label,
-        createdAtUtc = Utc(operation.CreatedAtUtc),
-        state = operation.State.ToString().ToLowerInvariant(),
-    };
-
-    private static object Issue(PhotonCadIssueV1 issue) => new
-    {
-        code = issue.Code,
-        severity = issue.Severity switch
-        {
-            PhotonCadIssueSeverityV1.Information => "info",
-            PhotonCadIssueSeverityV1.Warning => "warning",
-            PhotonCadIssueSeverityV1.Error => "error",
-            _ => throw new PhotonCadProjectException("invalid_issue_severity", nameof(issue)),
-        },
-        message = issue.Message,
-        entityIds = issue.EntityIds.ToArray(),
-    };
-
     private static object BomRow(PhotonCadBomRow row) => new
     {
         partNumber = row.PartNumber,
@@ -122,13 +69,6 @@ public sealed class PhotonCadProjectWireProjection
         quantity = row.Quantity,
         unit = row.Unit == PhotonCadBomUnit.Each ? "each" : "length",
         sourceEntityId = row.SourceEntityId,
-    };
-
-    private static string Unit(PhotonCadProjectUnit unit) => unit switch
-    {
-        PhotonCadProjectUnit.Millimeter => "millimeter",
-        PhotonCadProjectUnit.Inch => "inch",
-        _ => throw new PhotonCadProjectException("invalid_project_unit", nameof(unit)),
     };
 
     private static string Utc(DateTimeOffset value) => value.ToUniversalTime()

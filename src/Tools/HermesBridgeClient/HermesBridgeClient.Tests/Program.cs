@@ -159,6 +159,25 @@ await suite.TestAsync("send uses explicit JSON on an in-memory transport only", 
     Check.Equal(1, handler.CallCount);
 });
 
+await suite.TestAsync("send uses the dedicated turn timeout instead of the short request timeout", async () =>
+{
+    var handler = new RecordingHandler(async (request, token) =>
+    {
+        Check.Equal("/v1/turns", request.RequestUri!.AbsolutePath);
+        await Task.Delay(TimeSpan.FromMilliseconds(80), token);
+        return Http.Json("{\"accepted\":true}");
+    });
+    var policy = new BridgeClientPolicy(
+        TimeSpan.FromMilliseconds(20),
+        1024,
+        256,
+        TimeSpan.FromSeconds(1));
+    using var settings = Settings();
+    using var client = new BridgeApiClient(handler, policy);
+    Check.True((await client.SendAsync(settings, "turn may outlive a health probe")).IsSuccess);
+    Check.Equal(1, handler.CallCount);
+});
+
 await suite.TestAsync("empty send is rejected before transport", async () =>
 {
     var handler = new RecordingHandler((_, _) => throw new InvalidOperationException("Transport must not run."));

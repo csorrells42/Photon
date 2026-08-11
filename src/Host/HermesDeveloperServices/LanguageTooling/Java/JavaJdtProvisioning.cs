@@ -23,6 +23,9 @@ public static class JavaJdtProvisioning
 
     internal static IJavaJdtRuntimeAuthority CreateUnavailableAuthority() =>
         new UnprovisionedJavaJdtRuntimeAuthority(CurrentBlocker);
+
+    internal static IJavaJdtRuntimeAuthority CreateReceiptBoundAuthority(string installRoot) =>
+        new ReceiptBoundJavaJdtRuntimeAuthority(installRoot);
 }
 
 public sealed record JavaJdtProvisioningBlocker(

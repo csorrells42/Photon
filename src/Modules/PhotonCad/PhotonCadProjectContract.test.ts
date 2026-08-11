@@ -29,6 +29,7 @@ function snapshot(dirty = false): PhotonCadProjectSnapshot {
     units: 'millimeter',
     mode: 'canonical',
     entities: [{ id: 'part:shaft', parentId: null, kind: 'part', name: 'Shaft', visible: true, suppressed: false }],
+    occurrences: [],
     operations: [],
     issues: [],
     dirty,
@@ -66,6 +67,19 @@ describe('PhotonCadProjectContract', () => {
     expect(validatePhotonCadProjectDocumentMetadata({ ...document(), displayName: '\\\\server\\share' })).toBe(false)
     expect(validatePhotonCadProjectDocumentMetadata({ ...document(), lastSavedRevision: 3 })).toBe(false)
     expect(validatePhotonCadProjectDocumentMetadata({ ...document(true), bom: [...document(true).bom, document(true).bom[0]] })).toBe(false)
+  })
+
+  it('carries an ordered assembly occurrence projection with an exact transform', () => {
+    const value = document()
+    value.snapshot.entities.push({
+      id: 'occurrence:shaft', parentId: null, kind: 'occurrence', name: 'SHAFT-001', visible: true, suppressed: false,
+    })
+    value.snapshot.occurrences = [{
+      occurrenceId: 'occurrence:shaft', parentOccurrenceId: null, partNumber: 'SHAFT-001', sourceEntityId: 'part:shaft',
+      transform: [0, -1, 0, 125, 1, 0, 0, -30, 0, 0, 1, 8, 0, 0, 0, 1],
+    }]
+    expect(validatePhotonCadProjectDocumentMetadata(value)).toBe(true)
+    expect(value.snapshot.occurrences[0].transform).toEqual([0, -1, 0, 125, 1, 0, 0, -30, 0, 0, 1, 8, 0, 0, 0, 1])
   })
 
   it('accepts a save only with an exact atomic revision-and-digest receipt', () => {

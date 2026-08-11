@@ -3,6 +3,7 @@ import {
   enqueueHermesPrompt,
   HERMES_PROMPT_QUEUE_ADAPTER_VERSION,
   HERMES_PROMPT_QUEUE_LIMIT,
+  isHermesImmediatePauseInstruction,
   promoteHermesQueuedPrompt,
   removeHermesQueuedPrompt,
   shouldAutoDrainHermesQueue,
@@ -56,5 +57,14 @@ describe('Hermes prompt queue adapter v1', () => {
     expect(shouldAutoDrainHermesQueue({ ...ready, parked: true })).toBe(false)
     expect(shouldAutoDrainHermesQueue({ ...ready, connectionOpen: false })).toBe(false)
     expect(shouldAutoDrainHermesQueue({ ...ready, busy: true })).toBe(false)
+  })
+
+  it('recognizes direct pause controls without treating discussion or negation as a stop', () => {
+    expect(isHermesImmediatePauseInstruction('hang tight for just a sec')).toBe(true)
+    expect(isHermesImmediatePauseInstruction('We have .NET installed; hold on while we fix Docker.')).toBe(true)
+    expect(isHermesImmediatePauseInstruction('STOP')).toBe(true)
+    expect(isHermesImmediatePauseInstruction("don't stop")).toBe(false)
+    expect(isHermesImmediatePauseInstruction('When should the program stop?')).toBe(false)
+    expect(isHermesImmediatePauseInstruction('Continue with the current task.')).toBe(false)
   })
 })

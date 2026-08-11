@@ -14,7 +14,14 @@
         "ai/qwen3:4B-UD-Q4_K_XL",
         "docker.io/ai/qwen3:4B-UD-Q4_K_XL"
       ],
-      "apiModelId": "ai/qwen3:4B-UD-Q4_K_XL"
+      "apiModelId": "ai/qwen3:4B-UD-Q4_K_XL",
+      "runtimeMode": "completion",
+      "contextSize": 16384,
+      "keepAlive": "-1",
+      "runtimeFlags": [
+        "--n-gpu-layers",
+        "0"
+      ]
     },
     {
       "role": "embedding",
@@ -26,7 +33,18 @@
         "ai/nomic-embed-text-v1.5:latest",
         "docker.io/ai/nomic-embed-text-v1.5:latest"
       ],
-      "apiModelId": "ai/nomic-embed-text-v1.5"
+      "apiModelId": "ai/nomic-embed-text-v1.5",
+      "runtimeMode": "embedding",
+      "contextSize": 2048,
+      "keepAlive": "-1",
+      "runtimeFlags": [
+        "--n-gpu-layers",
+        "0",
+        "--batch-size",
+        "2048",
+        "--ubatch-size",
+        "2048"
+      ]
     }
   ]
 }

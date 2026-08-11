@@ -11,6 +11,7 @@ try
 {
     File.WriteAllText(Path.Combine(workspace, "package", "pyproject.toml"), "[project]\nname='bounded'\n");
     File.WriteAllText(Path.Combine(workspace, "package", "valid.py"), "answer = 42\n");
+    File.WriteAllText(Path.Combine(workspace, "package", "test_dragon.py"), "import unittest\nclass DragonTests(unittest.TestCase):\n    def test_answer(self): self.assertEqual(42, 42)\n");
     File.WriteAllText(Path.Combine(workspace, "package", "broken.py"), "def broken(:\n    pass\n");
     File.WriteAllText(Path.Combine(workspace, "package", "types.pyi"), "answer: int\n");
     File.WriteAllText(Path.Combine(workspace, "package", "__pycache__", "ignored.py"), "ignored = True\n");
@@ -30,7 +31,7 @@ async Task FailClosedAsync()
 {
     var components = PythonLanguageToolingProvider.CreateFailClosed(workspace);
     var evidence = await components.EvidenceSource.InspectAsync(workspace, CancellationToken.None);
-    Require(evidence.Count == 4
+    Require(evidence.Count == 3
         && evidence.Single(item => item.CapabilityId == "python.project").Availability == LanguageToolingCapabilityState.Available
         && evidence.Where(item => item.CapabilityId != "python.project").All(item => item.Availability == LanguageToolingCapabilityState.Unavailable),
         "The default Python provider did not isolate safe project inspection from executable tooling.");
@@ -41,13 +42,13 @@ async Task FailClosedAsync()
 async Task ReceiptBoundAsync()
 {
     var authority = new FakeAuthority();
-    var components = PythonLanguageToolingProvider.CreateReceiptBound(workspace, authority);
+    var components = PythonLanguageToolingProvider.CreateReceiptBound(workspace, authority, authority);
     var handler = components.OperationHandler;
 
     var inspection = await handler.ExecuteAsync(new InspectLanguageToolingProjectRequest(
         1, "python:inspect:1", "workspace:1", "python", "package"), CancellationToken.None);
     Require(inspection.Succeeded
-        && inspection.SafeMessage.Contains("3 Python source files", StringComparison.Ordinal)
+        && inspection.SafeMessage.Contains("4 Python source files", StringComparison.Ordinal)
         && inspection.SafeMessage.Contains("1 recognized package marker", StringComparison.Ordinal),
         "Python project inspection was not bounded and truthful.");
 
@@ -66,11 +67,16 @@ async Task ReceiptBoundAsync()
             FilePath: "package/broken.py", Severity: "error", Code: "syntax-error",
             StartLine: 1, StartColumn: 12, EndLine: 1, EndColumn: 13,
         }, "Python syntax diagnostics were not projected structurally.");
-    Require(authority.Sources is { Count: 3 }
+    Require(authority.Sources is { Count: 4 }
         && authority.Sources.All(source => !Path.IsPathFullyQualified(source.RelativePath))
         && authority.Sources.All(source => SHA256.HashData(source.Content.Span)
             .SequenceEqual(Convert.FromHexString(source.Sha256))),
         "The Python authority received a raw host path or an unbound source snapshot.");
+
+    var tests = await handler.ExecuteAsync(new RunLanguageToolingTestsRequest(
+        1, "python:tests:1", "workspace:1", "python", "package/test_dragon.py", "Dragon"), CancellationToken.None);
+    Require(tests.Succeeded && tests.Code == "ok" && authority.TestRuns == 1,
+        "The explicit receipt-bound Python unittest request did not execute exactly once.");
 
     try
     {
@@ -133,12 +139,13 @@ static void Require(bool condition, string message)
     if (!condition) throw new InvalidOperationException(message);
 }
 
-sealed class FakeAuthority : IPythonToolingAuthority
+sealed class FakeAuthority : IPythonToolingAuthority, IPythonTestAuthority
 {
     private const string ImageId = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string Receipt = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     public int Checks { get; private set; }
+    public int TestRuns { get; private set; }
     public IReadOnlyList<PythonSourceSnapshot>? Sources { get; private set; }
     public bool ReturnMismatchedBinding { get; set; }
     public bool ReturnNoDiagnostics { get; set; }
@@ -170,6 +177,26 @@ sealed class FakeAuthority : IPythonToolingAuthority
             verifiedRuntime.ReceiptSha256,
             diagnostics.Length == 0,
             diagnostics));
+    }
+
+    public ValueTask<PythonTestOutcome> RunTestsAsync(
+        PythonToolingRuntimeReceipt verifiedRuntime,
+        string targetPath,
+        string? selection,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (targetPath != "package/test_dragon.py" || selection != "Dragon")
+            throw new InvalidOperationException("The Python test intent was not preserved.");
+        TestRuns += 1;
+        return ValueTask.FromResult(new PythonTestOutcome(
+            verifiedRuntime.ImmutableRuntimeId,
+            verifiedRuntime.ReceiptSha256,
+            true,
+            1,
+            0,
+            0,
+            0));
     }
 }
 #endif

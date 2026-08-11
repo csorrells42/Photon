@@ -36,7 +36,7 @@ describe('DesktopDockerControlAdapter', () => {
     bridge.emit({ type: 'dockerControl.snapshot.result', version: 1, requestId: describeFrame.requestId, value: snapshot })
     bridge.emit({
       type: 'dockerControl.describe.result', version: 1, requestId: describeFrame.requestId,
-      value: { protocolVersion: 1, availability: { state: 'available' }, services: ['hermes', 'serena'], operations: { startStack: true, stopStack: true, restartService: true, update: false }, updateReason: 'derived-runtime-updater-not-integrated' },
+      value: { protocolVersion: 1, availability: { state: 'available' }, services: ['hermes', 'serena'], operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, loadModel: false, unloadModel: true, update: false }, updateReason: 'derived-runtime-updater-not-integrated' },
     })
     expect((await description).operations.update).toBe(false)
 
@@ -72,13 +72,27 @@ describe('DesktopDockerControlAdapter', () => {
     bridge.emit({ type: 'dockerControl.review.result', version: 1, requestId: reviewRequest.requestId, value: { protocolVersion: 1, requestId: reviewRequest.requestId, status: 'ready', snapshotRevision: 3, reviewToken: 'V'.repeat(48), fingerprint: hash, expiresAtUtc: '2030-01-01T00:00:00Z', affectedServices: ['hermes'], summary: 'Restart Hermes', warnings: [] } })
     expect((await review as { status: string }).status).toBe('ready')
 
+    const unloadRequest = {
+      protocolVersion: DOCKER_CONTROL_PROTOCOL_VERSION,
+      requestId: 'docker-control:unload',
+      snapshotRevision: 3,
+      intent: { kind: 'unload-model' as const, model: 'docker.io/ai/qwen3:4b' },
+    }
+    const unload = adapter.reviewMutation(unloadRequest, { signal })
+    expect(bridge.posted[2]).toEqual({
+      type: 'dockerControl.review', version: 1, requestId: unloadRequest.requestId,
+      snapshotRevision: 3, intent: { kind: 'unload-model', service: 'docker.io/ai/qwen3:4b' },
+    })
+    bridge.emit({ type: 'dockerControl.review.result', version: 1, requestId: unloadRequest.requestId, value: { protocolVersion: 1, requestId: unloadRequest.requestId, status: 'ready', snapshotRevision: 3, reviewToken: 'W'.repeat(48), fingerprint: hash, expiresAtUtc: '2030-01-01T00:00:00Z', affectedServices: ['model-runner'], summary: 'Unload qwen3', warnings: [] } })
+    expect((await unload as { status: string }).status).toBe('ready')
+
     const commit = adapter.commitMutation({ protocolVersion: 1, requestId: 'docker-control:commit', reviewToken: 'V'.repeat(48) }, { signal })
-    expect(bridge.posted[2]).toEqual({ type: 'dockerControl.commit', version: 1, requestId: 'docker-control:commit', reviewToken: 'V'.repeat(48) })
+    expect(bridge.posted[3]).toEqual({ type: 'dockerControl.commit', version: 1, requestId: 'docker-control:commit', reviewToken: 'V'.repeat(48) })
     bridge.emit({ type: 'dockerControl.commit.result', version: 1, requestId: 'docker-control:commit', value: { protocolVersion: 1, requestId: 'docker-control:commit', status: 'failed', message: 'authorization=private-value' } })
     expect(JSON.stringify(await commit)).not.toContain('private-value')
 
     const discard = adapter.discardReview('V'.repeat(48))
-    const discardFrame = bridge.posted[3] as Record<string, unknown>
+    const discardFrame = bridge.posted[4] as Record<string, unknown>
     expect(Object.keys(discardFrame).sort()).toEqual(['requestId', 'reviewToken', 'type', 'version'])
     bridge.emit({ type: 'dockerControl.discard.result', version: 1, requestId: discardFrame.requestId, value: { discarded: true } })
     await expect(discard).resolves.toBeUndefined()

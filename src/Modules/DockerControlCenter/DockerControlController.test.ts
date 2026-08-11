@@ -17,7 +17,7 @@ function snapshot(revision = 1) {
     engine: { state: 'running', version: '28.1.0' },
     compose: { state: 'running', definitionFingerprint: hash, upstreamRevision: 'abc', runtimeProtocol: 'v2' },
     services: [
-      { id: 'hermes', state: 'running', health: 'healthy', image: { imageId: hash, approvedDigest: hash, ociRevision: 'abc', verification: 'verified' }, ports: [{ address: '127.0.0.1', hostPort: 9119, containerPort: 8000, protocol: 'tcp' }] },
+      { id: 'hermes', state: 'running', health: 'healthy', manageable: true, image: { imageId: hash, approvedDigest: hash, ociRevision: 'abc', verification: 'verified' }, ports: [{ address: '127.0.0.1', hostPort: 9119, containerPort: 8000, protocol: 'tcp' }] },
       { id: 'serena', state: 'running', health: 'healthy', ports: [] },
     ],
     volumes: [{ role: 'data', state: 'mounted', persistent: true }, { role: 'workspace', state: 'mounted', persistent: true }],
@@ -31,7 +31,7 @@ function adapter(overrides: Partial<DockerControlAdapter> = {}): DockerControlAd
       protocolVersion: DOCKER_CONTROL_PROTOCOL_VERSION,
       availability: { state: 'available' },
       services: ['hermes', 'serena', 'model-runner'],
-      operations: { startStack: true, stopStack: true, restartService: true, update: false },
+      operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, loadModel: false, unloadModel: true, update: false },
       updateReason: 'derived-runtime-updater-not-integrated',
     } as const)),
     refresh: vi.fn(async () => snapshot()),

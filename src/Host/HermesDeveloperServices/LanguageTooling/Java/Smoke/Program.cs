@@ -13,7 +13,17 @@ internal static class Program
         await TypedSessionRejectsStaleStateAsync();
         Console.WriteLine("RUN structured lifecycle");
         await StructuredProviderLifecycleAsync();
-        Console.WriteLine("PASS Java/JDT focused smoke (3/3)");
+        var provisionedRoot = Environment.GetEnvironmentVariable("HERMES_JAVA_JDT_INSTALL_ROOT");
+        if (!string.IsNullOrWhiteSpace(provisionedRoot))
+        {
+            Console.WriteLine("RUN receipt-bound real JDT lifecycle");
+            await ReceiptBoundProviderLifecycleAsync(provisionedRoot);
+            Console.WriteLine("PASS Java/JDT focused smoke (4/4 including real JDT)");
+        }
+        else
+        {
+            Console.WriteLine("PASS Java/JDT focused smoke (3/3; real JDT not requested)");
+        }
         return 0;
     }
 
@@ -77,6 +87,29 @@ internal static class Program
         Require(stop.Succeeded, "typed stop failed");
         Equal(0, provider.ActiveSessionCount, "active session count after stop");
         Equal(1, authority.Starts, "unexpected authority start count");
+    }
+
+    private static async Task ReceiptBoundProviderLifecycleAsync(string installRoot)
+    {
+        await using var fixture = new WorkspaceFixture();
+        await using var provider = JavaJdtLanguageToolingProvider.CreateProvisioned(fixture.Root, installRoot);
+        var evidence = await provider.InspectAsync(fixture.Root, CancellationToken.None);
+        Equal(1, evidence.Count, "receipt-bound evidence count");
+        Equal(LanguageToolingCapabilityState.Available, evidence[0].Availability, "receipt-bound availability");
+        var start = await provider.ExecuteAsync(new StartLanguageToolingSessionRequest(
+            LanguageToolingProtocol.Version,
+            "real-jdt-start",
+            "workspace-1",
+            LanguageToolingCatalog.JavaJdt,
+            "Main.java"), CancellationToken.None);
+        Require(start.Succeeded && start.SessionId is not null, "receipt-bound JDT start failed");
+        var stop = await provider.ExecuteAsync(new StopLanguageToolingSessionRequest(
+            LanguageToolingProtocol.Version,
+            "real-jdt-stop",
+            "workspace-1",
+            LanguageToolingCatalog.JavaJdt,
+            start.SessionId!), CancellationToken.None);
+        Require(stop.Succeeded, "receipt-bound JDT stop failed");
     }
 
     private static async Task ThrowsAsync<T>(Func<Task> action) where T : Exception

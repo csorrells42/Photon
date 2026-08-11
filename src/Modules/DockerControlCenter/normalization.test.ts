@@ -12,12 +12,18 @@ function snapshot(revision = 7) {
     engine: { state: 'running', version: '28.1.0', environment: { API_KEY: 'never-project-this' } },
     compose: { state: 'running', definitionFingerprint: hash, upstreamRevision: 'abc123', runtimeProtocol: 'v2', composeFile: 'C:\\secret\\compose.yml' },
     services: [{
-      id: 'hermes', state: 'running', health: 'healthy', version: '1.2.3',
+      id: 'hermes', state: 'running', health: 'healthy', manageable: true, containerId: 'b'.repeat(64), version: '1.2.3',
       image: { imageId: hash, approvedDigest: hash, ociRevision: 'abc123', verification: 'verified', registryAuth: 'secret' },
       ports: [{ address: '127.0.0.1', hostPort: 9119, containerPort: 8000, protocol: 'tcp' }],
+      resources: { cpuPercent: 1.25, memoryUsage: '512MiB', memoryLimit: '8GiB', memoryPercent: 6.25, networkIo: '1MB / 2MB', blockIo: '3MB / 4MB', pids: 12 },
       command: ['docker', 'run'],
     }, { id: 'serena', state: 'running', health: 'healthy', ports: [] }],
     volumes: [{ role: 'data', state: 'mounted', persistent: true, path: 'C:\\Users\\private' }],
+    modelRunner: {
+      state: 'running', version: 'v1.2.6', endpoint: 'http://127.0.0.1:12434/v1/', kind: 'Docker Engine', diskUsage: '5.64GB',
+      loadAvailable: false, unloadAvailable: true, message: 'Docker Model Runner is available.',
+      models: [{ reference: 'docker.io/ai/qwen3:4B-UD-Q4_K_XL', modelId: hash, size: '2.37 GiB', format: 'gguf', parameters: '4.02 B', loaded: true, backend: 'llama.cpp', mode: 'completion' }],
+    },
     lastWorkflow: { kind: 'update', state: 'succeeded', completedAtUtc: '2026-08-10T17:30:00Z', summary: 'Verified update applied.', rawOutput: 'token=secret' },
     dockerConfig: { auths: { example: 'secret' } },
   }
@@ -29,6 +35,8 @@ describe('Docker Control normalization', () => {
     expect(normalized).not.toBeNull()
     expect(normalized?.services.map((service) => service.id)).toEqual(['hermes', 'serena'])
     expect(normalized?.services[0].ports[0].address).toBe('127.0.0.1')
+    expect(normalized?.services[0].resources?.cpuPercent).toBe(1.25)
+    expect(normalized?.modelRunner?.models[0]).toMatchObject({ reference: 'docker.io/ai/qwen3:4B-UD-Q4_K_XL', loaded: true })
     const serialized = JSON.stringify(normalized)
     for (const forbidden of ['never-project-this', 'compose.yml', 'registryAuth', 'dockerConfig', 'C:\\Users', 'docker run']) {
       expect(serialized).not.toContain(forbidden)
@@ -99,6 +107,7 @@ describe('Docker Control normalization', () => {
     expect(JSON.stringify(review)).not.toContain('warning-secret')
     expect(normalizeDockerReview({ ...ready, affectedServices: ['hermes'] }, ready.requestId, 7, { kind: 'start-stack' })?.status).toBe('ready')
     expect(normalizeDockerReview({ ...ready, affectedServices: ['serena'] }, ready.requestId, 7, { kind: 'restart-service', service: 'hermes' })).toBeNull()
+    expect(normalizeDockerReview({ ...ready, affectedServices: ['model-runner'] }, ready.requestId, 7, { kind: 'unload-model', model: 'qwen3:4b' })?.status).toBe('ready')
     expect(normalizeDockerReview({ ...ready, snapshotRevision: 6 }, ready.requestId, 7, { kind: 'start-stack' })).toBeNull()
   })
 })

@@ -15,6 +15,7 @@ export type DesktopLanguageToolingResult = {
   succeeded: boolean
   code: string
   message: string
+  sessionId?: string
   diagnostics: readonly {
     filePath: string
     severity: 'info' | 'warning' | 'error'
@@ -95,8 +96,11 @@ export class DesktopLanguageToolingHostAdapter implements LanguageToolingHostAda
   private toWire(request: LanguageToolingHostRequest) {
     const common = { version: 1, requestId: request.requestId, providerId: request.providerId }
     if (request.operation === 'inspect-provider') return { type: 'developerServices.languageTooling.inspect', ...common }
+    if (request.operation === 'start-language-session') return { type: 'developerServices.languageTooling.session.start', ...common, documentPath: request.documentPath }
+    if (request.operation === 'stop-language-session') return { type: 'developerServices.languageTooling.session.stop', ...common, sessionId: request.sessionId }
     if (request.operation === 'inspect-project') return { type: 'developerServices.languageTooling.project.inspect', ...common, projectPath: request.projectPath }
     if (request.operation === 'compile') return { type: 'developerServices.languageTooling.compile', ...common, targetPath: request.targetPath, mode: request.mode, ...(request.boardFqbn ? { boardFqbn: request.boardFqbn } : {}) }
+    if (request.operation === 'run-tests') return { type: 'developerServices.languageTooling.tests', ...common, targetPath: request.targetPath, ...(request.selection ? { selection: request.selection } : {}) }
     throw new Error('This desktop build does not expose that language-tooling operation.')
   }
 }
@@ -120,7 +124,8 @@ function normalizeResult(raw: Record<string, unknown>): DesktopLanguageToolingRe
   const result = raw.result as Record<string, unknown>
   const diagnostics = Array.isArray(result.diagnostics) ? result.diagnostics.slice(0, 2_000).map(normalizeDiagnostic).filter((item): item is NonNullable<typeof item> => item !== null) : []
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts.slice(0, 128).filter((item): item is string => typeof item === 'string' && isSafeRelativePath(item)) : []
-  return { succeeded: result.succeeded === true, code: safeText(result.code, 96, code), message: safeText(result.message, 512, message), diagnostics, artifacts }
+  const sessionId = typeof result.sessionId === 'string' && identifier.test(result.sessionId) ? result.sessionId : undefined
+  return { succeeded: result.succeeded === true, code: safeText(result.code, 96, code), message: safeText(result.message, 512, message), diagnostics, artifacts, ...(sessionId ? { sessionId } : {}) }
 }
 
 function normalizeDiagnostic(value: unknown): DesktopLanguageToolingResult['diagnostics'][number] | null {

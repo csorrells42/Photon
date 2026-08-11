@@ -14,7 +14,9 @@ import {
   photonCadCloseRequiresConfirmation,
   photonCadAcceptedRuntimeSnapshot,
   photonCadControllerForAttachment,
+  photonCadDerivedBomMatchesSnapshot,
   photonCadPersistedRefreshMatches,
+  photonCadProjectRefreshRequestId,
   photonCadRuntimeAttachmentForLoad,
   projectStatusText,
   runPhotonCadNewProjectDialogAction,
@@ -23,6 +25,7 @@ import {
 import type { PhotonCadController, PhotonCadOperationRequest, PhotonCadOperationResult } from './PhotonCadContract'
 import type { PhotonCadProjectController, PhotonCadProjectDocument } from './PhotonCadProjectContract'
 import { photonCadWorkspaceFixtureRuntime } from './PhotonCadWorkspaceFixture'
+import { PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID, photonCadAssemblyRigidTransform } from './PhotonCadWorkspace'
 
 const digestA = `sha256:${'a'.repeat(64)}`
 const digestB = `sha256:${'b'.repeat(64)}`
@@ -47,6 +50,7 @@ function project(suffix: string, dirty = false): PhotonCadProjectDocument {
       units: 'millimeter',
       mode: 'canonical',
       entities: [{ id: `part:${suffix}`, parentId: null, kind: 'part', name: 'Part', visible: true, suppressed: false }],
+      occurrences: [],
       operations: [],
       issues: [],
       dirty,
@@ -99,6 +103,81 @@ function acceptedPrimitiveResult(request: PhotonCadOperationRequest, resultingRe
     reason: 'accepted-and-saved',
     issues: [],
     snapshot: { ...snapshot, sessionId: request.sessionId, projectId: request.projectId },
+  }
+}
+
+const identityTransform = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] as const
+
+function assemblyBaseSnapshot() {
+  const snapshot = projectAt(4).snapshot
+  return {
+    ...snapshot,
+    entities: [
+      ...snapshot.entities,
+      { id: 'part:g.occ', parentId: null, kind: 'occurrence' as const, name: 'G-001', visible: true, suppressed: false },
+    ],
+    occurrences: [{
+      occurrenceId: 'part:g.occ', parentOccurrenceId: null, sourceEntityId: 'part:g', partNumber: 'G-001', transform: identityTransform,
+    }],
+  }
+}
+
+function assemblyRequest(): PhotonCadOperationRequest {
+  return {
+    contractVersion: 1,
+    requestId: 'operation:assembly:1',
+    sessionId: 'session:g',
+    projectId: 'project:g',
+    baseRevision: 4,
+    mode: 'scratch',
+    capabilityId: PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID,
+    inputs: {
+      sourceEntityId: 'part:g',
+      parentOccurrenceId: 'part:g.occ',
+      translation: { x: 125, y: -30, z: 8 },
+      rotationDegrees: { x: 0, y: 0, z: 90 },
+    },
+    targetEntityIds: [],
+  }
+}
+
+function acceptedAssemblyResult(request = assemblyRequest(), revisionDelta = 2): PhotonCadOperationResult {
+  const previous = assemblyBaseSnapshot()
+  const nested = {
+    occurrenceId: 'occurrence:g:nested',
+    parentOccurrenceId: 'part:g.occ',
+    sourceEntityId: 'part:g',
+    partNumber: 'G-001',
+    transform: photonCadAssemblyRigidTransform(
+      request.inputs.translation as { x: number; y: number; z: number },
+      request.inputs.rotationDegrees as { x: number; y: number; z: number },
+    ),
+  }
+  const nestedEntity = {
+    id: nested.occurrenceId, parentId: nested.parentOccurrenceId, kind: 'occurrence' as const,
+    name: nested.partNumber, visible: true, suppressed: false,
+  }
+  const resultingRevision = request.baseRevision + revisionDelta
+  return {
+    contractVersion: 1,
+    requestId: request.requestId,
+    projectId: request.projectId,
+    baseRevision: request.baseRevision,
+    resultingRevision,
+    status: 'accepted',
+    stale: false,
+    reason: 'accepted-and-saved',
+    snapshot: { ...previous, revision: resultingRevision, entities: [...previous.entities, nestedEntity], occurrences: [...previous.occurrences, nested] },
+    preview: {
+      previewId: `preview:${resultingRevision}`,
+      projectId: request.projectId,
+      revision: resultingRevision,
+      contentDigest: digestC,
+      units: 'millimeter',
+      bounds: { minimum: { x: 0, y: 0, z: 0 }, maximum: { x: 200, y: 100, z: 50 } },
+      entityCount: 2,
+    },
+    issues: [],
   }
 }
 
@@ -312,8 +391,9 @@ describe('PhotonCadDesktopWorkspace', () => {
     expect(markup).toContain('CAD project storage is unavailable')
     expect(markup).toContain('Native CAD project storage is unavailable')
     expect(markup).not.toContain('Choose New or Open')
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>New<\/button>/u)
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>Open<\/button>/u)
+    const disabledActions = [...markup.matchAll(/<button[^>]*disabled=""[^>]*>(.*?)<\/button>/gu)].map((match) => match[1])
+    expect(disabledActions.some((action) => action.includes('<span>New</span>'))).toBe(true)
+    expect(disabledActions.some((action) => action.includes('<span>Open</span>'))).toBe(true)
   })
 
   it('disables every persisted-project action when the native storage safety adapter becomes unavailable', () => {
@@ -325,8 +405,9 @@ describe('PhotonCadDesktopWorkspace', () => {
         initialDocuments={[project('g')]}
       />,
     )
+    const disabledActions = [...markup.matchAll(/<button[^>]*disabled=""[^>]*>(.*?)<\/button>/gu)].map((match) => match[1])
     for (const label of ['New', 'Open', 'Save', 'Save as', 'Refresh', 'Close']) {
-      expect(markup).toMatch(new RegExp(`<button[^>]*disabled=""[^>]*>${label}<\\/button>`, 'u'))
+      expect(disabledActions.some((action) => action.includes(`<span>${label}</span>`))).toBe(true)
     }
     expect(markup).toMatch(/<button[^>]*aria-label="Close Gearbox"[^>]*disabled=""/u)
   })
@@ -348,6 +429,11 @@ describe('PhotonCadDesktopWorkspace', () => {
     expect(markup).toContain('aria-selected="true"')
     expect(markup).toContain('Unsaved changes')
     expect(markup).toContain('Close Auger')
+    expect((markup.match(/data-photon-cad-project-workspace=/gu) ?? [])).toHaveLength(2)
+    expect(markup).toContain(`data-photon-cad-project-workspace="${gearbox.projectHandle}" hidden="" aria-hidden="true"`)
+    expect(markup).toMatch(new RegExp(`data-photon-cad-project-workspace="${gearbox.projectHandle}"[^>]*hidden=""[^>]*><main class="photon-cad-workspace"`, 'u'))
+    expect(markup).toContain(`data-photon-cad-project-workspace="${auger.projectHandle}"><main`)
+    expect((markup.match(/<main class="photon-cad-workspace"/gu) ?? [])).toHaveLength(2)
   })
 
   it('shows the global live catalog while keeping persisted projects view and save only', () => {
@@ -413,9 +499,22 @@ describe('PhotonCadDesktopWorkspace', () => {
     expect(photonCadAcceptedRuntimeSnapshot(request, acceptedPrimitiveResult(request, 3))).toBeNull()
     expect(photonCadAcceptedRuntimeSnapshot(request, acceptedPrimitiveResult(request, 2, true))).toBeNull()
     expect(photonCadAcceptedRuntimeSnapshot({ ...request, capabilityId: 'geometry.step.export.v1' }, exact)).toBeNull()
+    const dynamicRequest = { ...request, capabilityId: 'industrial.gear.spur.v1' }
+    expect(photonCadAcceptedRuntimeSnapshot(dynamicRequest, acceptedPrimitiveResult(dynamicRequest), 'host-catalog-fingerprint')).not.toBeNull()
 
     const current = projectAt(0)
-    const accepted = exact.snapshot!
+    const baseAccepted = exact.snapshot!
+    const accepted = {
+      ...baseAccepted,
+      entities: [
+        ...baseAccepted.entities,
+        { id: 'occurrence:shaft', parentId: null, kind: 'occurrence' as const, name: 'G-001', visible: true, suppressed: false },
+      ],
+      occurrences: [{
+        occurrenceId: 'occurrence:shaft', parentOccurrenceId: null, partNumber: 'G-001', sourceEntityId: 'part:g',
+        transform: [0, -1, 0, 125, 1, 0, 0, -30, 0, 0, 1, 8, 0, 0, 0, 1] as [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number],
+      }],
+    }
     const persisted = projectAt(2)
     persisted.snapshot = accepted
     persisted.lastSavedRevision = 2
@@ -424,6 +523,38 @@ describe('PhotonCadDesktopWorkspace', () => {
     expect(photonCadPersistedRefreshMatches({ ...persisted, lastSavedRevision: 1 }, current, accepted)).toBe(false)
     expect(photonCadPersistedRefreshMatches({ ...persisted, snapshot: { ...accepted, dirty: true } }, current, accepted)).toBe(false)
     expect(photonCadPersistedRefreshMatches({ ...persisted, snapshot: { ...accepted, revision: 3 } }, current, accepted)).toBe(false)
+    expect(photonCadPersistedRefreshMatches({
+      ...persisted,
+      snapshot: { ...accepted, occurrences: [{ ...accepted.occurrences[0], transform: [...accepted.occurrences[0].transform.slice(0, 3), 126, ...accepted.occurrences[0].transform.slice(4)] as typeof accepted.occurrences[0]['transform'] }] },
+    }, current, accepted)).toBe(false)
+  })
+
+  it('accepts assembly only as an exact +2 edit-and-preview delta against the trusted base and refreshes visible transforms and derived BOM', () => {
+    const request = assemblyRequest()
+    const previous = assemblyBaseSnapshot()
+    const exact = acceptedAssemblyResult(request)
+    const accepted = photonCadAcceptedRuntimeSnapshot(request, exact, 'catalog:fingerprint', previous)
+    expect(accepted?.revision).toBe(6)
+    expect(accepted?.occurrences?.[1]).toMatchObject({
+      occurrenceId: 'occurrence:g:nested', parentOccurrenceId: 'part:g.occ', sourceEntityId: 'part:g', partNumber: 'G-001',
+    })
+    expect(accepted?.occurrences?.[1].transform[3]).toBe(125)
+    expect(accepted?.occurrences?.[1].transform[7]).toBe(-30)
+    expect(accepted?.occurrences?.[1].transform[11]).toBe(8)
+    expect(photonCadAcceptedRuntimeSnapshot(request, acceptedAssemblyResult(request, 1), 'catalog:fingerprint', previous)).toBeNull()
+    expect(photonCadAcceptedRuntimeSnapshot(request, exact, 'catalog:fingerprint')).toBeNull()
+
+    const current = projectAt(4)
+    current.snapshot = previous
+    const persisted = projectAt(6)
+    persisted.snapshot = accepted!
+    persisted.lastSavedRevision = 6
+    persisted.lastSavedContentDigest = persisted.contentDigest
+    persisted.bom = [{ ...current.bom[0], quantity: 2 }]
+    expect(photonCadDerivedBomMatchesSnapshot(persisted, current)).toBe(true)
+    expect(photonCadPersistedRefreshMatches(persisted, current, accepted!)).toBe(true)
+    expect(photonCadPersistedRefreshMatches({ ...persisted, bom: [{ ...persisted.bom[0], quantity: 1 }] }, current, accepted!)).toBe(false)
+    expect(photonCadPersistedRefreshMatches({ ...persisted, bom: [{ ...persisted.bom[0], partNumber: 'FOREIGN-001' }] }, current, accepted!)).toBe(false)
   })
 
   it('does not publish hostile accepted results or a result whose persisted refresh was not proven', async () => {
@@ -441,9 +572,79 @@ describe('PhotonCadDesktopWorkspace', () => {
     const exact = new TrackingPhotonCadController(exactCore, refresh, busy)
     await expect(exact.execute(request)).resolves.toMatchObject({ status: 'accepted', resultingRevision: 2 })
     expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenLastCalledWith(expect.objectContaining({ revision: 2 }), undefined)
 
     const rejectedRefresh = new TrackingPhotonCadController(exactCore, async () => false, busy)
     await expect(rejectedRefresh.execute(request)).resolves.toMatchObject({ status: 'unavailable', resultingRevision: 0, reason: 'project-metadata-refresh-failed' })
+  })
+
+  it('reuses the host-issued preview identity only for its nested refresh and keeps manual refresh distinct', () => {
+    const manual = vi.fn(() => 'cad-desktop-refresh:manual:1')
+    expect(photonCadProjectRefreshRequestId('preview-exact-1', manual)).toBe('preview-exact-1')
+    expect(manual).not.toHaveBeenCalled()
+    expect(photonCadProjectRefreshRequestId(undefined, manual)).toBe('cad-desktop-refresh:manual:1')
+    expect(manual).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects unauthorized dispatch and in-flight host catalog drift before publishing metadata', async () => {
+    const request = { ...primitiveRequest(0), capabilityId: 'industrial.gear.spur.v1' }
+    const refresh = vi.fn(async () => true)
+    const busy = vi.fn()
+    const rejectedCore = coreController()
+    rejectedCore.execute = vi.fn(async () => acceptedPrimitiveResult(request))
+    const rejected = new TrackingPhotonCadController(rejectedCore, refresh, busy, () => null)
+    await expect(rejected.execute(request)).resolves.toMatchObject({ status: 'unavailable', reason: 'catalog-authorization-rejected' })
+    expect(rejectedCore.execute).not.toHaveBeenCalled()
+
+    let resolve!: (result: PhotonCadOperationResult) => void
+    const pending = new Promise<PhotonCadOperationResult>((accept) => { resolve = accept })
+    const driftingCore = coreController()
+    driftingCore.execute = vi.fn(() => pending)
+    let authorization = 'host-catalog-fingerprint:1'
+    const drifting = new TrackingPhotonCadController(driftingCore, refresh, busy, () => authorization)
+    const execution = drifting.execute(request)
+    authorization = 'host-catalog-fingerprint:2'
+    resolve(acceptedPrimitiveResult(request))
+    await expect(execution).resolves.toMatchObject({
+      status: 'unavailable', stale: true, resultingRevision: 0, reason: 'catalog-authorization-drift',
+    })
+    expect(refresh).not.toHaveBeenCalled()
+
+    const exactCore = coreController()
+    exactCore.execute = vi.fn(async () => acceptedPrimitiveResult(request))
+    const exact = new TrackingPhotonCadController(exactCore, refresh, busy, () => authorization)
+    await expect(exact.execute(request)).resolves.toMatchObject({ status: 'accepted', resultingRevision: 2 })
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects foreign or drifting assembly deltas before publishing refreshed project metadata', async () => {
+    const request = assemblyRequest()
+    const previous = assemblyBaseSnapshot()
+    const refresh = vi.fn(async () => true)
+    const busy = vi.fn()
+    let authorization = 'assembly:fingerprint:1'
+    let resolve!: (result: PhotonCadOperationResult) => void
+    const pending = new Promise<PhotonCadOperationResult>((accept) => { resolve = accept })
+    const driftingCore = coreController()
+    driftingCore.execute = vi.fn(() => pending)
+    const drifting = new TrackingPhotonCadController(driftingCore, refresh, busy, () => authorization, () => previous)
+    const execution = drifting.execute(request)
+    authorization = 'assembly:fingerprint:2'
+    resolve(acceptedAssemblyResult(request))
+    await expect(execution).resolves.toMatchObject({ status: 'unavailable', stale: true, reason: 'catalog-authorization-drift' })
+    expect(refresh).not.toHaveBeenCalled()
+
+    const hostileCore = coreController()
+    hostileCore.execute = vi.fn(async () => acceptedAssemblyResult(request, 1))
+    const hostile = new TrackingPhotonCadController(hostileCore, refresh, busy, () => authorization, () => previous)
+    await expect(hostile.execute(request)).resolves.toMatchObject({ status: 'unavailable', reason: 'project-runtime-result-mismatch' })
+    expect(refresh).not.toHaveBeenCalled()
+
+    const exactCore = coreController()
+    exactCore.execute = vi.fn(async () => acceptedAssemblyResult(request))
+    const exact = new TrackingPhotonCadController(exactCore, refresh, busy, () => authorization, () => previous)
+    await expect(exact.execute(request)).resolves.toMatchObject({ status: 'accepted', resultingRevision: 6 })
+    expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   it('implements deterministic wraparound, Home, and End tab navigation', () => {

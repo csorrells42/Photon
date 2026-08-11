@@ -28,7 +28,29 @@ public sealed class DotnetBuildRunner
     /// Builds a validated target by launching the dotnet executable directly with a fixed argument
     /// vocabulary. Cancellation terminates only the process created by this invocation and its children.
     /// </summary>
-    public async Task<BuildResult> BuildAsync(BuildRequest request, CancellationToken cancellationToken = default)
+    public Task<BuildResult> BuildAsync(BuildRequest request, CancellationToken cancellationToken = default) =>
+        RunAsync(request, "build", null, cancellationToken);
+
+    /// <summary>
+    /// Tests a validated target through the fixed <c>dotnet test</c> operation. The renderer cannot
+    /// choose an executable, environment variable, working directory, or arbitrary argument.
+    /// </summary>
+    public Task<BuildResult> TestAsync(DotnetTestRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var selection = ValidateTestSelection(request.Selection);
+        return RunAsync(
+            new BuildRequest(request.WorkspaceRoot, request.TargetPath, request.Configuration),
+            "test",
+            selection,
+            cancellationToken);
+    }
+
+    private async Task<BuildResult> RunAsync(
+        BuildRequest request,
+        string operation,
+        string? testSelection,
+        CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.UtcNow;
         (string WorkspaceRoot, string TargetPath) resolved;
@@ -64,13 +86,18 @@ public sealed class DotnetBuildRunner
                 RedirectStandardError = true,
                 CreateNoWindow = true,
             };
-            startInfo.ArgumentList.Add("build");
+            startInfo.ArgumentList.Add(operation);
             startInfo.ArgumentList.Add(resolved.TargetPath);
             startInfo.ArgumentList.Add("--nologo");
             startInfo.ArgumentList.Add("--tl:off");
             startInfo.ArgumentList.Add("--verbosity:minimal");
             startInfo.ArgumentList.Add("--configuration");
             startInfo.ArgumentList.Add(request.Configuration.ToString());
+            if (operation == "test" && testSelection is not null)
+            {
+                startInfo.ArgumentList.Add("--filter");
+                startInfo.ArgumentList.Add(testSelection);
+            }
 
             process = new Process { StartInfo = startInfo };
             if (!process.Start())
@@ -98,8 +125,8 @@ public sealed class DotnetBuildRunner
                     standardError,
                     characterBudget,
                     wasCancelled: true,
-                    failureCode: "build_cancelled",
-                    failureMessage: "The build was cancelled.");
+                    failureCode: $"{operation}_cancelled",
+                    failureMessage: $"The {operation} operation was cancelled.");
             }
 
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
@@ -112,8 +139,8 @@ public sealed class DotnetBuildRunner
                 standardError,
                 characterBudget,
                 wasCancelled: false,
-                failureCode: exitCode == 0 ? null : "build_failed",
-                failureMessage: exitCode == 0 ? null : "The build completed with errors.");
+                failureCode: exitCode == 0 ? null : $"{operation}_failed",
+                failureMessage: exitCode == 0 ? null : $"The {operation} operation completed with errors.");
         }
         catch (OperationCanceledException)
         {
@@ -130,8 +157,8 @@ public sealed class DotnetBuildRunner
                 standardError,
                 characterBudget,
                 wasCancelled: true,
-                failureCode: "build_cancelled",
-                failureMessage: "The build was cancelled.");
+                failureCode: $"{operation}_cancelled",
+                failureMessage: $"The {operation} operation was cancelled.");
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException or InvalidOperationException)
         {
@@ -148,8 +175,8 @@ public sealed class DotnetBuildRunner
                 standardError,
                 characterBudget,
                 wasCancelled: false,
-                failureCode: "build_process_failed",
-                failureMessage: "The dotnet build process failed.");
+                failureCode: $"{operation}_process_failed",
+                failureMessage: $"The dotnet {operation} process failed.");
         }
         finally
         {
@@ -233,4 +260,17 @@ public sealed class DotnetBuildRunner
             FailureMessage: message,
             StartedAt: startedAt,
             CompletedAt: DateTimeOffset.UtcNow);
+
+    private static string? ValidateTestSelection(string? selection)
+    {
+        if (selection is null) return null;
+        var candidate = selection.Trim();
+        if (candidate.Length is 0 or > 512
+            || candidate.Any(character => !(char.IsAsciiLetterOrDigit(character)
+                || "_./:\\[](),-".Contains(character, StringComparison.Ordinal))))
+        {
+            throw new ArgumentException("The .NET test selection is invalid.", nameof(selection));
+        }
+        return candidate;
+    }
 }

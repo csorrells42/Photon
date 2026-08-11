@@ -98,6 +98,94 @@ describe('DesktopLanguageToolingHostAdapter', () => {
     expect(result).toMatchObject({ succeeded: false, code: 'native-unavailable' })
   })
 
+  it('exposes the typed test request without forwarding renderer command fields', async () => {
+    const host = installHost()
+    const adapter = new DesktopLanguageToolingHostAdapter()
+    const promise = adapter.request({
+      contract: 'language-tooling-providers/v1',
+      operation: 'run-tests',
+      requestId: 'tests-1',
+      workspaceId: 'renderer-value-is-not-forwarded',
+      providerId: 'dotnet',
+      targetPath: 'Dragon.Tests/Dragon.Tests.csproj',
+      selection: 'Dragon',
+    }, new AbortController().signal)
+
+    expect(host.postMessage).toHaveBeenCalledWith({
+      type: 'developerServices.languageTooling.tests',
+      version: 1,
+      requestId: 'tests-1',
+      providerId: 'dotnet',
+      targetPath: 'Dragon.Tests/Dragon.Tests.csproj',
+      selection: 'Dragon',
+    })
+    expect(JSON.stringify(host.postMessage.mock.calls[0])).not.toMatch(/workspaceId|executable|argv|environment/i)
+
+    host.reply({
+      type: 'developerServices.languageTooling.result',
+      version: 1,
+      requestId: 'tests-1',
+      succeeded: true,
+      code: 'ok',
+      message: 'Complete',
+      result: { succeeded: true, code: 'ok', message: 'The .NET test operation completed successfully.' },
+    })
+    await expect(promise).resolves.toMatchObject({ succeeded: true, code: 'ok' })
+  })
+
+  it('starts and stops only a typed Python language session', async () => {
+    const host = installHost()
+    const adapter = new DesktopLanguageToolingHostAdapter()
+    const started = adapter.request({
+      contract: 'language-tooling-providers/v1',
+      operation: 'start-language-session',
+      requestId: 'python-start-1',
+      workspaceId: 'renderer-value-is-not-forwarded',
+      providerId: 'python',
+      documentPath: 'serena-python-proof/visible_envelope.py',
+    }, new AbortController().signal)
+    expect(host.postMessage).toHaveBeenCalledWith({
+      type: 'developerServices.languageTooling.session.start',
+      version: 1,
+      requestId: 'python-start-1',
+      providerId: 'python',
+      documentPath: 'serena-python-proof/visible_envelope.py',
+    })
+    host.reply({
+      type: 'developerServices.languageTooling.result', version: 1, requestId: 'python-start-1', succeeded: true,
+      code: 'ok', message: 'Complete', result: {
+        succeeded: true, code: 'python-language-session-started', message: 'Started',
+        sessionId: 'python:0123456789abcdef0123456789abcdef',
+      },
+    })
+    await expect(started).resolves.toMatchObject({
+      succeeded: true,
+      sessionId: 'python:0123456789abcdef0123456789abcdef',
+    })
+
+    const stopped = adapter.request({
+      contract: 'language-tooling-providers/v1',
+      operation: 'stop-language-session',
+      requestId: 'python-stop-1',
+      workspaceId: 'renderer-value-is-not-forwarded',
+      providerId: 'python',
+      sessionId: 'python:0123456789abcdef0123456789abcdef',
+    }, new AbortController().signal)
+    expect(host.postMessage).toHaveBeenLastCalledWith({
+      type: 'developerServices.languageTooling.session.stop',
+      version: 1,
+      requestId: 'python-stop-1',
+      providerId: 'python',
+      sessionId: 'python:0123456789abcdef0123456789abcdef',
+    })
+    expect(JSON.stringify(host.postMessage.mock.calls)).not.toMatch(/workspaceId|executable|argv|environment/i)
+    host.reply({
+      type: 'developerServices.languageTooling.result', version: 1, requestId: 'python-stop-1', succeeded: true,
+      code: 'ok', message: 'Complete', result: { succeeded: true, code: 'python-language-session-stopped', message: 'Stopped' },
+    })
+    await expect(stopped).resolves.toMatchObject({ succeeded: true, code: 'python-language-session-stopped' })
+  })
+
   it('cancels only the exact active request', async () => {
     const host = installHost()
     const controller = new AbortController()

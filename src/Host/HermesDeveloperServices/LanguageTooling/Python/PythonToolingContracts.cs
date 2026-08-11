@@ -66,6 +66,15 @@ public sealed record PythonSyntaxCheckOutcome(
     bool Succeeded,
     IReadOnlyList<PythonSyntaxDiagnostic> Diagnostics);
 
+public sealed record PythonTestOutcome(
+    string ImmutableRuntimeId,
+    string ReceiptSha256,
+    bool Succeeded,
+    int TestsRun,
+    int Failures,
+    int Errors,
+    int Skipped);
+
 /// <summary>
 /// Host-only seam for a verifier/transport that revalidates an immutable application-owned
 /// runtime receipt before every operation. Implementations must not use PATH, a global Python
@@ -78,6 +87,22 @@ public interface IPythonToolingAuthority
     ValueTask<PythonSyntaxCheckOutcome> CheckSyntaxAsync(
         PythonToolingRuntimeReceipt verifiedRuntime,
         IReadOnlyList<PythonSourceSnapshot> sources,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Host-only seam for explicit Python test execution. Implementations own the fixed test runner;
+/// renderer input never selects an executable, module runner, argument vector, environment, URL,
+/// container, image, or working directory.
+/// </summary>
+public interface IPythonTestAuthority
+{
+    ValueTask<PythonToolingRuntimeReceipt> VerifyAsync(CancellationToken cancellationToken);
+
+    ValueTask<PythonTestOutcome> RunTestsAsync(
+        PythonToolingRuntimeReceipt verifiedRuntime,
+        string targetPath,
+        string? selection,
         CancellationToken cancellationToken);
 }
 

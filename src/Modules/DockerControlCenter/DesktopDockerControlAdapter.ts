@@ -52,7 +52,7 @@ function normalizeDescription(value: unknown): DockerControlDescription | null {
   if (!raw || raw.protocolVersion !== DOCKER_CONTROL_PROTOCOL_VERSION || !availability || !operations
     || !Array.isArray(raw.services) || raw.services.length > 3
     || raw.updateReason !== 'derived-runtime-updater-not-integrated') return null
-  const services = raw.services.filter((service): service is DockerProductService => service === 'hermes' || service === 'serena' || service === 'model-runner')
+  const services = raw.services.filter(isService)
   if (services.length !== raw.services.length || new Set(services).size !== services.length) return null
   const normalizedAvailability = availability.state === 'available'
     ? { state: 'available' as const }
@@ -60,7 +60,9 @@ function normalizeDescription(value: unknown): DockerControlDescription | null {
       ? { state: 'unavailable' as const, reason: availability.reason as 'engine-unavailable' | 'unsupported' | 'disabled' }
       : null
   if (!normalizedAvailability || typeof operations.startStack !== 'boolean' || typeof operations.stopStack !== 'boolean'
-    || typeof operations.restartService !== 'boolean' || operations.update !== false) return null
+    || typeof operations.startService !== 'boolean' || typeof operations.stopService !== 'boolean'
+    || typeof operations.restartService !== 'boolean' || operations.loadModel !== false
+    || typeof operations.unloadModel !== 'boolean' || operations.update !== false) return null
   return {
     protocolVersion: DOCKER_CONTROL_PROTOCOL_VERSION,
     availability: normalizedAvailability,
@@ -68,7 +70,11 @@ function normalizeDescription(value: unknown): DockerControlDescription | null {
     operations: {
       startStack: operations.startStack,
       stopStack: operations.stopStack,
+      startService: operations.startService,
+      stopService: operations.stopService,
       restartService: operations.restartService,
+      loadModel: false,
+      unloadModel: operations.unloadModel,
       update: false,
     },
     updateReason: 'derived-runtime-updater-not-integrated',
@@ -157,9 +163,12 @@ export class DesktopDockerControlAdapter implements DockerControlAdapter {
       return Promise.reject(new Error('The typed Docker operation review is invalid.'))
     }
     const projected = { ...request, intent }
+    // MainWindow v1 forwards the existing typed `service` slot. For model unload it carries the
+    // reviewed model reference; the host accepts it only when it is present in its loaded-model snapshot.
+    const hostIntent = intent.kind === 'unload-model' ? { kind: intent.kind, service: intent.model } : intent
     return this.request('review', request.requestId, {
       type: 'dockerControl.review', version: 1, requestId: request.requestId,
-      snapshotRevision: request.snapshotRevision, intent,
+      snapshotRevision: request.snapshotRevision, intent: hostIntent,
     }, execution, undefined, projected)
   }
 
@@ -233,14 +242,19 @@ export class DesktopDockerControlAdapter implements DockerControlAdapter {
 }
 
 function isService(value: unknown): value is DockerProductService {
-  return value === 'hermes' || value === 'serena' || value === 'model-runner'
+  return value === 'hermes' || value === 'memory-vector' || value === 'serena' || value === 'model-runner'
 }
 
 function projectIntent(value: unknown): DockerMutationReviewRequest['intent'] | null {
   const raw = record(value)
   if (!raw) return null
   if (raw.kind === 'start-stack' || raw.kind === 'stop-stack' || raw.kind === 'request-update') return { kind: raw.kind }
-  return raw.kind === 'restart-service' && isService(raw.service) ? { kind: 'restart-service', service: raw.service } : null
+  if ((raw.kind === 'start-service' || raw.kind === 'stop-service' || raw.kind === 'restart-service') && isService(raw.service)) {
+    return { kind: raw.kind, service: raw.service }
+  }
+  return raw.kind === 'unload-model' && typeof raw.model === 'string'
+    ? { kind: 'unload-model', model: raw.model }
+    : null
 }
 
 export const desktopDockerControlAdapter = new DesktopDockerControlAdapter()

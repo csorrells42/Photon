@@ -194,6 +194,57 @@ public sealed class PhotonCadWindowsDesktopProjectHost : IPhotonCadDesktopProjec
         return result;
     }, cancellationToken);
 
+    public async ValueTask<PhotonCadCanonicalProject> ResolveCommittedProjectAsync(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long revision,
+        CancellationToken cancellationToken = default) =>
+        (await ResolveCommittedProjectReadbackAsync(
+            requestId, sessionId, projectId, revision, cancellationToken).ConfigureAwait(false)).Project;
+
+    public ValueTask<PhotonCadCommittedProjectReadback> ResolveCommittedProjectReadbackAsync(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long revision,
+        CancellationToken cancellationToken = default) => UseAsync(async (generation, token) =>
+    {
+        var matches = generation.Documents.Values.Where(document =>
+                StringComparer.Ordinal.Equals(document.Snapshot.SessionId, sessionId)
+                && StringComparer.Ordinal.Equals(document.Snapshot.ProjectId, projectId))
+            .Take(2)
+            .ToArray();
+        if (matches.Length == 0) throw Failure("committed_project_unknown", nameof(projectId));
+        if (matches.Length != 1) throw Failure("committed_project_ambiguous", nameof(projectId));
+        var before = matches[0];
+        if (before.Snapshot.Dirty
+            || before.Snapshot.Revision != revision
+            || before.LastSavedRevision != revision
+            || !FixedDigestEquals(before.Snapshot.ContentDigest, before.LastSavedContentDigest))
+            throw Failure("committed_project_binding_mismatch", nameof(revision));
+        var expectedDigest = before.Snapshot.ContentDigest;
+        var refreshed = await generation.Composition.Coordinator.RefreshProjectAsync(
+            new PhotonCadProjectRefreshRequest(requestId, before.ProjectHandle, sessionId, projectId, revision),
+            token).ConfigureAwait(false);
+        EnsureCurrent(generation);
+        generation.Track(refreshed);
+        if (refreshed.Snapshot.Dirty
+            || refreshed.Snapshot.Revision != revision
+            || refreshed.LastSavedRevision != revision
+            || !StringComparer.Ordinal.Equals(refreshed.Snapshot.SessionId, sessionId)
+            || !StringComparer.Ordinal.Equals(refreshed.Snapshot.ProjectId, projectId)
+            || !FixedDigestEquals(refreshed.Snapshot.ContentDigest, expectedDigest)
+            || !FixedDigestEquals(refreshed.Snapshot.ContentDigest, refreshed.LastSavedContentDigest))
+            throw Failure("committed_project_readback_mismatch", nameof(refreshed));
+        return await generation.Composition.Coordinator.ResolveCommittedReadbackAsync(
+            refreshed.ProjectHandle,
+            sessionId,
+            projectId,
+            revision,
+            token).ConfigureAwait(false);
+    }, cancellationToken);
+
     public ValueTask<PhotonCadDesktopProjectPickerOutcome> ChooseWorkspaceAsync(
         string requestId,
         string purpose,
@@ -273,11 +324,21 @@ public sealed class PhotonCadWindowsDesktopProjectHost : IPhotonCadDesktopProjec
         CancellationToken cancellationToken = default) => UseAsync(async (generation, token) =>
     {
         ArgumentNullException.ThrowIfNull(request);
-        await _references.RevokeProjectAsync(request.ProjectHandle, token).ConfigureAwait(false);
-        generation.RevokeRuntimeAttachment(request.ProjectHandle);
-        var document = await generation.Composition.Coordinator.RefreshProjectAsync(request, token).ConfigureAwait(false);
-        generation.Track(document);
-        return document;
+        var attachment = generation.CaptureRuntimeAttachmentForRefresh(request);
+        try
+        {
+            await _references.RevokeProjectAsync(request.ProjectHandle, token).ConfigureAwait(false);
+            var document = await generation.Composition.Coordinator.RefreshProjectAsync(request, token).ConfigureAwait(false);
+            EnsureCurrent(generation);
+            generation.Track(document);
+            generation.CompleteRuntimeAttachmentRefresh(request, document, attachment);
+            return document;
+        }
+        catch
+        {
+            generation.RevokeRuntimeAttachment(request.ProjectHandle);
+            throw;
+        }
     }, cancellationToken);
 
     public ValueTask<PhotonCadProjectSaveOutcome> SaveProjectAsync(
@@ -629,6 +690,45 @@ public sealed class PhotonCadWindowsDesktopProjectHost : IPhotonCadDesktopProjec
 
         internal void RevokeRuntimeAttachment(PhotonCadProjectHandle handle) =>
             RuntimeAttachments.Remove(handle.Value);
+
+        internal RuntimeProjectAttachment? CaptureRuntimeAttachmentForRefresh(PhotonCadProjectRefreshRequest request)
+        {
+            if (!RuntimeAttachments.TryGetValue(request.ProjectHandle.Value, out var attachment)
+                || !Documents.TryGetValue(request.ProjectHandle.Value, out var document)
+                || !StringComparer.Ordinal.Equals(attachment.GenerationId, Id)
+                || !attachment.ProjectHandle.Equals(request.ProjectHandle)
+                || !StringComparer.Ordinal.Equals(attachment.SessionId, request.SessionId)
+                || !StringComparer.Ordinal.Equals(attachment.ProjectId, request.ProjectId)
+                || attachment.Revision != request.KnownRevision
+                || document.Snapshot.Dirty
+                || document.Snapshot.Revision != attachment.Revision
+                || document.LastSavedRevision != attachment.Revision
+                || !FixedDigestEquals(document.Snapshot.ContentDigest, attachment.ContentDigest)
+                || !FixedDigestEquals(document.Snapshot.ContentDigest, document.LastSavedContentDigest))
+                return null;
+            return attachment;
+        }
+
+        internal void CompleteRuntimeAttachmentRefresh(
+            PhotonCadProjectRefreshRequest request,
+            PhotonCadProjectDocument document,
+            RuntimeProjectAttachment? expected)
+        {
+            if (expected is null
+                || !RuntimeAttachments.TryGetValue(request.ProjectHandle.Value, out var current)
+                || !ReferenceEquals(current, expected)
+                || !document.ProjectHandle.Equals(expected.ProjectHandle)
+                || !StringComparer.Ordinal.Equals(document.Snapshot.SessionId, expected.SessionId)
+                || !StringComparer.Ordinal.Equals(document.Snapshot.ProjectId, expected.ProjectId)
+                || document.Snapshot.Revision != expected.Revision
+                || document.LastSavedRevision != expected.Revision
+                || document.Snapshot.Dirty
+                || !FixedDigestEquals(document.Snapshot.ContentDigest, expected.ContentDigest)
+                || !FixedDigestEquals(document.Snapshot.ContentDigest, document.LastSavedContentDigest))
+            {
+                RuntimeAttachments.Remove(request.ProjectHandle.Value);
+            }
+        }
 
         internal void RevokeRuntimeAttachmentsForProject(string projectId)
         {

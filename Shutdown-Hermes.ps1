@@ -79,6 +79,7 @@ try {
     $ownedProcesses = @(
         @{ PidFile = (Join-Path $logsPath 'client.pid'); IdentityFile = (Join-Path $logsPath 'client.process.json'); Label = 'Hermes desktop client'; Port = 0 },
         @{ PidFile = (Join-Path $logsPath 'maui.pid'); IdentityFile = (Join-Path $logsPath 'maui.process.json'); Label = 'legacy MAUI client'; Port = 0 },
+        @{ PidFile = (Join-Path $logsPath 'assistant-bus.pid'); IdentityFile = (Join-Path $logsPath 'assistant-bus.process.json'); Label = 'Assistant Conversation Bus'; Port = 9072 },
         @{ PidFile = (Join-Path $logsPath 'workbench.pid'); IdentityFile = (Join-Path $logsPath 'workbench.process.json'); Label = 'Hermes Workbench web client'; Port = 4173 },
         @{ PidFile = (Join-Path $logsPath 'serena.pid'); IdentityFile = (Join-Path $logsPath 'serena.process.json'); Label = 'Serena'; Port = 9121 }
     )

@@ -11,9 +11,11 @@ $frontendSource = Join-Path $projectRoot 'src'
 $testsSource = Join-Path $projectRoot 'tests'
 $desktopClientSource = Join-Path $projectRoot 'artifacts\desktop\win-x64'
 $bridgeClientSource = Join-Path $projectRoot 'artifacts\tools\hermes-bridge\win-x64'
+$assistantBusSource = Join-Path $projectRoot 'artifacts\tools\assistant-bus\win-x64'
 $netCoreDbgArchiveSource = Join-Path $projectRoot 'artifacts\toolchain-cache\netcoredbg-win64.zip'
 $roslynServerArchiveSource = Join-Path $projectRoot 'artifacts\toolchain-cache\microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg'
 $roslynSdkArchiveSource = Join-Path $projectRoot 'artifacts\toolchain-cache\dotnet-sdk-10.0.302-win-x64.zip'
+$arduinoArchiveSource = Join-Path $projectRoot 'artifacts\toolchain-cache\arduino-cli_1.5.1_Windows_64bit.zip'
 $Destination = if ([string]::IsNullOrWhiteSpace($Destination)) {
     Join-Path $projectRoot $(if ($IncludeLocalEngineeringPhotonCadAssets) {
         'Hermes-Remote-Install.LOCAL-ENGINEERING-ONLY.zip'
@@ -38,7 +40,8 @@ try {
     $portableFiles = @(
         'Check Hermes.cmd', 'Install Hermes.cmd', 'Launch Hermes.cmd', 'Shutdown Hermes.cmd',
         'Update Hermes.cmd', 'Show Hermes Bridge.cmd', 'docker-compose.yml', 'launcher.settings.json',
-        'Install-Hermes.ps1', 'Install-NetCoreDbg.ps1', 'Get-NetCoreDbg.ps1', 'Install-RoslynLanguageServer.ps1', 'roslyn-language-server.lock.json', 'Test-Hermes.ps1',
+        'Install-Hermes.ps1', 'Install-NetCoreDbg.ps1', 'Get-NetCoreDbg.ps1', 'Install-RoslynLanguageServer.ps1', 'roslyn-language-server.lock.json',
+        'Install-ArduinoToolchain.ps1', 'arduino-toolchain.lock.json', 'Test-Hermes.ps1',
         'Install-PhotonModels.ps1', 'Install-PhotonCadRuntime.ps1', 'photon-cad-assets.lock.json',
         'Launch-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1', 'Show-HermesBridge.ps1',
         'Invoke-HermesFrontend.ps1', 'README.md', 'THIRD-PARTY-NOTICES.md',
@@ -101,7 +104,7 @@ try {
     New-Item -ItemType Directory -Path $editorStage | Out-Null
     Copy-Item -LiteralPath $editorTasks -Destination (Join-Path $editorStage 'tasks.json') -Force
 
-    $requiredSmokeScripts = @('Install-Hermes.Smoke.ps1', 'Shutdown-Hermes.Smoke.ps1', 'Update-Hermes.Smoke.ps1', 'NetCoreDbg-Provisioning.Smoke.ps1', 'RoslynLanguageServer-Provisioning.Fake.Smoke.ps1', 'PhotonCad-Offline-Assets.Smoke.ps1', 'Memory-Vector-Compose.Smoke.ps1')
+    $requiredSmokeScripts = @('Install-Hermes.Smoke.ps1', 'Shutdown-Hermes.Smoke.ps1', 'Update-Hermes.Smoke.ps1', 'NetCoreDbg-Provisioning.Smoke.ps1', 'RoslynLanguageServer-Provisioning.Fake.Smoke.ps1', 'ArduinoToolchain-Provisioning.Smoke.ps1', 'PhotonCad-Offline-Assets.Smoke.ps1', 'Memory-Vector-Compose.Smoke.ps1')
     $missingSmokeScripts = @($requiredSmokeScripts | Where-Object { -not (Test-Path -LiteralPath (Join-Path $testsSource $_) -PathType Leaf) })
     if ($missingSmokeScripts.Count -gt 0) {
         throw "Hermes Workbench installer smoke scripts were not found: $($missingSmokeScripts -join ', ')"
@@ -172,6 +175,14 @@ try {
     New-Item -ItemType Directory -Path $bridgeStage -Force | Out-Null
     Copy-Item -LiteralPath $bridgeExecutable -Destination (Join-Path $bridgeStage 'hermes-bridge.exe') -Force
 
+    $assistantBusExecutable = Join-Path $assistantBusSource 'assistant-bus.exe'
+    if (-not (Test-Path -LiteralPath $assistantBusExecutable -PathType Leaf)) {
+        throw "Published Assistant Conversation Bus was not found at $assistantBusExecutable"
+    }
+    $assistantBusStage = Join-Path $stage 'tools\assistant-bus'
+    New-Item -ItemType Directory -Path $assistantBusStage -Force | Out-Null
+    Copy-Item -LiteralPath $assistantBusExecutable -Destination (Join-Path $assistantBusStage 'assistant-bus.exe') -Force
+
     & (Join-Path $source 'Get-NetCoreDbg.ps1') -DestinationPath $netCoreDbgArchiveSource
     $netCoreDbgArchiveValid = (Test-Path -LiteralPath $netCoreDbgArchiveSource -PathType Leaf) -and
         (Get-Item -LiteralPath $netCoreDbgArchiveSource).Length -eq 3475639L -and
@@ -197,6 +208,14 @@ try {
     }
     Copy-Item -LiteralPath $roslynServerArchiveSource -Destination (Join-Path $toolchainStage 'microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg')
     Copy-Item -LiteralPath $roslynSdkArchiveSource -Destination (Join-Path $toolchainStage 'dotnet-sdk-10.0.302-win-x64.zip')
+
+    $arduinoArchiveValid = (Test-Path -LiteralPath $arduinoArchiveSource -PathType Leaf) -and
+        (Get-Item -LiteralPath $arduinoArchiveSource).Length -eq 17965819L -and
+        (Get-FileHash -LiteralPath $arduinoArchiveSource -Algorithm SHA256).Hash -ceq 'FABE42E0EB04D00E776A66178299FF95A46C623DBC260F997E58FD514853DD40'
+    if (-not $arduinoArchiveValid) {
+        throw 'The pinned Arduino CLI archive is missing or failed its release integrity check.'
+    }
+    Copy-Item -LiteralPath $arduinoArchiveSource -Destination (Join-Path $toolchainStage 'arduino-cli_1.5.1_Windows_64bit.zip')
 
     New-Item -ItemType Directory -Path (Join-Path $stage 'data'), (Join-Path $stage 'logs'), (Join-Path $stage 'workspace') | Out-Null
 
@@ -239,6 +258,8 @@ try {
             'Hermes-Remote-Install/Install-NetCoreDbg.ps1',
             'Hermes-Remote-Install/Install-RoslynLanguageServer.ps1',
             'Hermes-Remote-Install/roslyn-language-server.lock.json',
+            'Hermes-Remote-Install/Install-ArduinoToolchain.ps1',
+            'Hermes-Remote-Install/arduino-toolchain.lock.json',
             'Hermes-Remote-Install/Install-PhotonModels.ps1',
             'Hermes-Remote-Install/Install-PhotonCadRuntime.ps1',
             'Hermes-Remote-Install/photon-cad-assets.lock.json',
@@ -259,6 +280,7 @@ try {
             'Hermes-Remote-Install/tests/Update-Hermes.Smoke.ps1',
             'Hermes-Remote-Install/tests/NetCoreDbg-Provisioning.Smoke.ps1',
             'Hermes-Remote-Install/tests/RoslynLanguageServer-Provisioning.Fake.Smoke.ps1',
+            'Hermes-Remote-Install/tests/ArduinoToolchain-Provisioning.Smoke.ps1',
             'Hermes-Remote-Install/tests/PhotonCad-Offline-Assets.Smoke.ps1',
             'Hermes-Remote-Install/tests/Memory-Vector-Compose.Smoke.ps1',
             'Hermes-Remote-Install/runtime/Runtime.Common.ps1',
@@ -272,9 +294,11 @@ try {
             'Hermes-Remote-Install/toolchains/netcoredbg-win64.zip',
             'Hermes-Remote-Install/toolchains/microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg',
             'Hermes-Remote-Install/toolchains/dotnet-sdk-10.0.302-win-x64.zip',
+            'Hermes-Remote-Install/toolchains/arduino-cli_1.5.1_Windows_64bit.zip',
             'Hermes-Remote-Install/src/package-lock.json',
             'Hermes-Remote-Install/client/HermesDesktop.exe',
-            'Hermes-Remote-Install/tools/hermes-bridge/hermes-bridge.exe'
+            'Hermes-Remote-Install/tools/hermes-bridge/hermes-bridge.exe',
+            'Hermes-Remote-Install/tools/assistant-bus/assistant-bus.exe'
         )
         if ($IncludeLocalEngineeringPhotonCadAssets) {
             $requiredEntries += @(
@@ -332,6 +356,20 @@ try {
         finally { $bridgeStream.Dispose() }
         $publishedBridgeHash = (Get-FileHash -LiteralPath $bridgeExecutable -Algorithm SHA256).Hash
         if ($embeddedBridgeHash -ne $publishedBridgeHash) { throw 'Packaged Hermes bridge client does not match the published bridge client.' }
+
+        $assistantBusEntry = $archive.Entries | Where-Object {
+            $_.FullName.Replace('\', '/') -eq 'Hermes-Remote-Install/tools/assistant-bus/assistant-bus.exe'
+        } | Select-Object -First 1
+        if (-not $assistantBusEntry) { throw 'Packaged Assistant Conversation Bus entry could not be opened for verification.' }
+        $assistantBusStream = $assistantBusEntry.Open()
+        try {
+            $assistantBusSha = [Security.Cryptography.SHA256]::Create()
+            try { $embeddedAssistantBusHash = ([BitConverter]::ToString($assistantBusSha.ComputeHash($assistantBusStream))).Replace('-', '') }
+            finally { $assistantBusSha.Dispose() }
+        }
+        finally { $assistantBusStream.Dispose() }
+        $publishedAssistantBusHash = (Get-FileHash -LiteralPath $assistantBusExecutable -Algorithm SHA256).Hash
+        if ($embeddedAssistantBusHash -ne $publishedAssistantBusHash) { throw 'Packaged Assistant Conversation Bus does not match the published executable.' }
     }
     finally { $archive.Dispose() }
 
@@ -361,7 +399,7 @@ try {
     )
     Write-Host "Created $resolvedDestination" -ForegroundColor Green
     Write-Host "Created $checksumPath" -ForegroundColor Green
-    Write-Host "Verified $($entryNames.Count) archive entries, $($manifestEntries.Count) manifested files, desktop host SHA-256 $publishedClientHash, and bridge client SHA-256 $publishedBridgeHash." -ForegroundColor Green
+    Write-Host "Verified $($entryNames.Count) archive entries, $($manifestEntries.Count) manifested files, desktop host SHA-256 $publishedClientHash, bridge client SHA-256 $publishedBridgeHash, and Assistant Conversation Bus SHA-256 $publishedAssistantBusHash." -ForegroundColor Green
     Write-Host 'Credentials, sessions, logs, node_modules, builds, environment files, and local Hermes data were excluded.' -ForegroundColor Green
 }
 finally {

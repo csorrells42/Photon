@@ -8,7 +8,7 @@ internal static class MutationMapperV1
 {
     internal static PhotonCadSealedMutationDelta Map(
         PhotonCadRuntimeSyncRequest request,
-        IndustrialPrimitiveCommand command,
+        IIndustrialPartCommand command,
         IndustrialPrimitiveResponse primitive,
         byte[] step,
         IndustrialPreviewResponse preview,
@@ -103,8 +103,8 @@ internal static class MutationMapperV1
                 new PhotonCadEntityV1(
                     command.EntityId,
                     parentId: null,
-                    PhotonCadEntityKindV1.Body,
-                    command.Kind == IndustrialPrimitiveKind.Box ? "Box" : "Cylinder",
+                    command.EntityKind,
+                    command.EntityName,
                     visible: true,
                     suppressed: false,
                     request.CapabilityId),

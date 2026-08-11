@@ -664,12 +664,13 @@ public sealed class RoslynLanguageSession : IAsyncDisposable
         var resolved = Path.GetFullPath(solutionPath);
         var extension = Path.GetExtension(resolved);
         if (!extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The Roslyn solution must be a .sln or .slnx file.", nameof(solutionPath));
-        ValidateWorkspacePath(resolved, "The Roslyn solution is outside the active workspace.");
+            && !extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The Roslyn workspace must be a .sln, .slnx, or .csproj file.", nameof(solutionPath));
+        ValidateWorkspacePath(resolved, "The Roslyn workspace is outside the active workspace.");
         var file = new FileInfo(resolved);
         if (!file.Exists)
-            throw new FileNotFoundException("The Roslyn solution is unavailable.", resolved);
+            throw new FileNotFoundException("The Roslyn workspace is unavailable.", resolved);
         return resolved;
     }
 

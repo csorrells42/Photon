@@ -13,11 +13,16 @@ import type {
   HermesToolRun,
 } from './HermesRuntimeAdapter'
 import { hermesSessionApi, storedMessageText } from '../HermesSessions/HermesSessionApi'
-import { hermesModelAdapter } from '../HermesSettings/HermesModelAdapter'
+import {
+  effectiveHermesReasoningEffort,
+  hermesModelAdapter,
+  hermesReasoningControlForSelection,
+} from '../HermesSettings/HermesModelAdapter'
 import type {
   HermesApprovalMode,
   HermesModelCatalog,
   HermesModelSelection,
+  HermesReasoningEffort,
 } from '../HermesSettings/HermesModelAdapter'
 import {
   buildPromptWithAttachments,
@@ -44,6 +49,10 @@ import {
 import type { HermesNotification } from './HermesNotificationAdapter'
 import { normalizeHermesDesktopUiAction, shouldAcceptHermesDesktopUiAction } from './HermesDesktopUiAdapter'
 import type { HermesDesktopUiAction } from './HermesDesktopUiAdapter'
+import { reasoningCatalogSelection, reasoningEffortFromSessionInfo } from './HermesReasoningState'
+import { desktopDeveloperServicesClient } from '../DeveloperServices/DesktopDeveloperServicesClient'
+import { desktopDotNetDebuggerController } from '../DeveloperServices/DesktopDotNetDebuggerClient'
+import { handleNativeDeveloperRequest } from './HermesNativeDeveloperBridge'
 import {
   HermesVisionInputError,
   hermesGatewayVisionController,
@@ -148,12 +157,15 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
   const [modelSelection, setModelSelection] = useState<HermesModelSelection | null>(null)
   const [modelLoading, setModelLoading] = useState(false)
   const [modelSwitching, setModelSwitching] = useState(false)
+  const [modelSwitchPending, setModelSwitchPending] = useState(false)
   const [pendingModelConfirmation, setPendingModelConfirmation] = useState<null | {
     message: string
     selection: HermesModelSelection
   }>(null)
   const [approvalMode, setApprovalModeState] = useState<HermesApprovalMode>('smart')
   const [approvalModeSaving, setApprovalModeSaving] = useState(false)
+  const [reasoningEffort, setReasoningEffortState] = useState<HermesReasoningEffort | null>(null)
+  const [reasoningEffortSaving, setReasoningEffortSaving] = useState(false)
   const [attachments, setAttachments] = useState<HermesComposerAttachment[]>([])
   const [turnCompletionCount, setTurnCompletionCount] = useState(0)
   const [notifications, setNotifications] = useState<HermesNotification[]>([])
@@ -163,12 +175,16 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
   const connectionGeneration = useRef(0)
   const sessionOpenGeneration = useRef(new HermesSessionOpenGeneration())
   const modelLoadGeneration = useRef(new HermesSessionOpenGeneration())
+  const reasoningLoadGeneration = useRef(new HermesSessionOpenGeneration())
+  const reasoningSaveGeneration = useRef(new HermesSessionOpenGeneration())
   const sessionOpening = useRef(false)
   const sessionRecoveryBlocked = useRef<string | null>(null)
   const hadOpenConnection = useRef(false)
   const desktopUiActionRef = useRef(options.onDesktopUiAction)
   desktopUiActionRef.current = options.onDesktopUiAction
   const reconnecting = useRef(false)
+  const modelSelectionRef = useRef<HermesModelSelection | null>(modelSelection)
+  modelSelectionRef.current = modelSelection
   const approvalSubmitting = pendingApproval && approvalSubmission?.requestId === pendingApproval.requestId
     ? approvalSubmission.choice
     : null
@@ -193,18 +209,27 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     return () => window.clearTimeout(timer)
   }, [notifications])
 
-  const loadModelCatalog = useCallback(async (refresh = false, targetSessionId = sessionId.current ?? undefined) => {
+  const loadModelCatalog = useCallback(async (
+    refresh = false,
+    targetSessionId = sessionId.current ?? undefined,
+    reasoningSelection?: HermesModelSelection,
+  ) => {
     if (hermesGateway.connectionState !== 'open') return
     const generation = modelLoadGeneration.current.begin()
     setModelLoading(true)
     try {
-      const catalog = await hermesModelAdapter.options(targetSessionId, refresh)
+      const catalog = await hermesModelAdapter.options(targetSessionId, refresh, reasoningSelection)
       if (!modelLoadGeneration.current.isCurrent(generation)) return
       setModelCatalog(catalog)
       const catalogSelection = catalog.currentModel && catalog.currentProvider
         ? { model: catalog.currentModel, provider: catalog.currentProvider }
         : null
-      setModelSelection((current) => targetSessionId ? catalogSelection ?? current : current ?? catalogSelection)
+      setModelSelection((current) => reasoningCatalogSelection(
+        current,
+        catalogSelection,
+        reasoningSelection,
+        Boolean(targetSessionId),
+      ))
     } catch (reason) {
       if (!modelLoadGeneration.current.isCurrent(generation)) return
       setError(reason instanceof Error ? reason.message : 'Could not load Hermes model options.')
@@ -217,6 +242,19 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     if (hermesGateway.connectionState !== 'open') return
     try { setApprovalModeState(await hermesModelAdapter.getApprovalMode()) }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not read the Hermes approval mode.') }
+  }, [])
+
+  const syncReasoningEffort = useCallback(async (targetSessionId = sessionId.current ?? undefined) => {
+    if (hermesGateway.connectionState !== 'open') return
+    const generation = reasoningLoadGeneration.current.begin()
+    try {
+      const effort = await hermesModelAdapter.getReasoningEffort(targetSessionId)
+      if (reasoningLoadGeneration.current.isCurrent(generation)) setReasoningEffortState(effort)
+    } catch (reason) {
+      if (reasoningLoadGeneration.current.isCurrent(generation)) {
+        setError(reason instanceof Error ? reason.message : 'Could not read the Hermes reasoning effort.')
+      }
+    }
   }, [])
 
   const recoverActiveSession = useCallback(async () => {
@@ -272,7 +310,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
       if (generation !== connectionGeneration.current) return
       if (isRecovery) await recoverActiveSession()
       if (generation !== connectionGeneration.current) return
-      await Promise.all([loadModelCatalog(), syncApprovalMode()])
+      await Promise.all([loadModelCatalog(), syncApprovalMode(), syncReasoningEffort()])
       if (generation !== connectionGeneration.current) return
       hadOpenConnection.current = true
       setConnection('open')
@@ -284,7 +322,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     } finally {
       reconnecting.current = false
     }
-  }, [loadModelCatalog, recoverActiveSession, syncApprovalMode])
+  }, [loadModelCatalog, recoverActiveSession, syncApprovalMode, syncReasoningEffort])
 
   useEffect(() => {
     let disposed = false
@@ -325,7 +363,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
         await hermesGateway.connect(true)
         await recoverActiveSession()
         if (disposed) return
-        await Promise.all([loadModelCatalog(), syncApprovalMode()])
+        await Promise.all([loadModelCatalog(), syncApprovalMode(), syncReasoningEffort()])
         reconnectAttempt = 0
         hadOpenConnection.current = true
         setError(null)
@@ -423,13 +461,22 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
         const model = typeof event.payload?.model === 'string' ? event.payload.model.trim() : ''
         const provider = typeof event.payload?.provider === 'string' ? event.payload.provider.trim() : ''
         if (model || provider) {
+          const nextSelection = {
+            model: model || modelSelectionRef.current?.model || '',
+            provider: provider || modelSelectionRef.current?.provider || '',
+          }
           setModelSelection((current) => ({
             model: model || current?.model || '',
             provider: provider || current?.provider || '',
           }))
+          void loadModelCatalog(true, sessionId.current ?? undefined, nextSelection)
+        }
+        if (typeof event.payload?.model_switch_pending === 'boolean') {
+          setModelSwitchPending(event.payload.model_switch_pending)
         }
         const mode = event.payload?.approval_mode
         if (mode === 'manual' || mode === 'smart' || mode === 'off') setApprovalModeState(mode)
+        setReasoningEffortState((current) => reasoningEffortFromSessionInfo(event.payload, current))
       } else if (event.type === 'message.complete') {
         const finalText = eventText(event)
         setBusy(false)
@@ -471,6 +518,9 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
           setPendingPrompt(prompt)
           setPromptSubmissionId(null)
         }
+      } else if (event.type === 'developer.native.request') {
+        void handleNativeDeveloperRequest(event, hermesGateway, desktopDeveloperServicesClient, desktopDotNetDebuggerController)
+          .catch((reason) => setError(reason instanceof Error ? reason.message : 'The Windows developer bridge failed.'))
       } else if (event.type === 'error') {
         setBusy(false)
         setPendingApproval(null)
@@ -508,6 +558,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
         setAttachments([])
         setModelCatalog(null)
         setModelSelection(null)
+        setReasoningEffortState(null)
         setPendingModelConfirmation(null)
         hadOpenConnection.current = false
         hermesGateway.close()
@@ -530,7 +581,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
       removeState()
       removeEvent()
     }
-  }, [connect, loadModelCatalog, recoverActiveSession, syncApprovalMode])
+  }, [connect, loadModelCatalog, recoverActiveSession, syncApprovalMode, syncReasoningEffort])
 
   const addAttachments = useCallback((files: File[], origin: HermesVisionInputOrigin = 'file-picker') => {
     const accepted: HermesComposerAttachment[] = []
@@ -576,6 +627,8 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     try {
       if (!sessionId.current) {
         const selection = modelSelection
+        const reasoningControl = hermesReasoningControlForSelection(modelCatalog, selection)
+        const verifiedReasoningEffort = effectiveHermesReasoningEffort(reasoningEffort, reasoningControl)
         const created = await hermesGateway.request<{ session_id: string; stored_session_id?: string }>('session.create', {
           cols: 96,
           source: 'desktop',
@@ -583,6 +636,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
             model: selection.model,
             ...(selection.provider ? { provider: selection.provider } : {}),
           } : {}),
+          ...(verifiedReasoningEffort ? { reasoning_effort: verifiedReasoningEffort } : {}),
         })
         if (sendConnectionGeneration !== connectionGeneration.current || sessionOpening.current) {
           throw visionStageInvalidated()
@@ -650,7 +704,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
       setError(message)
       throw reason
     }
-  }, [attachments, connection, modelSelection])
+  }, [attachments, connection, modelCatalog, modelSelection, reasoningEffort])
 
   const stop = useCallback(async () => {
     if (!sessionId.current) return
@@ -671,6 +725,8 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     if (!canStartHermesChat(busy, hermesGateway.connectionState === 'open')) return
     sessionOpenGeneration.current.invalidate()
     modelLoadGeneration.current.invalidate()
+    reasoningLoadGeneration.current.invalidate()
+    reasoningSaveGeneration.current.invalidate()
     sessionOpening.current = false
     setLoadingSession(false)
     sessionId.current = null
@@ -687,13 +743,19 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     setPromptSubmissionId(null)
     setAttachments([])
     setReasoning({ body: '', streaming: false })
+    setReasoningEffortState(null)
+    setReasoningEffortSaving(false)
+    setModelSwitchPending(false)
     setConnection('open')
-  }, [busy])
+    void syncReasoningEffort(undefined)
+  }, [busy, syncReasoningEffort])
 
   const openSession = useCallback(async (storedId: string, profile?: string) => {
     if (busy || loadingSession) return false
     const generation = sessionOpenGeneration.current.begin()
     modelLoadGeneration.current.invalidate()
+    reasoningLoadGeneration.current.invalidate()
+    reasoningSaveGeneration.current.invalidate()
     sessionOpening.current = true
     sessionId.current = null
     setLoadingSession(true)
@@ -707,6 +769,9 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     setPendingModelConfirmation(null)
     setAttachments([])
     setReasoning({ body: '', streaming: false })
+    setReasoningEffortState(null)
+    setReasoningEffortSaving(false)
+    setModelSwitchPending(false)
     sessionRecoveryBlocked.current = null
 
     try {
@@ -731,6 +796,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
       sessionId.current = resumed.session_id
       storedSessionId.current = resumed.stored_session_id ?? history.sessionId ?? storedId
       sessionProfile.current = profile?.trim() || undefined
+      await syncReasoningEffort(resumed.session_id)
       setToolActivity(null)
       setToolRuns([])
       setPendingApproval(null)
@@ -759,7 +825,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
         setLoadingSession(false)
       }
     }
-  }, [busy, loadModelCatalog, loadingSession])
+  }, [busy, loadModelCatalog, loadingSession, syncReasoningEffort])
 
   const respondToApproval = useCallback(async (choice: HermesApprovalChoice) => {
     const request = pendingApproval
@@ -814,11 +880,17 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
   }, [pendingPrompt, promptSubmitting])
 
   const selectModel = useCallback(async (selection: HermesModelSelection, confirmExpensiveModel = false) => {
-    if (modelSwitching || sessionOpening.current) return false
+    if (modelSwitching || modelSwitchPending || sessionOpening.current) return false
     const targetSessionId = sessionId.current
     if (!targetSessionId) {
+      reasoningLoadGeneration.current.invalidate()
+      reasoningSaveGeneration.current.invalidate()
+      setReasoningEffortState(null)
+      setReasoningEffortSaving(false)
       setModelSelection(selection)
       setPendingModelConfirmation(null)
+      await loadModelCatalog(false, undefined, selection)
+      await syncReasoningEffort(undefined)
       return true
     }
 
@@ -834,9 +906,16 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
         })
         return false
       }
-      setModelSelection({ model: result.model || selection.model, provider: selection.provider })
+      reasoningLoadGeneration.current.invalidate()
+      reasoningSaveGeneration.current.invalidate()
+      setReasoningEffortState(null)
+      setReasoningEffortSaving(false)
+      const appliedSelection = { model: result.model || selection.model, provider: selection.provider }
+      setModelSelection(appliedSelection)
+      setModelSwitchPending(result.deferred)
       setPendingModelConfirmation(null)
-      void loadModelCatalog()
+      await loadModelCatalog(true, targetSessionId, appliedSelection)
+      if (!result.deferred) await syncReasoningEffort(targetSessionId)
       return true
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Hermes could not switch models.')
@@ -844,7 +923,47 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     } finally {
       setModelSwitching(false)
     }
-  }, [loadModelCatalog, modelSwitching])
+  }, [loadModelCatalog, modelSwitchPending, modelSwitching, syncReasoningEffort])
+
+  const changeReasoningEffort = useCallback(async (effort: HermesReasoningEffort) => {
+    if (sessionOpening.current || reasoningEffortSaving) return
+    const control = hermesReasoningControlForSelection(modelCatalog, modelSelection)
+    if (!control || (control.source !== 'server' && control.source !== 'compatibility') || !control.options.includes(effort)) {
+      const message = 'The selected model did not verify that reasoning option.'
+      setError(message)
+      throw new Error(message)
+    }
+    const targetSessionId = sessionId.current
+    if (!targetSessionId) {
+      setReasoningEffortState(effort)
+      return
+    }
+    const previous = reasoningEffort
+    const targetSelection = modelSelection
+    const generation = reasoningSaveGeneration.current.begin()
+    setReasoningEffortState(effort)
+    setReasoningEffortSaving(true)
+    setError(null)
+    try {
+      const saved = await hermesModelAdapter.setReasoningEffort(effort, targetSessionId)
+      if (
+        reasoningSaveGeneration.current.isCurrent(generation)
+        && !sessionOpening.current
+        && sessionId.current === targetSessionId
+        && modelSelectionRef.current?.model === targetSelection?.model
+        && modelSelectionRef.current?.provider === targetSelection?.provider
+      ) setReasoningEffortState(saved)
+    } catch (reason) {
+      const currentSave = reasoningSaveGeneration.current.isCurrent(generation)
+      if (currentSave && !sessionOpening.current && sessionId.current === targetSessionId) {
+        setReasoningEffortState(previous)
+        setError(reason instanceof Error ? reason.message : 'Hermes could not update the reasoning effort.')
+      }
+      throw reason
+    } finally {
+      if (reasoningSaveGeneration.current.isCurrent(generation)) setReasoningEffortSaving(false)
+    }
+  }, [modelCatalog, modelSelection, reasoningEffort, reasoningEffortSaving])
 
   const changeApprovalMode = useCallback(async (mode: HermesApprovalMode) => {
     if (sessionOpening.current || approvalModeSaving || mode === approvalMode) return
@@ -883,7 +1002,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     modelLoading,
     modelSelection,
     selectedModelVisionCapability,
-    modelSwitching,
+    modelSwitching: modelSwitching || modelSwitchPending,
     newChat,
     notifications,
     openSession,
@@ -892,12 +1011,15 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     pendingPrompt,
     promptSubmitting,
     reasoning,
-    refreshModels: () => sessionOpening.current ? Promise.resolve() : loadModelCatalog(true),
+    reasoningEffort,
+    reasoningEffortSaving,
+    refreshModels: () => sessionOpening.current ? Promise.resolve() : loadModelCatalog(true, sessionId.current ?? undefined, modelSelection ?? undefined),
     removeAttachment,
     dismissNotification,
     respondToApproval,
     respondToPrompt,
     selectModel,
+    setReasoningEffort: changeReasoningEffort,
     setApprovalMode: changeApprovalMode,
     cancelModelConfirmation: () => setPendingModelConfirmation(null),
     confirmModelSelection: () => pendingModelConfirmation

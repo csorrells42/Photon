@@ -66,10 +66,10 @@ function Test-PortableBundle {
 
     $required = @(
         'Install Hermes.cmd', 'Launch Hermes.cmd', 'Check Hermes.cmd', 'Shutdown Hermes.cmd', 'Update Hermes.cmd',
-        'Install-Hermes.ps1', 'Install-NetCoreDbg.ps1', 'Install-RoslynLanguageServer.ps1', 'roslyn-language-server.lock.json', 'Install-PhotonModels.ps1', 'Install-PhotonCadRuntime.ps1', 'photon-cad-assets.lock.json', 'Launch-Hermes.ps1', 'Test-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1',
+        'Install-Hermes.ps1', 'Install-NetCoreDbg.ps1', 'Install-RoslynLanguageServer.ps1', 'roslyn-language-server.lock.json', 'Install-ArduinoToolchain.ps1', 'arduino-toolchain.lock.json', 'Install-PhotonModels.ps1', 'Install-PhotonCadRuntime.ps1', 'photon-cad-assets.lock.json', 'Launch-Hermes.ps1', 'Test-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1',
         'Invoke-HermesFrontend.ps1', 'docker-compose.yml', 'launcher.settings.json', '.vscode/tasks.json',
-        'src/package-lock.json', 'client/HermesDesktop.exe', 'licenses/netcoredbg-LICENSE.txt',
-        'toolchains/netcoredbg-win64.zip', 'toolchains/microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg', 'toolchains/dotnet-sdk-10.0.302-win-x64.zip', 'runtime/Runtime.Common.ps1', 'runtime/Runtime.Generation.ps1',
+        'src/package-lock.json', 'client/HermesDesktop.exe', 'tools/assistant-bus/assistant-bus.exe', 'licenses/netcoredbg-LICENSE.txt',
+        'toolchains/netcoredbg-win64.zip', 'toolchains/microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg', 'toolchains/dotnet-sdk-10.0.302-win-x64.zip', 'toolchains/arduino-cli_1.5.1_Windows_64bit.zip', 'runtime/Runtime.Common.ps1', 'runtime/Runtime.Generation.ps1',
         'runtime/Build-HermesRuntime.ps1', 'runtime/Verify-HermesRuntime.ps1', 'runtime/Adopt-HermesRuntime.ps1',
         'runtime/photon-models.lock.json', 'runtime/memory-vector.lock.json'
     )
@@ -275,6 +275,13 @@ if (-not (Test-Path -LiteralPath $roslynInstaller -PathType Leaf)) {
 }
 Write-Host 'Provisioning the verified Roslyn language server...' -ForegroundColor Cyan
 & $roslynInstaller -InstallRoot $resolvedInstall
+
+$arduinoInstaller = Join-Path $resolvedInstall 'Install-ArduinoToolchain.ps1'
+if (-not (Test-Path -LiteralPath $arduinoInstaller -PathType Leaf)) {
+    throw "The Arduino toolchain installer is missing: $arduinoInstaller"
+}
+Write-Host 'Provisioning the verified Arduino toolchain...' -ForegroundColor Cyan
+& $arduinoInstaller -InstallRoot $resolvedInstall
 
 Write-Host 'Installing the Hermes Workbench frontend...' -ForegroundColor Cyan
 Push-Location $frontendRoot

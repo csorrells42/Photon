@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Diagnostics;
 using HermesDesktop;
 using HermesDeveloperServices;
+using HermesRoslynLanguageServer;
 
 if (args.Contains("--photon-cad-only", StringComparer.Ordinal))
     return await PhotonCadBridgeSmoke.RunAsync() ? 0 : 95;
@@ -212,6 +213,29 @@ if (!ReferenceEquals(browserInitializationA, browserInitializationB)
 }
 Console.WriteLine("Desktop browser single-flight initialization passed.");
 
+var browserSurfaceRequests = new BrowserSurfaceRequestGate();
+var deferredShowRequest = browserSurfaceRequests.Begin();
+var deferredBrowserInitialization = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+var deferredShow = Task.Run(async () =>
+{
+    await deferredBrowserInitialization.Task;
+    return browserSurfaceRequests.IsCurrent(deferredShowRequest);
+});
+browserSurfaceRequests.Invalidate();
+deferredBrowserInitialization.SetResult();
+if (await deferredShow)
+{
+    Console.Error.WriteLine("Desktop browser stale show survived a newer hide request.");
+    return 937;
+}
+var currentShowRequest = browserSurfaceRequests.Begin();
+if (!browserSurfaceRequests.IsCurrent(currentShowRequest))
+{
+    Console.Error.WriteLine("Desktop browser current show request was rejected.");
+    return 938;
+}
+Console.WriteLine("Desktop browser deferred show/hide ordering passed.");
+
 if (args.Contains("--document-browser-only", StringComparer.Ordinal)) return 0;
 
 if (!await DockerControlBridgeSmoke.RunAsync()) return 94;
@@ -239,64 +263,64 @@ if (!NativeCredentialProtocol.TryParseTargetName(credentialTarget, out var crede
 
 if (!args.Contains("--developer-services-only", StringComparer.Ordinal))
 {
-var vault = new WindowsCredentialVault();
-var smokeCredentialIds = new[]
-{
+    var vault = new WindowsCredentialVault();
+    var smokeCredentialIds = new[]
+    {
     $"roundtrip-ali-{Guid.NewGuid():N}",
     $"roundtrip-scarlett-{Guid.NewGuid():N}",
 };
-var smokeSecrets = smokeCredentialIds.ToDictionary(
-    credentialId => credentialId,
-    _ => $"hermes-smoke-{Guid.NewGuid():N}",
-    StringComparer.Ordinal);
-var savedSmokeCredentials = new HashSet<string>(StringComparer.Ordinal);
-try
-{
-    foreach (var smokeCredentialId in smokeCredentialIds)
+    var smokeSecrets = smokeCredentialIds.ToDictionary(
+        credentialId => credentialId,
+        _ => $"hermes-smoke-{Guid.NewGuid():N}",
+        StringComparer.Ordinal);
+    var savedSmokeCredentials = new HashSet<string>(StringComparer.Ordinal);
+    try
     {
-        using var secureSecret = new SecureString();
-        foreach (var character in smokeSecrets[smokeCredentialId]) secureSecret.AppendChar(character);
-        secureSecret.MakeReadOnly();
-
-        var saved = vault.Save("smoke-test", smokeCredentialId, secureSecret);
-        savedSmokeCredentials.Add(smokeCredentialId);
-        if (saved.Provider != "smoke-test" || saved.CredentialId != smokeCredentialId)
+        foreach (var smokeCredentialId in smokeCredentialIds)
         {
-            Console.Error.WriteLine("Windows Credential Manager returned unexpected credential metadata.");
-            return 12;
+            using var secureSecret = new SecureString();
+            foreach (var character in smokeSecrets[smokeCredentialId]) secureSecret.AppendChar(character);
+            secureSecret.MakeReadOnly();
+
+            var saved = vault.Save("smoke-test", smokeCredentialId, secureSecret);
+            savedSmokeCredentials.Add(smokeCredentialId);
+            if (saved.Provider != "smoke-test" || saved.CredentialId != smokeCredentialId)
+            {
+                Console.Error.WriteLine("Windows Credential Manager returned unexpected credential metadata.");
+                return 12;
+            }
+        }
+
+        var listedIds = vault.List()
+            .Where(item => item.Provider == "smoke-test" && smokeCredentialIds.Contains(item.CredentialId, StringComparer.Ordinal))
+            .Select(item => item.CredentialId)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!smokeCredentialIds.All(listedIds.Contains))
+        {
+            Console.Error.WriteLine("Windows Credential Manager did not list both synthetic named credentials.");
+            return 13;
+        }
+
+        if (smokeCredentialIds.Any(credentialId => vault.ReadSecret("smoke-test", credentialId) != smokeSecrets[credentialId]))
+        {
+            Console.Error.WriteLine("Windows Credential Manager did not round-trip both synthetic named credentials.");
+            return 14;
         }
     }
-
-    var listedIds = vault.List()
-        .Where(item => item.Provider == "smoke-test" && smokeCredentialIds.Contains(item.CredentialId, StringComparer.Ordinal))
-        .Select(item => item.CredentialId)
-        .ToHashSet(StringComparer.Ordinal);
-    if (!smokeCredentialIds.All(listedIds.Contains))
+    finally
     {
-        Console.Error.WriteLine("Windows Credential Manager did not list both synthetic named credentials.");
-        return 13;
+        foreach (var smokeCredentialId in savedSmokeCredentials)
+        {
+            if (!vault.Delete("smoke-test", smokeCredentialId))
+                throw new InvalidOperationException($"Windows Credential Manager did not delete synthetic credential {smokeCredentialId}.");
+        }
     }
-
-    if (smokeCredentialIds.Any(credentialId => vault.ReadSecret("smoke-test", credentialId) != smokeSecrets[credentialId]))
+    if (smokeCredentialIds.Any(credentialId => vault.ReadSecret("smoke-test", credentialId) is not null))
     {
-        Console.Error.WriteLine("Windows Credential Manager did not round-trip both synthetic named credentials.");
-        return 14;
+        Console.Error.WriteLine("Windows Credential Manager retained a deleted synthetic named credential.");
+        return 15;
     }
-}
-finally
-{
-    foreach (var smokeCredentialId in savedSmokeCredentials)
-    {
-        if (!vault.Delete("smoke-test", smokeCredentialId))
-            throw new InvalidOperationException($"Windows Credential Manager did not delete synthetic credential {smokeCredentialId}.");
-    }
-}
-if (smokeCredentialIds.Any(credentialId => vault.ReadSecret("smoke-test", credentialId) is not null))
-{
-    Console.Error.WriteLine("Windows Credential Manager retained a deleted synthetic named credential.");
-    return 15;
-}
-Console.WriteLine("Windows Credential Manager two-profile synthetic save/list/read/delete round trip passed.");
+    Console.WriteLine("Windows Credential Manager two-profile synthetic save/list/read/delete round trip passed.");
 }
 
 const string openRouterSmokeKey = "sk-or-v1-native-only-smoke";
@@ -377,6 +401,26 @@ try
         </Project>
         """);
     File.WriteAllText(Path.Combine(developerWorkspace, "Program.cs"), "Console.WriteLine(\"Hermes desktop developer-services smoke\");");
+    var assetBundleRoot = Path.Combine(developerWorkspace, "bundle-root");
+    var assetBinaryRoot = Path.Combine(developerWorkspace, "binary-root");
+    var binaryRoslynRoot = Path.Combine(assetBinaryRoot, "developer-services", "roslyn");
+    Directory.CreateDirectory(binaryRoslynRoot);
+    File.WriteAllText(Path.Combine(binaryRoslynRoot, "provider.json"), "{}");
+    if (!DeveloperServicesBridge.ResolveRoslynInstallerRoot(assetBundleRoot, assetBinaryRoot)
+        .Equals(binaryRoslynRoot, StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Developer-services did not resolve executable-adjacent Roslyn assets for the source-tree launcher layout.");
+        return 19;
+    }
+    var configuredRoslynRoot = Path.Combine(assetBundleRoot, "developer-services", "roslyn");
+    Directory.CreateDirectory(configuredRoslynRoot);
+    File.WriteAllText(Path.Combine(configuredRoslynRoot, "provider.json"), "{}");
+    if (!DeveloperServicesBridge.ResolveRoslynInstallerRoot(assetBundleRoot, assetBinaryRoot)
+        .Equals(configuredRoslynRoot, StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Developer-services did not preserve a provisioned bundle-root Roslyn layout.");
+        return 19;
+    }
     var developerFrames = new List<JsonElement>();
     await using (var developerBridge = new DeveloperServicesBridge(
                      developerWorkspace,
@@ -397,6 +441,16 @@ try
             || !description.GetProperty("providers").EnumerateArray().Any(item =>
                 GetString(item, "providerId") == "hermes-dotnet-dap"
                 && GetString(item.GetProperty("availability"), "state") == "unavailable")
+            || !description.GetProperty("languageTooling").EnumerateArray().Any(item =>
+                GetString(item, "providerId") == "dotnet"
+                && item.GetProperty("capabilities").EnumerateArray().Count(capability =>
+                    GetString(capability, "availability") == "available") == 2
+                && item.GetProperty("capabilities").EnumerateArray().Any(capability =>
+                    GetString(capability, "capabilityId") == "dotnet.compiler"
+                    && GetString(capability, "availability") == "available")
+                && item.GetProperty("capabilities").EnumerateArray().Any(capability =>
+                    GetString(capability, "capabilityId") == "dotnet.tests"
+                    && GetString(capability, "availability") == "available"))
             || GetString(description.GetProperty("availability"), "state") != "available")
         {
             Console.Error.WriteLine("Developer-services description did not advertise the guarded .NET target.");
@@ -468,8 +522,23 @@ try
             Console.Error.WriteLine("Developer-services language-tooling bridge accepted an absolute renderer target.");
             return 25;
         }
+
+        await developerBridge.RunLanguageToolingTestsAsync(
+            1, "language-tooling-tests-smoke", "dotnet", "Smoke.csproj", null);
+        var toolingTests = developerFrames.FirstOrDefault(frame =>
+            GetString(frame, "type") == "developerServices.languageTooling.result"
+            && GetString(frame, "requestId") == "language-tooling-tests-smoke");
+        if (toolingTests.ValueKind != JsonValueKind.Object
+            || !toolingTests.GetProperty("succeeded").GetBoolean()
+            || GetString(toolingTests, "operation") != "run-tests"
+            || !toolingTests.TryGetProperty("result", out var toolingTestResult)
+            || !toolingTestResult.GetProperty("succeeded").GetBoolean())
+        {
+            Console.Error.WriteLine("Developer-services language-tooling bridge did not execute the fixed .NET test operation.");
+            return 26;
+        }
     }
-    Console.WriteLine("Desktop developer-services v2 build/analyze and typed language-tooling renderer contract passed.");
+    Console.WriteLine("Desktop developer-services v2 build/analyze/test and typed language-tooling renderer contract passed.");
 
     var roslynFrames = new List<JsonElement>();
     var fakeRoslyn = new SmokeRoslynHost();
@@ -504,6 +573,32 @@ try
         {
             Console.Error.WriteLine("Roslyn diagnostics were not session-, revision-, and coordinate-bound.");
             return 25;
+        }
+
+        await languageBridge.RunLanguageOperationAsync(
+            2,
+            "language-completion-smoke",
+            languageSessionId,
+            1,
+            "Program.cs",
+            "completion",
+            0,
+            5,
+            -1,
+            -1,
+            null,
+            true);
+        var completion = roslynFrames.LastOrDefault(frame =>
+            GetString(frame, "type") == "developerServices.language.result"
+            && GetString(frame, "requestId") == "language-completion-smoke");
+        if (completion.ValueKind != JsonValueKind.Object
+            || GetString(completion, "sessionId") != languageSessionId
+            || GetString(completion, "operation") != "completion"
+            || GetString(completion.GetProperty("result").GetProperty("items")[0], "label") != "Console"
+            || fakeRoslyn.LastOperation != "completion")
+        {
+            Console.Error.WriteLine("Roslyn completion was not session/revision-bound through the desktop bridge.");
+            return 251;
         }
 
         await languageBridge.ChangeLanguageDocumentAsync(2, "language-change-smoke", languageSessionId, 2, "Program.cs", "class Fixed { }");
@@ -685,9 +780,9 @@ sealed class SmokeRoslynHost : IDeveloperRoslynHost
 
     public bool Closed { get; private set; }
 
-    public Task EnsureStartedAsync(string workspaceRoot, CancellationToken cancellationToken) => Task.CompletedTask;
+    public string? LastOperation { get; private set; }
 
-    public Task OpenDocumentAsync(string uri, int revision, string text, CancellationToken cancellationToken)
+    public Task OpenDocumentAsync(string workspaceRoot, string uri, int revision, string text, CancellationToken cancellationToken)
     {
         _uri = uri;
         OpenedRevision = revision;
@@ -706,6 +801,30 @@ sealed class SmokeRoslynHost : IDeveloperRoslynHost
         if (uri != _uri) throw new InvalidOperationException();
         Closed = true;
         return Task.CompletedTask;
+    }
+
+    public Task<RoslynLanguageResult?> CompletionAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken) =>
+        LanguageResult("completion", new { items = new[] { new { label = "Console", kind = 7 } } });
+
+    public Task<RoslynLanguageResult?> HoverAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken) =>
+        LanguageResult("hover", new { contents = "hover" });
+
+    public Task<RoslynLanguageResult?> DefinitionAsync(string uri, int revision, LspPosition position, CancellationToken cancellationToken) =>
+        LanguageResult("definition", Array.Empty<object>());
+
+    public Task<RoslynLanguageResult?> ReferencesAsync(string uri, int revision, LspPosition position, bool includeDeclaration, CancellationToken cancellationToken) =>
+        LanguageResult("references", Array.Empty<object>());
+
+    public Task<RoslynLanguageResult?> RenameAsync(string uri, int revision, LspPosition position, string newName, CancellationToken cancellationToken) =>
+        LanguageResult("rename", new { changes = new { } });
+
+    public Task<RoslynLanguageResult?> CodeActionsAsync(string uri, int revision, LspRange range, CancellationToken cancellationToken) =>
+        LanguageResult("code-actions", Array.Empty<object>());
+
+    private Task<RoslynLanguageResult?> LanguageResult(string operation, object value)
+    {
+        LastOperation = operation;
+        return Task.FromResult<RoslynLanguageResult?>(new RoslynLanguageResult(JsonSerializer.SerializeToElement(value)));
     }
 
     public void Publish(int revision, params LspDiagnostic[] diagnostics) =>

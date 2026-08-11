@@ -11,6 +11,7 @@ $logsPath = Join-Path $bundleRoot 'logs'
 $settingsPath = Join-Path $bundleRoot 'launcher.settings.json'
 $serenaPort = 9121
 $workbenchPort = 4173
+$assistantBusPort = 9072
 $script:serenaProcessStarted = $false
 $runtimeGenerationCandidates = @(
     (Join-Path $bundleRoot 'runtime\Runtime.Generation.ps1'),
@@ -154,6 +155,61 @@ function Write-ProcessIdentity {
         port = $Port
     }
     [IO.File]::WriteAllText((Join-Path $logsPath "$Name.process.json"), ($identity | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+}
+
+function Resolve-AssistantBusExecutable {
+    $candidates = @(
+        (Join-Path $bundleRoot 'tools\assistant-bus\assistant-bus.exe'),
+        (Join-Path $bundleRoot 'artifacts\tools\assistant-bus\win-x64\assistant-bus.exe')
+    )
+    $resolved = @($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+    if ($resolved.Count -ne 1) {
+        throw 'The Assistant Conversation Bus executable is missing. Reinstall Phos Agape Aphthartos.'
+    }
+    return [IO.Path]::GetFullPath([string]$resolved[0])
+}
+
+function Test-AssistantBusHealth {
+    try {
+        $health = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$assistantBusPort/health" -TimeoutSec 2
+        return [string]$health.status -ceq 'ready' -and [int]$health.protocolVersion -eq 1
+    }
+    catch { return $false }
+}
+
+function Start-AssistantConversationBus {
+    $executable = Resolve-AssistantBusExecutable
+    $pidPath = Join-Path $logsPath 'assistant-bus.pid'
+    if (Test-LocalPort -Port $assistantBusPort) {
+        $listener = Get-NetTCPConnection -LocalPort $assistantBusPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        $trackedPid = 0
+        $tracked = (Test-Path -LiteralPath $pidPath -PathType Leaf) -and
+            [int]::TryParse(([IO.File]::ReadAllText($pidPath).Trim()), [ref]$trackedPid)
+        $process = if ($listener) { Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
+        $owned = $tracked -and $listener -and $trackedPid -eq $listener.OwningProcess -and $process -and
+            [string]$process.CommandLine -match '(^|\s|\")serve(\s|\"|$)'
+        try { $owned = $owned -and [IO.Path]::GetFullPath([string]$process.ExecutablePath) -eq $executable }
+        catch { $owned = $false }
+        if (-not $owned -or -not (Test-AssistantBusHealth)) {
+            throw "Port $assistantBusPort is not owned by the verified Assistant Conversation Bus."
+        }
+        Write-ProcessIdentity -ProcessId $listener.OwningProcess -Name 'assistant-bus' -Port $assistantBusPort
+        return
+    }
+
+    $stdout = Join-Path $logsPath 'assistant-bus.out.log'
+    $stderr = Join-Path $logsPath 'assistant-bus.err.log'
+    $process = Start-Process -FilePath $executable -ArgumentList @('serve') -WorkingDirectory (Split-Path -Parent $executable) -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    [IO.File]::WriteAllText($pidPath, [string]$process.Id)
+    Write-ProcessIdentity -ProcessId $process.Id -Name 'assistant-bus' -Port $assistantBusPort
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ($process.HasExited) { throw "The Assistant Conversation Bus exited during startup. Check $stderr." }
+        if (Test-AssistantBusHealth) { return }
+        Start-Sleep -Milliseconds 200
+        $process.Refresh()
+    }
+    throw "The Assistant Conversation Bus did not become ready on port $assistantBusPort. Check $stderr."
 }
 
 function Find-SerenaExecutable {
@@ -606,6 +662,7 @@ try {
     }
     Wait-HermesGateway
     Write-HermesRuntimeIdentity
+    Start-AssistantConversationBus
     Start-WorkbenchWeb
     $nativeClientStarted = Start-ConfiguredClient
     if (-not $nativeClientStarted) {
@@ -613,7 +670,7 @@ try {
             Start-Process $script:workbenchUrl
         }
     }
-    Write-Host 'Photon, Serena, and Phos Agape Aphthartos are running.' -ForegroundColor Green
+    Write-Host 'Photon, Serena, the Assistant Conversation Bus, and Phos Agape Aphthartos are running.' -ForegroundColor Green
 }
 finally {
     Pop-Location

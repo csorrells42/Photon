@@ -64,7 +64,11 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
                 {
                     startStack = manageable.Length > 0,
                     stopStack = manageable.Length > 0,
+                    startService = manageable.Length > 0,
+                    stopService = manageable.Length > 0,
                     restartService = manageable.Length > 0,
+                    loadModel = false,
+                    unloadModel = observed.Value.ModelRunner?.UnloadAvailable == true,
                     update = false,
                 },
                 updateReason = "derived-runtime-updater-not-integrated",
@@ -164,9 +168,12 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
                     expiresAtUtc = expiresAt.ToString("O"),
                     affectedServices = mutation.Targets.Select(ServiceId).ToArray(),
                     summary = MutationSummary(mutation),
-                    warnings = mutation.Kind == DockerControlMutationKind.StopStack
-                        ? new[] { "Stopping services interrupts active Photon work." }
-                        : Array.Empty<string>(),
+                    warnings = mutation.Kind switch
+                    {
+                        DockerControlMutationKind.StopStack or DockerControlMutationKind.StopService => new[] { "Stopping services interrupts active work." },
+                        DockerControlMutationKind.UnloadModel => new[] { "Unloading this model interrupts requests using it." },
+                        _ => Array.Empty<string>(),
+                    },
                 },
             });
         });
@@ -316,13 +323,29 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             mutation = new(kind == "start-stack" ? DockerControlMutationKind.StartStack : DockerControlMutationKind.StopStack, null, manageable);
             return true;
         }
-        if (kind != "restart-service" || !TryService(service, out var target)
+        if (kind == "unload-model")
+        {
+            var model = snapshot.ModelRunner?.Models.FirstOrDefault(candidate => candidate.Loaded && string.Equals(candidate.Reference, service, StringComparison.Ordinal));
+            if (model is null || snapshot.ModelRunner?.UnloadAvailable != true)
+            {
+                rejection = "The requested model is not in the current loaded-model inventory.";
+                return false;
+            }
+            mutation = new(DockerControlMutationKind.UnloadModel, DockerControlService.ModelRunner, [DockerControlService.ModelRunner], model.Reference);
+            return true;
+        }
+        if (kind is not ("start-service" or "stop-service" or "restart-service") || !TryService(service, out var target)
             || !snapshot.Services.Any(candidate => candidate.Id == target && candidate.Manageable))
         {
-            rejection = "The requested product service is not configured for Docker restart.";
+            rejection = "The requested product service is not configured for this Docker operation.";
             return false;
         }
-        mutation = new(DockerControlMutationKind.RestartService, target, [target]);
+        mutation = new(kind switch
+        {
+            "start-service" => DockerControlMutationKind.StartService,
+            "stop-service" => DockerControlMutationKind.StopService,
+            _ => DockerControlMutationKind.RestartService,
+        }, target, [target]);
         return true;
     }
 
@@ -332,11 +355,12 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             .Where(service => Enum.IsDefined(service.Id))
             .GroupBy(service => service.Id)
             .Select(group => group.First())
-            .Take(3)
+            .Take(4)
             .Select(service => new DockerControlServiceEvidence(
                 service.Id,
                 SafeObservedState(service.State),
                 SafeHealth(service.Health),
+                SafeContainerId(service.ContainerId),
                 SafeIdentity(service.Version),
                 service.Image is null ? null : new(
                     SafeSha256(service.Image.ImageId),
@@ -344,6 +368,14 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
                     SafeIdentity(service.Image.OciRevision),
                     service.Image.Verification is "verified" or "mismatch" or "unverified" or "unavailable" ? service.Image.Verification : "unverified"),
                 service.Ports.Where(port => port.Address is "127.0.0.1" or "::1" && port.HostPort is >= 1 and <= 65535 && port.ContainerPort is >= 1 and <= 65535 && port.Protocol is "tcp" or "udp").Take(16).ToArray(),
+                service.Resources is null ? null : new(
+                    SafePercent(service.Resources.CpuPercent),
+                    SafeDisplay(service.Resources.MemoryUsage, 64),
+                    SafeDisplay(service.Resources.MemoryLimit, 64),
+                    SafePercent(service.Resources.MemoryPercent),
+                    SafeDisplay(service.Resources.NetworkIo, 64),
+                    SafeDisplay(service.Resources.BlockIo, 64),
+                    service.Resources.Pids is >= 0 and <= 10_000_000 ? service.Resources.Pids : null),
                 service.Manageable && service.Id != DockerControlService.Serena))
             .OrderBy(service => service.Id)
             .ToArray();
@@ -355,6 +387,29 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             raw.LastWorkflow.State is "succeeded" or "failed" or "cancelled" ? raw.LastWorkflow.State : "unknown",
             raw.LastWorkflow.CompletedAtUtc,
             SafeMessage(raw.LastWorkflow.Summary, "Docker workflow result unavailable."));
+        var modelRunner = raw.ModelRunner is null ? null : new DockerControlModelRunner(
+            SafeObservedState(raw.ModelRunner.State),
+            SafeIdentity(raw.ModelRunner.Version),
+            SafeLoopbackEndpoint(raw.ModelRunner.Endpoint),
+            SafeDisplay(raw.ModelRunner.Kind, 64),
+            SafeDisplay(raw.ModelRunner.DiskUsage, 64),
+            raw.ModelRunner.UnloadAvailable,
+            raw.ModelRunner.Models
+                .Where(model => SafeModelReference(model.Reference) is not null)
+                .GroupBy(model => model.Reference, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .Take(64)
+                .Select(model => new DockerControlModel(
+                    SafeModelReference(model.Reference)!,
+                    SafeSha256(model.ModelId),
+                    SafeDisplay(model.Size, 64),
+                    SafeIdentity(model.Format),
+                    SafeDisplay(model.Parameters, 64),
+                    model.Loaded,
+                    SafeIdentity(model.Backend),
+                    SafeIdentity(model.Mode)))
+                .ToArray(),
+            SafeMessage(raw.ModelRunner.Message, "Docker Model Runner status unavailable."));
         return new(
             raw.ObservedAtUtc,
             SafeObservedState(raw.EngineState),
@@ -365,6 +420,7 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             SafeIdentity(raw.RuntimeProtocol) ?? "docker-control/v1",
             services,
             volumes,
+            modelRunner,
             workflow);
     }
 
@@ -386,6 +442,8 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             id = ServiceId(service.Id),
             state = service.State,
             health = service.Health,
+            manageable = service.Manageable,
+            containerId = service.ContainerId,
             version = service.Version,
             image = service.Image is null ? null : new
             {
@@ -395,8 +453,40 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
                 verification = service.Image.Verification,
             },
             ports = service.Ports.Select(port => new { address = port.Address, hostPort = port.HostPort, containerPort = port.ContainerPort, protocol = port.Protocol }).ToArray(),
+            resources = service.Resources is null ? null : new
+            {
+                cpuPercent = service.Resources.CpuPercent,
+                memoryUsage = service.Resources.MemoryUsage,
+                memoryLimit = service.Resources.MemoryLimit,
+                memoryPercent = service.Resources.MemoryPercent,
+                networkIo = service.Resources.NetworkIo,
+                blockIo = service.Resources.BlockIo,
+                pids = service.Resources.Pids,
+            },
         }).ToArray(),
         volumes = observed.Value.Volumes.Select(volume => new { role = volume.Role, state = volume.State, persistent = volume.Persistent }).ToArray(),
+        modelRunner = observed.Value.ModelRunner is null ? null : new
+        {
+            state = observed.Value.ModelRunner.State,
+            version = observed.Value.ModelRunner.Version,
+            endpoint = observed.Value.ModelRunner.Endpoint,
+            kind = observed.Value.ModelRunner.Kind,
+            diskUsage = observed.Value.ModelRunner.DiskUsage,
+            loadAvailable = false,
+            unloadAvailable = observed.Value.ModelRunner.UnloadAvailable,
+            models = observed.Value.ModelRunner.Models.Select(model => new
+            {
+                reference = model.Reference,
+                modelId = model.ModelId,
+                size = model.Size,
+                format = model.Format,
+                parameters = model.Parameters,
+                loaded = model.Loaded,
+                backend = model.Backend,
+                mode = model.Mode,
+            }).ToArray(),
+            message = observed.Value.ModelRunner.Message,
+        },
         lastWorkflow = observed.Value.LastWorkflow is null ? null : new
         {
             kind = observed.Value.LastWorkflow.Kind,
@@ -415,19 +505,25 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
         foreach (var service in snapshot.Services.OrderBy(service => service.Id))
         {
             canonical.Append(ServiceId(service.Id)).Append('|').Append(service.State).Append('|').Append(service.Health).Append('|')
-                .Append(service.Version).Append('|').Append(service.Image?.ImageId).Append('|').Append(service.Image?.ApprovedDigest)
+                .Append(service.ContainerId).Append('|').Append(service.Version).Append('|').Append(service.Image?.ImageId).Append('|').Append(service.Image?.ApprovedDigest)
                 .Append('|').Append(service.Image?.OciRevision).Append('|').Append(service.Image?.Verification).Append('|').Append(service.Manageable).Append('\n');
             foreach (var port in service.Ports.OrderBy(port => port.Address, StringComparer.Ordinal).ThenBy(port => port.HostPort))
                 canonical.Append(port.Address).Append(':').Append(port.HostPort).Append('>').Append(port.ContainerPort).Append('/').Append(port.Protocol).Append('\n');
         }
         foreach (var volume in snapshot.Volumes.OrderBy(volume => volume.Role, StringComparer.Ordinal))
             canonical.Append(volume.Role).Append('|').Append(volume.State).Append('|').Append(volume.Persistent).Append('\n');
+        if (snapshot.ModelRunner is not null)
+        {
+            canonical.Append("model-runner|").Append(snapshot.ModelRunner.State).Append('|').Append(snapshot.ModelRunner.Version).Append('|').Append(snapshot.ModelRunner.UnloadAvailable).Append('\n');
+            foreach (var model in snapshot.ModelRunner.Models.OrderBy(model => model.Reference, StringComparer.Ordinal))
+                canonical.Append(model.Reference).Append('|').Append(model.ModelId).Append('|').Append(model.Loaded).Append('|').Append(model.Backend).Append('|').Append(model.Mode).Append('\n');
+        }
         return Sha256(canonical.ToString());
     }
 
     private static string MutationFingerprint(DockerControlMutation mutation, long revision, string stateFingerprint)
     {
-        var canonical = $"docker-control/v1\n{mutation.Kind}\n{ServiceIdOrDash(mutation.Service)}\n{revision}\n{string.Join(',', mutation.Targets.OrderBy(value => value).Select(ServiceId))}\n{stateFingerprint}";
+        var canonical = $"docker-control/v1\n{mutation.Kind}\n{ServiceIdOrDash(mutation.Service)}\n{mutation.Model ?? "-"}\n{revision}\n{string.Join(',', mutation.Targets.OrderBy(value => value).Select(ServiceId))}\n{stateFingerprint}";
         return Sha256(canonical);
     }
 
@@ -435,7 +531,10 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
     {
         DockerControlMutationKind.StartStack => $"Start {string.Join(" and ", mutation.Targets.Select(ServiceId))}.",
         DockerControlMutationKind.StopStack => $"Stop {string.Join(" and ", mutation.Targets.Select(ServiceId))}.",
-        _ => $"Restart {ServiceIdOrDash(mutation.Service)}.",
+        DockerControlMutationKind.StartService => $"Start {ServiceIdOrDash(mutation.Service)}.",
+        DockerControlMutationKind.StopService => $"Stop {ServiceIdOrDash(mutation.Service)}.",
+        DockerControlMutationKind.RestartService => $"Restart {ServiceIdOrDash(mutation.Service)}.",
+        _ => $"Unload {mutation.Model}.",
     };
 
     private void PostReviewRejected(string requestId, string message) => _post(new
@@ -486,16 +585,24 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
     private static string SafeCode(string? value) => SafeIdentity(value) ?? "unexpected";
     private static string? SafeIdentity(string? value) => value is not null && value.Length is > 0 and <= 128 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '+' or ':' or '/' or '-') ? value : null;
     private static string? SafeSha256(string? value) => value is not null && Sha256Regex().IsMatch(value) ? value.ToLowerInvariant() : null;
+    private static string? SafeContainerId(string? value) => value is not null && value.Length is >= 12 and <= 64 && value.All(Uri.IsHexDigit) ? value.ToLowerInvariant() : null;
+    private static double? SafePercent(double? value) => value is >= 0 and <= 1_000_000 ? value : null;
+    private static string? SafeDisplay(string? value, int maximum) => value is not null && value.Length is > 0 && value.Length <= maximum
+        && value.All(character => char.IsAsciiLetterOrDigit(character) || character is ' ' or '.' or '_' or '+' or ':' or '/' or '@' or '(' or ')' or '-') ? value : null;
+    private static string? SafeModelReference(string? value) => value is not null && value.Length is > 0 and <= 256 && char.IsAsciiLetterOrDigit(value[0])
+        && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '/' or ':' or '@' or '+' or '-') ? value : null;
+    private static string? SafeLoopbackEndpoint(string? value) => value is not null && Uri.TryCreate(value, UriKind.Absolute, out var endpoint)
+        && endpoint.Scheme is "http" or "https" && endpoint.IsLoopback && endpoint.AbsoluteUri.Length <= 256 ? endpoint.AbsoluteUri : null;
     private static string SafeObservedState(string? value) => value is "running" or "stopped" or "degraded" or "unavailable" ? value : "unknown";
     private static string SafeHealth(string? value) => value is "healthy" or "unhealthy" or "starting" or "not-configured" ? value : "unknown";
     private static bool ValidRequestId(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= MaximumRequestIdCharacters && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or ':' or '-' or '.');
     private static bool ValidReviewToken(string? value) => value is not null && value.Length is >= 32 and <= 512 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
     private static bool TryService(string? value, out DockerControlService service)
     {
-        service = value switch { "hermes" => DockerControlService.Hermes, "serena" => DockerControlService.Serena, "model-runner" => DockerControlService.ModelRunner, _ => (DockerControlService)(-1) };
+        service = value switch { "hermes" => DockerControlService.Hermes, "memory-vector" => DockerControlService.MemoryVector, "serena" => DockerControlService.Serena, "model-runner" => DockerControlService.ModelRunner, _ => (DockerControlService)(-1) };
         return Enum.IsDefined(service);
     }
-    private static string ServiceId(DockerControlService service) => service switch { DockerControlService.Hermes => "hermes", DockerControlService.Serena => "serena", DockerControlService.ModelRunner => "model-runner", _ => throw new ArgumentOutOfRangeException(nameof(service)) };
+    private static string ServiceId(DockerControlService service) => service switch { DockerControlService.Hermes => "hermes", DockerControlService.MemoryVector => "memory-vector", DockerControlService.Serena => "serena", DockerControlService.ModelRunner => "model-runner", _ => throw new ArgumentOutOfRangeException(nameof(service)) };
     private static string ServiceIdOrDash(DockerControlService? service) => service is null ? "-" : ServiceId(service.Value);
     private static string Sha256(string value) => $"sha256:{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)))}";
     private static string CreateOpaqueToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');

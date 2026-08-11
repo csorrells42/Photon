@@ -52,9 +52,13 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         else
             services.Add(UnavailableService(DockerControlService.Hermes));
 
+        if (configured.Contains("memory-vector"))
+            services.Add(await ReadComposeServiceAsync(DockerControlService.MemoryVector, "memory-vector", ApprovedServiceDigest("memory-vector"), volumes, cancellationToken).ConfigureAwait(false));
+        else
+            services.Add(UnavailableService(DockerControlService.MemoryVector));
+
         services.Add(SerenaEvidence());
-        if (configured.Contains("model-runner"))
-            services.Add(await ReadComposeServiceAsync(DockerControlService.ModelRunner, "model-runner", null, volumes, cancellationToken).ConfigureAwait(false));
+        var modelRunner = await ReadModelRunnerAsync(cancellationToken).ConfigureAwait(false);
 
         var composeState = services.Any(service => service.Manageable && service.State == "degraded")
             ? "degraded"
@@ -71,6 +75,7 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
             RuntimeProtocol,
             services,
             volumes.Values.OrderBy(volume => volume.Role, StringComparer.Ordinal).ToArray(),
+            modelRunner,
             null);
     }
 
@@ -95,8 +100,15 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
 
     public async Task<DockerControlMutationOutcome> ExecuteAsync(DockerControlMutation mutation, CancellationToken cancellationToken)
     {
-        if (mutation.Kind == DockerControlMutationKind.RestartService && mutation.Service is null)
-            throw new DockerControlUnavailableException("invalid_mutation", "The reviewed restart target is invalid.");
+        if (mutation.Kind is DockerControlMutationKind.StartService or DockerControlMutationKind.StopService or DockerControlMutationKind.RestartService && mutation.Service is null)
+            throw new DockerControlUnavailableException("invalid_mutation", "The reviewed service target is invalid.");
+        if (mutation.Kind == DockerControlMutationKind.UnloadModel)
+        {
+            if (!SafeModelReference(mutation.Model, out var model))
+                throw new DockerControlUnavailableException("invalid_mutation", "The reviewed model target is invalid.");
+            var modelResult = await RunAsync(DockerCliOperation.ModelUnload, DockerControlService.ModelRunner, 0, cancellationToken, modelReference: model).ConfigureAwait(false);
+            return new(modelResult.ExitCode == 0, modelResult.ExitCode == 0 ? "The reviewed model was unloaded." : "Docker Model Runner could not unload the reviewed model.");
+        }
         if (mutation.Targets.Count == 0 || mutation.Targets.Any(target => target == DockerControlService.Serena))
             throw new DockerControlUnavailableException("service_unavailable", "A reviewed Docker target is unavailable.");
         foreach (var target in mutation.Targets)
@@ -109,6 +121,8 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         {
             DockerControlMutationKind.StartStack => DockerCliOperation.Start,
             DockerControlMutationKind.StopStack => DockerCliOperation.Stop,
+            DockerControlMutationKind.StartService => DockerCliOperation.Start,
+            DockerControlMutationKind.StopService => DockerCliOperation.Stop,
             DockerControlMutationKind.RestartService => DockerCliOperation.Restart,
             _ => throw new DockerControlUnavailableException("invalid_mutation", "The reviewed Docker operation is invalid."),
         };
@@ -124,7 +138,7 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         var result = await RunAsync(DockerCliOperation.ComposeServices, null, 0, cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0) return [];
         return SplitLines(result.StandardOutput)
-            .Where(service => service is "gateway" or "model-runner")
+            .Where(service => service is "gateway" or "memory-vector")
             .ToHashSet(StringComparer.Ordinal);
     }
 
@@ -151,6 +165,7 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         var containerId = containerIdResult.ExitCode == 0 ? SafeContainerId(containerIdResult.StandardOutput.Trim()) : null;
         DockerControlImage? image = approvedDigest is null ? new(null, null, null, "unverified") : new(null, approvedDigest, null, "unverified");
         IReadOnlyList<DockerControlPort> ports = [];
+        DockerControlResources? resources = null;
         if (containerId is not null)
         {
             var inspect = await RunAsync(DockerCliOperation.ContainerInspect, id, 0, cancellationToken, containerId: containerId).ConfigureAwait(false);
@@ -170,8 +185,11 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
                     }
                 }
             }
+            var stats = await RunAsync(DockerCliOperation.ContainerStats, id, 0, cancellationToken, containerId: containerId).ConfigureAwait(false);
+            if (stats.ExitCode == 0 && TryFirstJsonObject(stats.StandardOutput, out var statsObject))
+                resources = ReadResources(statsObject);
         }
-        return new DockerControlServiceEvidence(id, state, health, null, image, ports, true);
+        return new DockerControlServiceEvidence(id, state, health, containerId, null, image, ports, resources, true);
     }
 
     private DockerControlServiceEvidence SerenaEvidence()
@@ -194,22 +212,132 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
             "unknown",
             null,
             null,
+            null,
             [],
+            null,
             false);
     }
 
-    private string? ApprovedHermesDigest()
+    private string? ApprovedHermesDigest() => ApprovedServiceDigest("gateway");
+
+    private string? ApprovedServiceDigest(string service)
     {
         try
         {
-            if (!IsTrustedFile(_composePath)) return null;
-            var digests = ApprovedDigestRegex().Matches(File.ReadAllText(_composePath))
-                .Select(match => match.Groups[1].Value.ToLowerInvariant())
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            return digests.Length == 1 ? $"sha256:{digests[0]}" : null;
+            if (!IsTrustedFile(_composePath) || service is not ("gateway" or "memory-vector")) return null;
+            var insideService = false;
+            foreach (var line in File.ReadLines(_composePath))
+            {
+                if (line.Equals($"  {service}:", StringComparison.Ordinal)) { insideService = true; continue; }
+                if (!insideService) continue;
+                if (line.Length >= 2 && line[0] == ' ' && line[1] == ' ' && (line.Length == 2 || line[2] != ' ')) return null;
+                if (!line.TrimStart().StartsWith("image:", StringComparison.Ordinal)) continue;
+                var match = ApprovedDigestRegex().Match(line);
+                return match.Success ? $"sha256:{match.Groups[1].Value.ToLowerInvariant()}" : null;
+            }
+            return null;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    private async Task<DockerControlModelRunner> ReadModelRunnerAsync(CancellationToken cancellationToken)
+    {
+        var status = await RunAsync(DockerCliOperation.ModelStatus, null, 0, cancellationToken).ConfigureAwait(false);
+        if (status.ExitCode != 0 || !TryFirstJsonObject(status.StandardOutput, out var statusObject))
+            return new("unavailable", null, null, null, null, false, [], "Docker Model Runner is not installed, stopped, or unavailable.");
+
+        var running = statusObject.TryGetProperty("running", out var runningValue) && runningValue.ValueKind is JsonValueKind.True;
+        var endpoint = SafeLoopbackEndpoint(GetString(statusObject, "endpointHost"));
+        var kind = SafeDisplay(GetString(statusObject, "kind"), 64);
+        var versionResult = await RunAsync(DockerCliOperation.ModelVersion, null, 0, cancellationToken).ConfigureAwait(false);
+        var version = versionResult.ExitCode == 0 ? ReadModelRunnerVersion(versionResult.StandardOutput) : null;
+        var list = await RunAsync(DockerCliOperation.ModelList, null, 0, cancellationToken).ConfigureAwait(false);
+        var pulled = list.ExitCode == 0 ? ReadPulledModels(list.StandardOutput) : [];
+        var ps = await RunAsync(DockerCliOperation.ModelPs, null, 0, cancellationToken).ConfigureAwait(false);
+        var loaded = ps.ExitCode == 0 ? ReadLoadedModels(ps.StandardOutput) : [];
+        var models = MergeModels(pulled, loaded);
+        var disk = await RunAsync(DockerCliOperation.ModelDf, null, 0, cancellationToken).ConfigureAwait(false);
+        var diskUsage = disk.ExitCode == 0 ? ReadModelDiskUsage(disk.StandardOutput) : null;
+        return new(
+            running ? "running" : "stopped",
+            version,
+            endpoint,
+            kind,
+            diskUsage,
+            running && models.Any(model => model.Loaded),
+            models,
+            running ? "Docker Model Runner is available. Loading is not exposed because this CLI has no bounded load-only authority." : "Docker Model Runner is installed but not running.");
+    }
+
+    private static IReadOnlyList<DockerControlModel> ReadPulledModels(string json)
+    {
+        var result = new List<DockerControlModel>();
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return [];
+            foreach (var item in document.RootElement.EnumerateArray().Take(64))
+            {
+                if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("tags", out var tags) || tags.ValueKind != JsonValueKind.Array) continue;
+                var reference = tags.EnumerateArray().Where(tag => tag.ValueKind == JsonValueKind.String).Select(tag => tag.GetString()).FirstOrDefault(value => SafeModelReference(value, out _));
+                if (!SafeModelReference(reference, out var safeReference)) continue;
+                var modelId = NormalizeSha256(GetString(item, "id"));
+                var config = item.TryGetProperty("config", out var candidateConfig) && candidateConfig.ValueKind == JsonValueKind.Object ? candidateConfig : default;
+                result.Add(new(
+                    safeReference,
+                    modelId,
+                    config.ValueKind == JsonValueKind.Object ? SafeDisplay(GetString(config, "size"), 64) : null,
+                    config.ValueKind == JsonValueKind.Object ? SafeIdentity(GetString(config, "format") ?? string.Empty) : null,
+                    config.ValueKind == JsonValueKind.Object ? SafeDisplay(GetString(config, "parameters"), 64) : null,
+                    false,
+                    null,
+                    null));
+            }
+        }
+        catch (JsonException) { return []; }
+        return result;
+    }
+
+    private static IReadOnlyList<DockerControlModel> ReadLoadedModels(string table)
+    {
+        var result = new List<DockerControlModel>();
+        foreach (var line in SplitLines(table).Skip(1).Take(64))
+        {
+            var columns = Regex.Split(line.Trim(), "\\s{2,}", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+            if (columns.Length < 3 || !SafeModelReference(columns[0], out var reference)) continue;
+            result.Add(new(reference, null, null, null, null, true, SafeIdentity(columns[1]), SafeIdentity(columns[2])));
+        }
+        return result;
+    }
+
+    private static IReadOnlyList<DockerControlModel> MergeModels(IReadOnlyList<DockerControlModel> pulled, IReadOnlyList<DockerControlModel> loaded)
+    {
+        var result = new List<DockerControlModel>();
+        foreach (var model in pulled)
+        {
+            var active = loaded.FirstOrDefault(candidate => ModelNamesMatch(model.Reference, candidate.Reference));
+            result.Add(active is null ? model : model with { Loaded = true, Backend = active.Backend, Mode = active.Mode });
+        }
+        foreach (var model in loaded.Where(active => !pulled.Any(local => ModelNamesMatch(local.Reference, active.Reference)))) result.Add(model);
+        return result.Take(64).ToArray();
+    }
+
+    private static bool ModelNamesMatch(string left, string right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(left[(left.LastIndexOf('/') + 1)..], right[(right.LastIndexOf('/') + 1)..], StringComparison.OrdinalIgnoreCase);
+
+    private static string? ReadModelRunnerVersion(string value)
+    {
+        var server = Regex.Match(value, @"(?ms)^Server:\s*.*?^\s*Version:\s*(\S+)", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+        return server.Success ? SafeIdentity(server.Groups[1].Value) : null;
+    }
+
+    private static string? ReadModelDiskUsage(string value)
+    {
+        var line = SplitLines(value).FirstOrDefault(candidate => candidate.StartsWith("Models", StringComparison.OrdinalIgnoreCase));
+        if (line is null) return null;
+        var columns = Regex.Split(line.Trim(), "\\s{2,}", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+        return columns.Length >= 2 ? SafeDisplay(columns[1], 64) : null;
     }
 
     private async Task<DockerProcessResult> RunAsync(
@@ -219,7 +347,8 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         CancellationToken cancellationToken,
         IReadOnlyList<DockerControlService>? targets = null,
         string? containerId = null,
-        string? imageId = null)
+        string? imageId = null,
+        string? modelReference = null)
     {
         if (!IsTrustedExecutable(_dockerExecutable) || !IsTrustedFile(_composePath))
             throw new DockerControlUnavailableException("docker_unavailable", "The fixed Docker runtime is unavailable.");
@@ -232,7 +361,7 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        AddArguments(start.ArgumentList, operation, service, maximumLines, targets, containerId, imageId);
+        AddArguments(start.ArgumentList, operation, service, maximumLines, targets, containerId, imageId, modelReference);
         using var process = new Process { StartInfo = start };
         try
         {
@@ -264,7 +393,8 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         int maximumLines,
         IReadOnlyList<DockerControlService>? targets,
         string? containerId,
-        string? imageId)
+        string? imageId,
+        string? modelReference)
     {
         if (operation == DockerCliOperation.EngineVersion)
         {
@@ -279,6 +409,27 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         {
             if (NormalizeSha256(imageId) is null) throw new DockerControlUnavailableException("invalid_identity", "Docker returned an invalid image identity.");
             arguments.Add("image"); arguments.Add("inspect"); arguments.Add(imageId!); return;
+        }
+        if (operation == DockerCliOperation.ContainerStats)
+        {
+            if (SafeContainerId(containerId) is null) throw new DockerControlUnavailableException("invalid_identity", "Docker returned an invalid container identity.");
+            arguments.Add("stats"); arguments.Add("--no-stream"); arguments.Add("--format"); arguments.Add("{{json .}}"); arguments.Add(containerId!); return;
+        }
+        if (operation is DockerCliOperation.ModelStatus or DockerCliOperation.ModelVersion or DockerCliOperation.ModelList or DockerCliOperation.ModelPs or DockerCliOperation.ModelDf or DockerCliOperation.ModelUnload)
+        {
+            arguments.Add("model");
+            switch (operation)
+            {
+                case DockerCliOperation.ModelStatus: arguments.Add("status"); arguments.Add("--json"); break;
+                case DockerCliOperation.ModelVersion: arguments.Add("version"); break;
+                case DockerCliOperation.ModelList: arguments.Add("list"); arguments.Add("--json"); break;
+                case DockerCliOperation.ModelPs: arguments.Add("ps"); break;
+                case DockerCliOperation.ModelDf: arguments.Add("df"); break;
+                case DockerCliOperation.ModelUnload:
+                    if (!SafeModelReference(modelReference, out var model)) throw new DockerControlUnavailableException("invalid_identity", "The reviewed model identity is invalid.");
+                    arguments.Add("unload"); arguments.Add(model); break;
+            }
+            return;
         }
         arguments.Add("compose");
         arguments.Add("--project-directory"); arguments.Add(_trustedRoot);
@@ -305,14 +456,14 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
 
     private static void AddTargets(Collection<string> arguments, IReadOnlyList<DockerControlService>? targets)
     {
-        if (targets is null || targets.Count is 0 or > 2) throw new DockerControlUnavailableException("invalid_target", "The reviewed Docker target set is invalid.");
+        if (targets is null || targets.Count is 0 or > 3) throw new DockerControlUnavailableException("invalid_target", "The reviewed Docker target set is invalid.");
         foreach (var target in targets.OrderBy(value => value)) arguments.Add(ComposeService(target));
     }
 
     private static string ComposeService(DockerControlService? service) => service switch
     {
         DockerControlService.Hermes => "gateway",
-        DockerControlService.ModelRunner => "model-runner",
+        DockerControlService.MemoryVector => "memory-vector",
         _ => throw new DockerControlUnavailableException("service_unavailable", "The requested service is not managed by Docker Control Center."),
     };
 
@@ -337,12 +488,13 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
     private DockerControlHostSnapshot UnavailableSnapshot(DateTimeOffset observedAt, string engineState) => new(
         observedAt, engineState, null, "unavailable", IsTrustedFile(_composePath) ? HashFile(_composePath) : null, null,
         RuntimeProtocol,
-        [UnavailableService(DockerControlService.Hermes), SerenaEvidence()],
+        [UnavailableService(DockerControlService.Hermes), UnavailableService(DockerControlService.MemoryVector), SerenaEvidence()],
         [new("data", "unknown", true), new("workspace", "unknown", true)],
+        new("unavailable", null, null, null, null, false, [], "Docker Model Runner status is unavailable while the Docker engine is unavailable."),
         null);
 
     private static DockerControlServiceEvidence UnavailableService(DockerControlService service) =>
-        new(service, "unavailable", "unknown", null, null, [], false);
+        new(service, "unavailable", "unknown", null, null, null, [], null, false);
 
     private static string NormalizeState(string? value) => value?.ToLowerInvariant() switch
     {
@@ -372,6 +524,27 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
 
     private static string? NormalizeSha256(string? value) =>
         value is not null && Sha256Regex().IsMatch(value) ? value.ToLowerInvariant() : null;
+
+    private static bool SafeModelReference(string? value, out string normalized)
+    {
+        normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length is > 0 and <= 256
+            && char.IsAsciiLetterOrDigit(normalized[0])
+            && normalized.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '/' or ':' or '@' or '+' or '-');
+    }
+
+    private static string? SafeLoopbackEndpoint(string? value)
+    {
+        if (value is null || value.Length > 256 || !Uri.TryCreate(value, UriKind.Absolute, out var endpoint)) return null;
+        return endpoint.Scheme is "http" or "https" && endpoint.IsLoopback ? endpoint.AbsoluteUri : null;
+    }
+
+    private static string? SafeDisplay(string? value, int maximum)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var normalized = value.Trim();
+        return normalized.Length <= maximum && normalized.All(character => char.IsAsciiLetterOrDigit(character) || character is ' ' or '.' or '_' or '+' or ':' or '/' or '@' or '(' or ')' or '-') ? normalized : null;
+    }
 
     private static string HashFile(string path) => $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path)))}";
 
@@ -443,6 +616,29 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         return values.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!).Take(32).ToArray();
     }
 
+    private static DockerControlResources? ReadResources(JsonElement stats)
+    {
+        static double? Percent(JsonElement element, string name)
+        {
+            var raw = GetString(element, name)?.Trim().TrimEnd('%');
+            return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) && value is >= 0 and <= 1_000_000 ? value : null;
+        }
+        var memoryParts = (GetString(stats, "MemUsage") ?? string.Empty).Split(" / ", StringSplitOptions.TrimEntries);
+        var memoryUsage = memoryParts.Length > 0 ? SafeDisplay(memoryParts[0], 64) : null;
+        var memoryLimit = memoryParts.Length > 1 ? SafeDisplay(memoryParts[1], 64) : null;
+        var pids = int.TryParse(GetString(stats, "PIDs"), NumberStyles.None, CultureInfo.InvariantCulture, out var parsedPids) && parsedPids >= 0 ? parsedPids : null as int?;
+        var resources = new DockerControlResources(
+            Percent(stats, "CPUPerc"),
+            memoryUsage,
+            memoryLimit,
+            Percent(stats, "MemPerc"),
+            SafeDisplay(GetString(stats, "NetIO"), 64),
+            SafeDisplay(GetString(stats, "BlockIO"), 64),
+            pids);
+        return resources.CpuPercent is null && resources.MemoryUsage is null && resources.MemoryPercent is null
+            && resources.NetworkIo is null && resources.BlockIo is null && resources.Pids is null ? null : resources;
+    }
+
     private static async Task<BoundedText> ReadBoundedAsync(StreamReader reader, int maximumCharacters, CancellationToken cancellationToken)
     {
         var builder = new StringBuilder(Math.Min(maximumCharacters, 8_192));
@@ -480,7 +676,12 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    private enum DockerCliOperation { EngineVersion, ComposeServices, ComposePs, ComposeContainerId, ContainerInspect, ImageInspect, Logs, Start, Stop, Restart }
+    private enum DockerCliOperation
+    {
+        EngineVersion, ComposeServices, ComposePs, ComposeContainerId, ContainerInspect, ImageInspect, ContainerStats,
+        ModelStatus, ModelVersion, ModelList, ModelPs, ModelDf, ModelUnload,
+        Logs, Start, Stop, Restart,
+    }
     private sealed record DockerProcessResult(int ExitCode, string StandardOutput, string StandardError, bool Truncated);
     private sealed record BoundedText(string Text, bool Truncated);
 

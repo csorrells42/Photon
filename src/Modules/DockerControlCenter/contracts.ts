@@ -9,9 +9,10 @@ export const DOCKER_CONTROL_LIMITS = {
   logLineCharacters: 512,
   logTotalCharacters: 32_768,
   requestedLogLines: 200,
+  models: 64,
 } as const
 
-export const DOCKER_PRODUCT_SERVICES = ['hermes', 'serena', 'model-runner'] as const
+export const DOCKER_PRODUCT_SERVICES = ['hermes', 'memory-vector', 'serena', 'model-runner'] as const
 export type DockerProductService = typeof DOCKER_PRODUCT_SERVICES[number]
 export type DockerCoreService = Exclude<DockerProductService, 'model-runner'>
 
@@ -41,9 +42,45 @@ export type DockerProductServiceSnapshot = {
   id: DockerProductService
   state: DockerObservedState
   health: DockerHealthState
+  manageable?: boolean
+  containerId?: string
   version?: string
   image?: DockerImageIdentity
   ports: readonly DockerLoopbackPort[]
+  resources?: DockerResourceSnapshot
+}
+
+export type DockerResourceSnapshot = {
+  cpuPercent?: number
+  memoryUsage?: string
+  memoryLimit?: string
+  memoryPercent?: number
+  networkIo?: string
+  blockIo?: string
+  pids?: number
+}
+
+export type DockerModelSnapshot = {
+  reference: string
+  modelId?: string
+  size?: string
+  format?: string
+  parameters?: string
+  loaded: boolean
+  backend?: string
+  mode?: string
+}
+
+export type DockerModelRunnerSnapshot = {
+  state: DockerObservedState
+  version?: string
+  endpoint?: string
+  kind?: string
+  diskUsage?: string
+  loadAvailable: false
+  unloadAvailable: boolean
+  models: readonly DockerModelSnapshot[]
+  message?: string
 }
 
 export type DockerVolumeSnapshot = {
@@ -72,6 +109,7 @@ export type DockerStackSnapshot = {
   }
   services: readonly DockerProductServiceSnapshot[]
   volumes: readonly DockerVolumeSnapshot[]
+  modelRunner?: DockerModelRunnerSnapshot
   lastWorkflow?: DockerWorkflowSummary
 }
 
@@ -99,7 +137,10 @@ export type DockerLogsResult = {
 export type DockerMutationIntent =
   | { kind: 'start-stack' }
   | { kind: 'stop-stack' }
+  | { kind: 'start-service'; service: DockerProductService }
+  | { kind: 'stop-service'; service: DockerProductService }
   | { kind: 'restart-service'; service: DockerProductService }
+  | { kind: 'unload-model'; model: string }
   | { kind: 'request-update' }
 
 export type DockerMutationReviewRequest = {
@@ -148,7 +189,11 @@ export type DockerControlExecution = { signal: AbortSignal }
 export type DockerControlOperations = {
   startStack: boolean
   stopStack: boolean
+  startService: boolean
+  stopService: boolean
   restartService: boolean
+  loadModel: false
+  unloadModel: boolean
   update: false
 }
 

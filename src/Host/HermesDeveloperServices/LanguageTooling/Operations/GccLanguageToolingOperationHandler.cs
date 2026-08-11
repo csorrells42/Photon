@@ -1,3 +1,5 @@
+using HermesDeveloperServices.LanguageTooling.Gcc;
+
 namespace HermesDeveloperServices.LanguageTooling.Operations;
 
 /// <summary>
@@ -13,6 +15,11 @@ public sealed class GccLanguageToolingOperationHandler : ILanguageToolingOperati
 
     public GccLanguageToolingOperationHandler(GccToolchainProvider provider, string workspaceRoot)
         : this(new GccCompilerAuthority(provider), workspaceRoot)
+    {
+    }
+
+    public GccLanguageToolingOperationHandler(HermesContainerGccToolingAuthority authority, string workspaceRoot)
+        : this((IGccCompilerAuthority)authority, workspaceRoot)
     {
     }
 

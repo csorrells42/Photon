@@ -37,6 +37,16 @@ public sealed record BuildRequest(
     string TargetPath,
     BuildConfiguration Configuration = BuildConfiguration.Debug);
 
+/// <summary>
+/// Describes one guarded .NET test invocation. The optional selection is passed only to the fixed
+/// <c>dotnet test --filter</c> argument and is validated before process creation.
+/// </summary>
+public sealed record DotnetTestRequest(
+    string WorkspaceRoot,
+    string TargetPath,
+    BuildConfiguration Configuration = BuildConfiguration.Debug,
+    string? Selection = null);
+
 public sealed record BuildOutput(
     string StandardOutput,
     string StandardError,

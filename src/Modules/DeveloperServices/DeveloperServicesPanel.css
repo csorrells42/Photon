@@ -1,0 +1,72 @@
+.developer-debugger {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(132, 109, 201, .32);
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(42, 31, 75, .45), rgba(12, 35, 39, .32));
+}
+
+.developer-debugger > header,
+.developer-debug-actions,
+.developer-debug-attach,
+.developer-debug-toolbar,
+.developer-debug-evaluate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.developer-debugger > header { justify-content: space-between; }
+.developer-debugger header em { color: #8790a4; font-size: 10px; font-style: normal; text-transform: uppercase; }
+.developer-debugger header em.ready { color: #75d5bd; }
+.developer-debugger textarea,
+.developer-debugger input,
+.developer-debugger select {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  color: #e2e7f0;
+  border: 1px solid rgba(132, 109, 201, .35);
+  border-radius: 5px;
+  background: #0d111c;
+  padding: 5px 7px;
+  font: inherit;
+}
+.developer-debugger textarea { resize: vertical; }
+.developer-debugger button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 27px;
+  color: #ded8f8;
+  border: 1px solid rgba(132, 109, 201, .45);
+  border-radius: 5px;
+  background: rgba(73, 53, 119, .45);
+  padding: 4px 7px;
+  font: inherit;
+}
+.developer-debugger button:hover:not(:disabled) { border-color: #72d0b8; color: #fff; }
+.developer-debugger button:focus-visible { outline: 2px solid #72d0b8; outline-offset: 1px; }
+.developer-debugger button:disabled { opacity: .42; }
+.developer-debug-attach input,
+.developer-debug-evaluate input { flex: 1; }
+.developer-debug-check { display: flex; align-items: center; gap: 6px; color: #b8c0cf; }
+.developer-debug-check input { width: auto; }
+.developer-debug-list,
+.developer-debug-variables { display: grid; gap: 3px; max-height: 180px; overflow: auto; }
+.developer-debug-list > strong,
+.developer-debug-variables > strong { color: #9f91dd; font-size: 10px; text-transform: uppercase; }
+.developer-debug-list > span,
+.developer-debug-list > button,
+.developer-debug-variables > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; text-align: left; padding: 4px 6px; }
+.developer-debug-list .active { border-color: #72d0b8; background: rgba(37, 96, 88, .42); }
+.developer-debug-list small,
+.developer-debug-variables small { color: #788397; overflow: hidden; text-overflow: ellipsis; }
+.developer-debug-variables code { color: #79d1ba; overflow-wrap: anywhere; }
+.developer-debug-output { max-height: 150px; overflow: auto; margin: 0; padding: 7px; border-radius: 5px; background: #090c13; color: #a9dbc9; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) {
+  .developer-debugger * { scroll-behavior: auto !important; }
+}

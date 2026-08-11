@@ -13,10 +13,20 @@ type BridgeController = {
   snapshot: () => HermesBridgeSnapshot
   submitTurn: (text: string) => Promise<HermesBridgeSnapshot>
   interrupt: () => Promise<HermesBridgeSnapshot>
+  observe: (message: HermesBridgeObservation) => Promise<HermesBridgeSnapshot>
+}
+
+export type HermesBridgeObservation = {
+  messageId: string
+  sender: 'Chris' | 'Codex' | 'Photon' | 'Ali' | 'Scarlett'
+  recipient: 'Chris' | 'Codex' | 'Photon' | 'Ali' | 'Scarlett' | 'Everyone'
+  body: string
+  header: string
 }
 
 export type HermesBridgeSnapshot = {
   assistant: 'Hermes'
+  generation: string
   state: string
   isBusy: boolean
   sessionId: string | null
@@ -34,15 +44,42 @@ function bounded(value: string | undefined, maximum: number) {
   return text.length <= maximum ? text : `${text.slice(0, maximum)}\n… truncated`
 }
 
+const senders = new Set(['Chris', 'Codex', 'Photon', 'Ali', 'Scarlett'])
+const recipients = new Set([...senders, 'Everyone'])
+
+export function normalizeHermesBridgeObservation(value: unknown): HermesBridgeObservation {
+  if (!value || typeof value !== 'object') throw new Error('The bridge observation envelope is invalid.')
+  const input = value as Record<string, unknown>
+  const messageId = typeof input.messageId === 'string' ? input.messageId.trim() : ''
+  const sender = typeof input.sender === 'string' ? input.sender.trim() : ''
+  const recipient = typeof input.recipient === 'string' ? input.recipient.trim() : ''
+  const body = typeof input.body === 'string' ? input.body.trim() : ''
+  if (messageId.length < 5 || messageId.length > 128
+    || !senders.has(sender)
+    || !recipients.has(recipient)
+    || sender === recipient
+    || body.length < 1
+    || body.length > 64 * 1024) throw new Error('The bridge observation envelope is invalid.')
+  return {
+    messageId,
+    sender: sender as HermesBridgeObservation['sender'],
+    recipient: recipient as HermesBridgeObservation['recipient'],
+    body,
+    header: `${sender}->${recipient}`,
+  }
+}
+
 export function createHermesBridgeSnapshot(
   connection: string,
   busy: boolean,
   sessionId: string | null,
   messages: readonly HermesChatMessage[],
   tools: readonly HermesToolRun[],
+  generation = 'renderer:unbound',
 ): HermesBridgeSnapshot {
   return {
     assistant: 'Hermes',
+    generation: bounded(generation, 128),
     state: connection,
     isBusy: busy,
     sessionId,
@@ -68,12 +105,14 @@ export function registerHermesConversationBridge(controller: BridgeController) {
     if (!message || message.type !== 'conversationBridge.request' || message.version !== HERMES_CONVERSATION_BRIDGE_ADAPTER_VERSION) return
     const requestId = typeof message.requestId === 'string' ? message.requestId : ''
     const operation = typeof message.operation === 'string' ? message.operation : ''
-    if (!requestId || !['snapshot', 'turn', 'interrupt'].includes(operation)) return
+    if (!requestId || !['snapshot', 'turn', 'interrupt', 'observe'].includes(operation)) return
     const payload = message.payload && typeof message.payload === 'object' ? message.payload as Record<string, unknown> : null
     const action = operation === 'snapshot'
       ? Promise.resolve(controller.snapshot())
       : operation === 'interrupt'
         ? controller.interrupt()
+        : operation === 'observe'
+          ? Promise.resolve().then(() => controller.observe(normalizeHermesBridgeObservation(payload)))
         : typeof payload?.text === 'string' && payload.text.trim()
           ? controller.submitTurn(payload.text.trim())
           : Promise.reject(new Error('The Hermes bridge turn did not contain text.'))

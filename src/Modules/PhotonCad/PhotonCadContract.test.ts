@@ -7,8 +7,10 @@ import {
   normalizePhotonCadRelativePath,
   validatePhotonCadInterchangeManifest,
   validatePhotonCadOperationRequest,
+  validatePhotonCadStepExportRequest,
   type PhotonCadInterchangeManifest,
   type PhotonCadOperationRequest,
+  type PhotonCadProjectSnapshot,
 } from './PhotonCadContract'
 
 const digest = `sha256:${'a'.repeat(64)}`
@@ -102,6 +104,31 @@ describe('PhotonCadContract', () => {
     })).toEqual(expect.arrayContaining(['invalid-capability', 'invalid-input']))
   })
 
+  it('carries ordered occurrence identities and exact transforms in project snapshots', () => {
+    const snapshot: PhotonCadProjectSnapshot = {
+      contractVersion: 1,
+      sessionId: 'session:1',
+      projectId: 'gearbox:1',
+      revision: 2,
+      title: 'Gearbox',
+      units: 'millimeter',
+      mode: 'canonical',
+      entities: [
+        { id: 'part:shaft', parentId: null, kind: 'part', name: 'Shaft', visible: true, suppressed: false },
+        { id: 'occurrence:shaft', parentId: null, kind: 'occurrence', name: 'SHAFT-001', visible: true, suppressed: false },
+      ],
+      occurrences: [{
+        occurrenceId: 'occurrence:shaft', parentOccurrenceId: null, partNumber: 'SHAFT-001', sourceEntityId: 'part:shaft',
+        transform: [0, -1, 0, 125, 1, 0, 0, -30, 0, 0, 1, 8, 0, 0, 0, 1],
+      }],
+      operations: [],
+      issues: [],
+      dirty: false,
+    }
+    expect(snapshot.occurrences?.map((occurrence) => occurrence.occurrenceId)).toEqual(['occurrence:shaft'])
+    expect(snapshot.occurrences?.[0].transform[3]).toBe(125)
+  })
+
   it('canonicalizes release formats independently of selection order', () => {
     const base = {
       contractVersion: 1 as const,
@@ -118,6 +145,22 @@ describe('PhotonCadContract', () => {
   it('accepts only opaque release handles', () => {
     expect(isOpaquePhotonCadReviewHandle(`cad-review:${'a'.repeat(32)}`)).toBe(true)
     expect(isOpaquePhotonCadReviewHandle('C:\\exports\\gearbox.step')).toBe(false)
+  })
+
+  it('binds a generic committed STEP request to one exact project revision, digest, and entity', () => {
+    const request = {
+      contractVersion: 1 as const,
+      requestId: 'step-export:1',
+      sessionId: 'session:1',
+      projectId: 'gearbox:1',
+      revision: 4,
+      contentDigest: digest,
+      entityId: 'part:shaft',
+    }
+    expect(validatePhotonCadStepExportRequest(request)).toEqual([])
+    expect(validatePhotonCadStepExportRequest({ ...request, contentDigest: 'C:\\projects\\gearbox.photoncad' })).toContain('invalid-content-digest')
+    expect(validatePhotonCadStepExportRequest({ ...request, entityId: '..\\secret.step' })).toContain('invalid-entity-id')
+    expect(validatePhotonCadStepExportRequest({ ...request, revision: -1 })).toContain('invalid-revision')
   })
 
   it('validates a portable, self-describing interchange manifest', () => {

@@ -4,11 +4,14 @@ import {
   isOpaquePhotonCadReviewHandle,
   isPhotonCadDigest,
   isPhotonCadIdentifier,
+  isPhotonCadSafeText,
   normalizePhotonCadCatalog,
   normalizePhotonCadRelativePath,
   photonCadDisplayText,
   validatePhotonCadOperationRequest,
+  validatePhotonCadStepExportRequest,
   type PhotonCadController,
+  type PhotonCadAssemblyOccurrence,
   type PhotonCadEntity,
   type PhotonCadIssue,
   type PhotonCadOperationRecord,
@@ -22,6 +25,8 @@ import {
   type PhotonCadReleaseReviewRequest,
   type PhotonCadReleaseReviewResult,
   type PhotonCadRuntimeDescription,
+  type PhotonCadStepExportRequest,
+  type PhotonCadStepExportResult,
   type PhotonCadVerificationRequest,
   type PhotonCadVerificationResult,
   type PhotonCadVector3,
@@ -36,6 +41,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS: Record<PendingKind, number> = {
   verify: 600_000,
   review: 600_000,
   commit: 120_000,
+  'step-export': 600_000,
 }
 const MAXIMUM_REQUEST_TIMEOUT_MS = 600_000
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$/u
@@ -54,8 +60,9 @@ export type PhotonCadDesktopRequest =
   | ({ type: 'photonCad.verify'; version: 1 } & PhotonCadVerificationRequest)
   | ({ type: 'photonCad.release.review'; version: 1 } & PhotonCadReleaseReviewRequest)
   | ({ type: 'photonCad.release.commit'; version: 1 } & PhotonCadReleaseCommitRequest)
+  | ({ type: 'photonCad.step.export'; version: 1 } & PhotonCadStepExportRequest)
   | { type: 'photonCad.release.discard'; version: 1; requestId: string; reviewHandle: string }
-  | { type: 'photonCad.cancel'; version: 1; requestId: string; targetRequestId: string; operation: 'execute' | 'verify' | 'review' }
+  | { type: 'photonCad.cancel'; version: 1; requestId: string; targetRequestId: string; operation: 'execute' | 'verify' | 'review' | 'step-export' }
 
 export type PhotonCadHostFrame =
   | { type: 'describe'; requestId: string; value: PhotonCadRuntimeDescription }
@@ -63,13 +70,14 @@ export type PhotonCadHostFrame =
   | { type: 'verify'; value: PhotonCadVerificationResult }
   | { type: 'review'; value: PhotonCadReleaseReviewResult }
   | { type: 'commit'; value: PhotonCadReleaseCommitResult }
+  | { type: 'step-export'; value: PhotonCadStepExportResult }
   | { type: 'error'; requestId: string; code: string; retryable: boolean }
 
-type PendingKind = 'describe' | 'execute' | 'verify' | 'review' | 'commit'
+type PendingKind = 'describe' | 'execute' | 'verify' | 'review' | 'commit' | 'step-export'
 type PendingRequest = {
   kind: PendingKind
   requestId: string
-  request?: PhotonCadOperationRequest | PhotonCadVerificationRequest | PhotonCadReleaseReviewRequest | PhotonCadReleaseCommitRequest
+  request?: PhotonCadOperationRequest | PhotonCadVerificationRequest | PhotonCadReleaseReviewRequest | PhotonCadReleaseCommitRequest | PhotonCadStepExportRequest
   resolve: (value: unknown) => void
   reject: (reason: Error) => void
   timeout: ReturnType<typeof setTimeout>
@@ -168,6 +176,85 @@ function normalizeOperation(value: unknown): PhotonCadOperationRecord | null {
   return { id: raw.id, capabilityId: raw.capabilityId, label, createdAtUtc: raw.createdAtUtc, state: raw.state as PhotonCadOperationRecord['state'] }
 }
 
+const MATRIX_TOLERANCE = 1e-9
+const MAXIMUM_OCCURRENCE_DEPTH = 256
+
+function near(left: number, right: number) {
+  return Math.abs(left - right) <= MATRIX_TOLERANCE
+}
+
+function normalizeRigidTransform(value: unknown): PhotonCadAssemblyOccurrence['transform'] | null {
+  if (!Array.isArray(value) || value.length !== 16
+    || value.some((item) => typeof item !== 'number' || !Number.isFinite(item)
+      || Math.abs(item) > PHOTON_CAD_LIMITS.absoluteMagnitude)) return null
+  const matrix = value as number[]
+  if (!near(matrix[12], 0) || !near(matrix[13], 0) || !near(matrix[14], 0) || !near(matrix[15], 1)) return null
+  for (let row = 0; row < 3; row += 1) {
+    let length = 0
+    for (let column = 0; column < 3; column += 1) length += matrix[(row * 4) + column] ** 2
+    if (!near(length, 1)) return null
+    for (let other = row + 1; other < 3; other += 1) {
+      let dot = 0
+      for (let column = 0; column < 3; column += 1) dot += matrix[(row * 4) + column] * matrix[(other * 4) + column]
+      if (!near(dot, 0)) return null
+    }
+  }
+  const determinant = matrix[0] * ((matrix[5] * matrix[10]) - (matrix[6] * matrix[9]))
+    - matrix[1] * ((matrix[4] * matrix[10]) - (matrix[6] * matrix[8]))
+    + matrix[2] * ((matrix[4] * matrix[9]) - (matrix[5] * matrix[8]))
+  return near(determinant, 1) ? matrix as unknown as PhotonCadAssemblyOccurrence['transform'] : null
+}
+
+function normalizeOccurrence(value: unknown): PhotonCadAssemblyOccurrence | null {
+  const raw = record(value)
+  const parentOccurrenceId = raw?.parentOccurrenceId === null
+    ? null
+    : isPhotonCadIdentifier(raw?.parentOccurrenceId) ? raw.parentOccurrenceId : undefined
+  const transform = normalizeRigidTransform(raw?.transform)
+  if (!raw || !isPhotonCadIdentifier(raw.occurrenceId) || parentOccurrenceId === undefined
+    || !isPhotonCadSafeText(raw.partNumber, 256, true) || !isPhotonCadIdentifier(raw.sourceEntityId)
+    || !transform) return null
+  return {
+    occurrenceId: raw.occurrenceId,
+    parentOccurrenceId,
+    partNumber: raw.partNumber,
+    sourceEntityId: raw.sourceEntityId,
+    transform,
+  }
+}
+
+function validOccurrenceGraph(occurrences: PhotonCadAssemblyOccurrence[], entities: PhotonCadEntity[]) {
+  if (occurrences.length > 0 && occurrences.filter((value) => value.parentOccurrenceId === null).length !== 1) return false
+  const byOccurrence = new Map<string, PhotonCadAssemblyOccurrence>()
+  for (const occurrence of occurrences) {
+    const key = occurrence.occurrenceId.toLowerCase()
+    if (byOccurrence.has(key)) return false
+    byOccurrence.set(key, occurrence)
+  }
+  const byEntity = new Map(entities.map((entity) => [entity.id.toLowerCase(), entity]))
+  const pseudoEntityCount = entities.filter((entity) => entity.kind === 'occurrence').length
+  if (pseudoEntityCount !== occurrences.length
+    || entities.length - pseudoEntityCount > PHOTON_CAD_LIMITS.entities) return false
+  for (const occurrence of occurrences) {
+    const source = byEntity.get(occurrence.sourceEntityId.toLowerCase())
+    const pseudo = byEntity.get(occurrence.occurrenceId.toLowerCase())
+    if (!source || source.kind === 'occurrence' || !pseudo || pseudo.kind !== 'occurrence'
+      || pseudo.parentId !== occurrence.parentOccurrenceId || pseudo.name !== occurrence.partNumber
+      || pseudo.sourceCapabilityId !== source.sourceCapabilityId || !pseudo.visible || pseudo.suppressed) return false
+    const visited = new Set<string>()
+    let cursor: PhotonCadAssemblyOccurrence | undefined = occurrence
+    let depth = 0
+    while (cursor.parentOccurrenceId !== null) {
+      const cursorKey = cursor.occurrenceId.toLowerCase()
+      if (++depth > MAXIMUM_OCCURRENCE_DEPTH || visited.has(cursorKey)) return false
+      visited.add(cursorKey)
+      cursor = byOccurrence.get(cursor.parentOccurrenceId.toLowerCase())
+      if (!cursor) return false
+    }
+  }
+  return true
+}
+
 export function normalizePhotonCadProjectSnapshot(value: unknown): PhotonCadProjectSnapshot | null {
   const raw = record(value)
   const revision = boundedRevision(raw?.revision)
@@ -176,16 +263,20 @@ export function normalizePhotonCadProjectSnapshot(value: unknown): PhotonCadProj
     || (raw.units !== 'millimeter' && raw.units !== 'inch')
     || (raw.mode !== 'canonical' && raw.mode !== 'scratch')
     || typeof raw.dirty !== 'boolean'
-    || !Array.isArray(raw.entities) || raw.entities.length > PHOTON_CAD_LIMITS.entities
+    || !Array.isArray(raw.entities) || raw.entities.length > PHOTON_CAD_LIMITS.entities + PHOTON_CAD_LIMITS.occurrences
+    || !Array.isArray(raw.occurrences) || raw.occurrences.length > PHOTON_CAD_LIMITS.occurrences
     || !Array.isArray(raw.operations) || raw.operations.length > PHOTON_CAD_LIMITS.operations) return null
   const title = photonCadDisplayText(raw.title, 256)
   const entities = raw.entities.map(normalizeEntity)
+  const occurrences = raw.occurrences.map(normalizeOccurrence)
   const operations = raw.operations.map(normalizeOperation)
   const issues = normalizeIssues(raw.issues)
-  if (!title || issues === null || entities.some((item) => item === null) || operations.some((item) => item === null)) return null
+  if (!title || issues === null || entities.some((item) => item === null) || occurrences.some((item) => item === null)
+    || operations.some((item) => item === null)) return null
   const entityIds = entities.map((item) => item?.id.toLowerCase())
   const operationIds = operations.map((item) => item?.id.toLowerCase())
-  if (new Set(entityIds).size !== entityIds.length || new Set(operationIds).size !== operationIds.length) return null
+  if (new Set(entityIds).size !== entityIds.length || new Set(operationIds).size !== operationIds.length
+    || !validOccurrenceGraph(occurrences as PhotonCadAssemblyOccurrence[], entities as PhotonCadEntity[])) return null
   return {
     contractVersion: PHOTON_CAD_CONTRACT_VERSION,
     sessionId: raw.sessionId,
@@ -195,6 +286,7 @@ export function normalizePhotonCadProjectSnapshot(value: unknown): PhotonCadProj
     units: raw.units,
     mode: raw.mode,
     entities: entities as PhotonCadEntity[],
+    occurrences: occurrences as PhotonCadAssemblyOccurrence[],
     operations: operations as PhotonCadOperationRecord[],
     issues,
     dirty: raw.dirty,
@@ -326,6 +418,43 @@ function normalizeCommitResult(value: unknown): PhotonCadReleaseCommitResult | n
   return { contractVersion: PHOTON_CAD_CONTRACT_VERSION, requestId: raw.requestId, status: raw.status as PhotonCadReleaseCommitResult['status'], reason }
 }
 
+function exactKeys(raw: Record<string, unknown>, expected: readonly string[]) {
+  const actual = Object.keys(raw).sort()
+  const wanted = [...expected].sort()
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index])
+}
+
+function normalizeStepExportResult(value: unknown): PhotonCadStepExportResult | null {
+  const raw = record(value)
+  const reason = reasonCode(raw?.reason)
+  const revision = boundedRevision(raw?.revision)
+  if (!raw || raw.contractVersion !== PHOTON_CAD_CONTRACT_VERSION || !isPhotonCadIdentifier(raw.requestId)
+    || !isPhotonCadIdentifier(raw.projectId) || revision === null
+    || !['committed', 'cancelled', 'rejected', 'unavailable'].includes(String(raw.status)) || !reason) return null
+  if (raw.status === 'committed') {
+    if (!exactKeys(raw, ['contractVersion', 'requestId', 'projectId', 'revision', 'status', 'reason', 'entityId', 'contentDigest', 'byteLength', 'destinationLabel'])
+      || !isPhotonCadIdentifier(raw.entityId) || !isPhotonCadDigest(raw.contentDigest)
+      || typeof raw.byteLength !== 'number' || !Number.isSafeInteger(raw.byteLength) || raw.byteLength <= 0
+      || raw.byteLength > PHOTON_CAD_LIMITS.absoluteMagnitude
+      || !isPhotonCadSafeText(raw.destinationLabel, 256, true) || /[\\/:]/u.test(raw.destinationLabel)
+      || raw.destinationLabel === '.' || raw.destinationLabel === '..') return null
+    return {
+      contractVersion: PHOTON_CAD_CONTRACT_VERSION,
+      requestId: raw.requestId,
+      projectId: raw.projectId,
+      revision,
+      status: 'committed',
+      reason,
+      entityId: raw.entityId,
+      contentDigest: raw.contentDigest.toLowerCase(),
+      byteLength: raw.byteLength,
+      destinationLabel: raw.destinationLabel,
+    }
+  }
+  if (!exactKeys(raw, ['contractVersion', 'requestId', 'projectId', 'revision', 'status', 'reason'])) return null
+  return { contractVersion: PHOTON_CAD_CONTRACT_VERSION, requestId: raw.requestId, projectId: raw.projectId, revision, status: raw.status as PhotonCadStepExportResult['status'], reason }
+}
+
 export function normalizePhotonCadHostFrame(value: unknown): PhotonCadHostFrame | null {
   const raw = record(value)
   if (!raw || raw.version !== PHOTON_CAD_DESKTOP_PROTOCOL_VERSION) return null
@@ -354,6 +483,10 @@ export function normalizePhotonCadHostFrame(value: unknown): PhotonCadHostFrame 
   if (raw.type === 'photonCad.release.commit.result') {
     const result = normalizeCommitResult(raw.value)
     return result ? { type: 'commit', value: result } : null
+  }
+  if (raw.type === 'photonCad.step.export.result') {
+    const result = normalizeStepExportResult(raw.value)
+    return result ? { type: 'step-export', value: result } : null
   }
   return null
 }
@@ -462,6 +595,20 @@ export class DesktopPhotonCadClient implements PhotonCadController {
     return this.send('commit', request.requestId, request, { type: 'photonCad.release.commit', version: PHOTON_CAD_DESKTOP_PROTOCOL_VERSION, ...request })
   }
 
+  public exportStep(request: PhotonCadStepExportRequest): Promise<PhotonCadStepExportResult> {
+    if (validatePhotonCadStepExportRequest(request).length) return Promise.reject(new Error('Invalid Photon CAD STEP-export request.'))
+    if (!this.available) return Promise.resolve({
+      contractVersion: PHOTON_CAD_CONTRACT_VERSION,
+      requestId: request.requestId,
+      projectId: request.projectId,
+      revision: request.revision,
+      status: 'unavailable',
+      reason: this.closed ? 'client-closed' : 'desktop-host-unavailable',
+    })
+    this.replacePending('step-export')
+    return this.send('step-export', request.requestId, request, { type: 'photonCad.step.export', version: PHOTON_CAD_DESKTOP_PROTOCOL_VERSION, ...request })
+  }
+
   public discardRelease(reviewHandle: string) {
     if (!isOpaquePhotonCadReviewHandle(reviewHandle) || !this.available) return
     const requestId = this.nextRequestId('discard')
@@ -562,7 +709,21 @@ export class DesktopPhotonCadClient implements PhotonCadController {
       return frame.value.packageFingerprint === undefined
         || frame.value.packageFingerprint.toLowerCase() === request.packageFingerprint.toLowerCase()
     }
+    if (frame.type === 'step-export' && pending.kind === 'step-export') {
+      const request = pending.request as PhotonCadStepExportRequest
+      return frame.value.projectId === request.projectId && frame.value.revision === request.revision
+        && (frame.value.status !== 'committed' || frame.value.entityId === request.entityId)
+    }
     return false
+  }
+
+  private replacePending(kind: PendingKind) {
+    const stale = [...this.pending.values()].filter(isCancellablePending).filter((pending) => pending.kind === kind)
+    this.cancelRequests(stale, this.bridge)
+    for (const pending of stale) {
+      this.finish(pending)
+      pending.reject(new Error('A newer Photon CAD request replaced this request.'))
+    }
   }
 
   private reserveRequestId(requestId: string) {
@@ -599,7 +760,7 @@ export class DesktopPhotonCadClient implements PhotonCadController {
     this.pending.clear()
   }
 
-  private cancelRequests(pendingRequests: Array<PendingRequest & { kind: 'execute' | 'verify' | 'review' }>, bridge: PhotonCadWebViewBridge | null) {
+  private cancelRequests(pendingRequests: Array<PendingRequest & { kind: 'execute' | 'verify' | 'review' | 'step-export' }>, bridge: PhotonCadWebViewBridge | null) {
     if (!bridge) return
     for (const pending of pendingRequests) {
       try {
@@ -626,8 +787,8 @@ function defaultNonce() {
   return `${Date.now().toString(36)}-${fallbackNonce.toString(36)}`
 }
 
-function isCancellablePending(pending: PendingRequest): pending is PendingRequest & { kind: 'execute' | 'verify' | 'review' } {
-  return pending.kind === 'execute' || pending.kind === 'verify' || pending.kind === 'review'
+function isCancellablePending(pending: PendingRequest): pending is PendingRequest & { kind: 'execute' | 'verify' | 'review' | 'step-export' } {
+  return pending.kind === 'execute' || pending.kind === 'verify' || pending.kind === 'review' || pending.kind === 'step-export'
 }
 
 function normalizeTimeouts(value: DesktopPhotonCadClientOptions['requestTimeoutMs']): Record<PendingKind, number> {
@@ -636,7 +797,7 @@ function normalizeTimeouts(value: DesktopPhotonCadClientOptions['requestTimeoutM
     : fallback
   if (typeof value === 'number') {
     const timeout = normalize(value, DEFAULT_REQUEST_TIMEOUT_MS.execute)
-    return { describe: timeout, execute: timeout, verify: timeout, review: timeout, commit: timeout }
+    return { describe: timeout, execute: timeout, verify: timeout, review: timeout, commit: timeout, 'step-export': timeout }
   }
   return {
     describe: normalize(value?.describe, DEFAULT_REQUEST_TIMEOUT_MS.describe),
@@ -644,6 +805,7 @@ function normalizeTimeouts(value: DesktopPhotonCadClientOptions['requestTimeoutM
     verify: normalize(value?.verify, DEFAULT_REQUEST_TIMEOUT_MS.verify),
     review: normalize(value?.review, DEFAULT_REQUEST_TIMEOUT_MS.review),
     commit: normalize(value?.commit, DEFAULT_REQUEST_TIMEOUT_MS.commit),
+    'step-export': normalize(value?.['step-export'], DEFAULT_REQUEST_TIMEOUT_MS['step-export']),
   }
 }
 

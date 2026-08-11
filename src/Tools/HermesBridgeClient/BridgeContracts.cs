@@ -17,14 +17,21 @@ public enum BridgeExitCode
 public sealed record BridgeClientPolicy(
     TimeSpan Timeout,
     int MaximumResponseBytes = 1024 * 1024,
-    int MaximumSettingsBytes = 16 * 1024)
+    int MaximumSettingsBytes = 16 * 1024,
+    TimeSpan? TurnTimeout = null)
 {
-    public static BridgeClientPolicy Default { get; } = new(TimeSpan.FromSeconds(15));
+    public static BridgeClientPolicy Default { get; } = new(
+        TimeSpan.FromSeconds(15),
+        TurnTimeout: TimeSpan.FromMinutes(31));
+
+    public TimeSpan EffectiveTurnTimeout => TurnTimeout ?? TimeSpan.FromMinutes(31);
 
     public void Validate()
     {
         if (Timeout <= TimeSpan.Zero || Timeout > TimeSpan.FromMinutes(2))
             throw new ArgumentOutOfRangeException(nameof(Timeout));
+        if (EffectiveTurnTimeout <= TimeSpan.Zero || EffectiveTurnTimeout > TimeSpan.FromMinutes(35))
+            throw new ArgumentOutOfRangeException(nameof(TurnTimeout));
         if (MaximumResponseBytes is < 1024 or > 4 * 1024 * 1024)
             throw new ArgumentOutOfRangeException(nameof(MaximumResponseBytes));
         if (MaximumSettingsBytes is < 256 or > 64 * 1024)

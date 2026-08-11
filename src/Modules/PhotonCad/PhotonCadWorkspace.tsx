@@ -3,7 +3,6 @@ import {
   BookOpen,
   Box,
   CheckCircle2,
-  ChevronRight,
   CircleAlert,
   DollarSign,
   Eye,
@@ -12,6 +11,8 @@ import {
   Layers3,
   LoaderCircle,
   PackageCheck,
+  PanelLeftClose,
+  PanelRightClose,
   Play,
   Plus,
   Printer,
@@ -32,11 +33,15 @@ import {
   type CSSProperties,
   type ChangeEvent,
   type KeyboardEvent,
+  type PointerEvent,
   type ReactNode,
 } from 'react'
 import {
   PHOTON_CAD_CONTRACT_VERSION,
+  PHOTON_CAD_LIMITS,
   isPhotonCadDigest,
+  isPhotonCadIdentifier,
+  isPhotonCadSafeText,
   normalizePhotonCadCatalog,
   photonCadDisplayText,
   photonCadReasonText,
@@ -45,12 +50,16 @@ import {
   type PhotonCadController,
   type PhotonCadInputValue,
   type PhotonCadIssue,
+  type PhotonCadOperationRequest,
+  type PhotonCadOperationResult,
   type PhotonCadParameterDefinition,
   type PhotonCadPreviewReceipt,
   type PhotonCadProjectSnapshot,
   type PhotonCadReleaseFormat,
   type PhotonCadReleaseReviewResult,
   type PhotonCadRuntimeDescription,
+  type PhotonCadStepExportRequest,
+  type PhotonCadStepExportResult,
   type PhotonCadVerificationRequest,
   type PhotonCadVerificationResult,
   type PhotonCadVector3,
@@ -78,6 +87,7 @@ export type PhotonCadPreviewContext = {
   receipt: PhotonCadPreviewReceipt | null
   selectedEntityIds: readonly string[]
   stage: PhotonCadWorkspaceStage
+  acceptHydratedReceipt: (receipt: PhotonCadPreviewReceipt) => boolean
 }
 
 export type PhotonCadCommercialPreviewContext = {
@@ -104,6 +114,8 @@ export interface PhotonCadWorkspaceProps {
   initialStage?: PhotonCadWorkspaceStage
   initialReleaseOutput?: PhotonCadReleaseOutput
   evidenceMode?: 'runtime' | 'fixture'
+  persistedScratchAuthorized?: boolean
+  projectContentDigest?: string
   className?: string
 }
 
@@ -112,15 +124,15 @@ const stages = [
   { id: 'design', label: 'Design', detail: 'Shape parts by intent', icon: Box },
   { id: 'assemble', label: 'Assemble', detail: 'Structure and bill of materials', icon: Layers3 },
   { id: 'verify', label: 'Verify', detail: 'Run explicit checks', icon: ShieldCheck },
-  { id: 'release', label: 'Release', detail: 'Review the portable package', icon: PackageCheck },
+  { id: 'release', label: 'Release', detail: 'Export canonical STEP', icon: PackageCheck },
 ] as const
 
-const verificationChecks: Array<{ id: PhotonCadVerificationRequest['checks'][number]; label: string; detail: string }> = [
-  { id: 'valid-solids', label: 'Valid solids', detail: 'Closed, usable boundary representations' },
-  { id: 'interference', label: 'Interference', detail: 'Overlapping assembly occurrences' },
-  { id: 'dimensions', label: 'Dimensions', detail: 'Finite values and declared units' },
-  { id: 'assembly-structure', label: 'Assembly structure', detail: 'Resolvable parts, hierarchy, and transforms' },
-  { id: 'export-readiness', label: 'Export readiness', detail: 'Package prerequisites and supported formats' },
+const verificationChecks: Array<{ id: PhotonCadVerificationRequest['checks'][number]; label: string; detail: string; available: boolean }> = [
+  { id: 'valid-solids', label: 'Valid solids', detail: 'Closed, usable boundary representations', available: true },
+  { id: 'interference', label: 'Interference', detail: 'Not mounted yet; overlapping-occurrence analysis remains unavailable', available: false },
+  { id: 'dimensions', label: 'Dimensions', detail: 'Finite values and declared units', available: true },
+  { id: 'assembly-structure', label: 'Assembly structure', detail: 'Resolvable parts, hierarchy, and transforms', available: true },
+  { id: 'export-readiness', label: 'Export readiness', detail: 'Generic STEP prerequisites and supported project structure', available: true },
 ]
 
 const releaseFormats: Array<{ id: PhotonCadReleaseFormat; label: string; detail: string }> = [
@@ -130,6 +142,169 @@ const releaseFormats: Array<{ id: PhotonCadReleaseFormat; label: string; detail:
   { id: 'dxf', label: 'DXF', detail: 'Planar drawing derivative' },
   { id: 'svg', label: 'SVG', detail: 'Portable drawing preview' },
 ]
+
+export const PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID = 'assembly.occurrence.place.v1'
+export const PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID = 'assembly.occurrence.transform.v1'
+export const PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID = 'assembly.occurrence.remove.v1'
+
+export type PhotonCadCatalogSection = {
+  id: string
+  label: string
+  library: 'build123d' | 'bd-warehouse' | 'assembly' | 'other'
+  capabilities: PhotonCadCapability[]
+}
+
+export type PhotonCadProjectPart = {
+  id: string
+  name: string
+  kind: 'body' | 'part'
+  occurrenceCount: number
+}
+
+export type PhotonCadPaneLayout = {
+  contextWidth: number
+  inspectorWidth: number
+  contextCollapsed: boolean
+  inspectorCollapsed: boolean
+}
+
+const PHOTON_CAD_PANE_LAYOUT_STORAGE_KEY = 'hermes-workbench.photon-cad-pane-layout.v1'
+const PHOTON_CAD_PANE_BOUNDS = {
+  context: { minimum: 160, maximum: 460, initial: 260 },
+  inspector: { minimum: 190, maximum: 520, initial: 300 },
+} as const
+const DEFAULT_PHOTON_CAD_PANE_LAYOUT: PhotonCadPaneLayout = {
+  contextWidth: PHOTON_CAD_PANE_BOUNDS.context.initial,
+  inspectorWidth: PHOTON_CAD_PANE_BOUNDS.inspector.initial,
+  contextCollapsed: false,
+  inspectorCollapsed: false,
+}
+const PHOTON_CAD_CATALOG_PAGE_SIZE = 100
+
+function normalizedCatalogSection(value: string) {
+  const normalized = value.trim().toLocaleLowerCase()
+    .replace(/^industrial\s+/, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return normalized || 'other-parts'
+}
+
+function catalogSectionId(capability: PhotonCadCapability): PhotonCadCatalogSection['id'] {
+  if (capability.operation !== 'create') return 'assembly-tools'
+  if (capability.backend === 'geometry' || capability.source.package.toLocaleLowerCase().includes('build123d')) return 'build123d-design'
+  if (capability.source.package.toLocaleLowerCase().includes('bd-warehouse')) return normalizedCatalogSection(capability.category)
+  return normalizedCatalogSection(capability.category || 'other-parts')
+}
+
+function catalogSectionLabel(id: string, capabilities: readonly PhotonCadCapability[]) {
+  if (id === 'build123d-design') return 'Build123d design'
+  if (id === 'assembly-tools') return 'Assembly tools'
+  const category = capabilities[0]?.category.trim().replace(/^industrial\s+/i, '')
+  if (category) return category.replace(/\b\w/g, (value) => value.toLocaleUpperCase())
+  return id.split('-').filter(Boolean).map((value) => value[0]?.toLocaleUpperCase() + value.slice(1)).join(' ')
+}
+
+export function photonCadCatalogSections(capabilities: readonly PhotonCadCapability[]): PhotonCadCatalogSection[] {
+  const buckets = new Map<string, PhotonCadCapability[]>()
+  for (const capability of capabilities) {
+    const id = catalogSectionId(capability)
+    const bucket = buckets.get(id) ?? []
+    bucket.push(capability)
+    buckets.set(id, bucket)
+  }
+  const preferred = ['build123d-design', 'bearings', 'gears', 'fasteners', 'flanges', 'openbuilds', 'pipes', 'sprockets', 'threads', 'other-parts', 'assembly-tools']
+  return [...buckets.entries()]
+    .map(([id, items]) => ({
+      id,
+      label: catalogSectionLabel(id, items),
+      library: id === 'build123d-design' ? 'build123d' as const
+        : id === 'assembly-tools' ? 'assembly' as const
+          : items.every((item) => item.source.package.toLocaleLowerCase().includes('bd-warehouse')) ? 'bd-warehouse' as const : 'other' as const,
+      capabilities: items,
+    }))
+    .sort((left, right) => {
+      const leftIndex = preferred.indexOf(left.id)
+      const rightIndex = preferred.indexOf(right.id)
+      if (leftIndex >= 0 || rightIndex >= 0) return (leftIndex < 0 ? preferred.length : leftIndex) - (rightIndex < 0 ? preferred.length : rightIndex)
+      return left.label.localeCompare(right.label)
+    })
+}
+
+export function photonCadManualDesignCapabilityId(
+  capabilities: readonly PhotonCadCapability[],
+  selectedCapabilityId: string,
+) {
+  const selected = capabilities.find((capability) => capability.id === selectedCapabilityId)
+  if (selected && selected.operation === 'create' && catalogSectionId(selected) === 'build123d-design') {
+    return selected.id
+  }
+  return capabilities.find((capability) => capability.operation === 'create' && catalogSectionId(capability) === 'build123d-design')?.id ?? ''
+}
+
+export function photonCadProjectParts(project: PhotonCadProjectSnapshot | null, query = ''): PhotonCadProjectPart[] {
+  if (!project) return []
+  const needle = query.trim().toLocaleLowerCase()
+  const occurrences = project.occurrences ?? []
+  return project.entities
+    .filter((entity): entity is typeof entity & { kind: 'body' | 'part' } => entity.kind === 'body' || entity.kind === 'part')
+    .filter((entity) => !needle || [entity.id, entity.name, entity.kind].some((value) => value.toLocaleLowerCase().includes(needle)))
+    .map((entity) => ({
+      id: entity.id,
+      name: entity.name,
+      kind: entity.kind,
+      occurrenceCount: occurrences.filter((occurrence) => occurrence.sourceEntityId === entity.id).length,
+    }))
+}
+
+function clampPhotonCadPaneWidth(pane: 'context' | 'inspector', value: number) {
+  const bounds = PHOTON_CAD_PANE_BOUNDS[pane]
+  if (!Number.isFinite(value)) return bounds.initial
+  return Math.min(bounds.maximum, Math.max(bounds.minimum, Math.round(value)))
+}
+
+export function photonCadKeyboardPaneWidth(pane: 'context' | 'inspector', current: number, key: string, largeStep = false) {
+  const bounds = PHOTON_CAD_PANE_BOUNDS[pane]
+  const step = largeStep ? 48 : 16
+  if (key === 'Home') return bounds.minimum
+  if (key === 'End') return bounds.maximum
+  if (pane === 'context') {
+    if (key === 'ArrowLeft') return clampPhotonCadPaneWidth(pane, current - step)
+    if (key === 'ArrowRight') return clampPhotonCadPaneWidth(pane, current + step)
+  } else {
+    if (key === 'ArrowLeft') return clampPhotonCadPaneWidth(pane, current + step)
+    if (key === 'ArrowRight') return clampPhotonCadPaneWidth(pane, current - step)
+  }
+  return null
+}
+
+export function loadPhotonCadPaneLayout(storage: Pick<Storage, 'getItem'> | null = typeof window === 'undefined' ? null : window.localStorage): PhotonCadPaneLayout {
+  if (!storage) return DEFAULT_PHOTON_CAD_PANE_LAYOUT
+  try {
+    const parsed = JSON.parse(storage.getItem(PHOTON_CAD_PANE_LAYOUT_STORAGE_KEY) ?? 'null') as unknown
+    if (!parsed || typeof parsed !== 'object') return DEFAULT_PHOTON_CAD_PANE_LAYOUT
+    const candidate = parsed as Partial<PhotonCadPaneLayout> & { version?: unknown }
+    if (candidate.version !== 1 || typeof candidate.contextWidth !== 'number' || typeof candidate.inspectorWidth !== 'number'
+      || typeof candidate.contextCollapsed !== 'boolean' || typeof candidate.inspectorCollapsed !== 'boolean') return DEFAULT_PHOTON_CAD_PANE_LAYOUT
+    return {
+      contextWidth: clampPhotonCadPaneWidth('context', candidate.contextWidth),
+      inspectorWidth: clampPhotonCadPaneWidth('inspector', candidate.inspectorWidth),
+      contextCollapsed: candidate.contextCollapsed,
+      inspectorCollapsed: candidate.inspectorCollapsed,
+    }
+  } catch {
+    return DEFAULT_PHOTON_CAD_PANE_LAYOUT
+  }
+}
+
+export function savePhotonCadPaneLayout(layout: PhotonCadPaneLayout, storage: Pick<Storage, 'setItem'> | null = typeof window === 'undefined' ? null : window.localStorage) {
+  if (!storage) return false
+  try {
+    storage.setItem(PHOTON_CAD_PANE_LAYOUT_STORAGE_KEY, JSON.stringify({ version: 1, ...layout }))
+    return true
+  } catch {
+    return false
+  }
+}
 
 export type PhotonCadReleaseOutput = 'cad-package' | 'bom-export' | 'commercial-document'
 type PhotonCadCommercialAction = 'export-pdf' | 'print'
@@ -274,16 +449,395 @@ function isVector(value: PhotonCadInputValue | undefined): value is PhotonCadVec
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
-function initialInputs(capability: PhotonCadCapability | null) {
+export function photonCadInitialCapabilityInputs(capability: PhotonCadCapability | null) {
   if (!capability) return {}
   return Object.fromEntries(capability.parameters.map((parameter) => [parameter.id, parameter.defaultValue ?? null]))
 }
 
-function hasRequiredValue(parameter: PhotonCadParameterDefinition, value: PhotonCadInputValue | undefined) {
-  if (!parameter.required) return true
-  if (value === null || value === undefined || value === '') return false
-  if (Array.isArray(value)) return value.length > 0
-  return true
+export function photonCadCapabilityAuthorizationFingerprint(catalogRevision: string, capability: PhotonCadCapability) {
+  return JSON.stringify({
+    contractVersion: PHOTON_CAD_CONTRACT_VERSION,
+    catalogRevision,
+    capability: {
+      id: capability.id,
+      backend: capability.backend,
+      category: capability.category,
+      title: capability.title,
+      description: capability.description,
+      operation: capability.operation,
+      previewSupported: capability.previewSupported,
+      experimental: capability.experimental,
+      source: capability.source,
+      parameters: capability.parameters.map((parameter) => ({
+        id: parameter.id,
+        label: parameter.label,
+        description: parameter.description,
+        kind: parameter.kind,
+        required: parameter.required,
+        unit: parameter.unit ?? null,
+        minimum: parameter.minimum ?? null,
+        maximum: parameter.maximum ?? null,
+        step: parameter.step ?? null,
+        defaultValue: parameter.defaultValue ?? null,
+        choices: parameter.choices ?? [],
+      })),
+    },
+  })
+}
+
+function validCapabilityInput(
+  parameter: PhotonCadParameterDefinition,
+  value: PhotonCadInputValue,
+  project: PhotonCadProjectSnapshot,
+) {
+  if (value === null) return !parameter.required
+  if (parameter.kind === 'number' || parameter.kind === 'integer') {
+    return typeof value === 'number'
+      && Number.isFinite(value)
+      && Math.abs(value) <= PHOTON_CAD_LIMITS.absoluteMagnitude
+      && (parameter.kind !== 'integer' || Number.isSafeInteger(value))
+      && (parameter.minimum === undefined || value >= parameter.minimum)
+      && (parameter.maximum === undefined || value <= parameter.maximum)
+  }
+  if (parameter.kind === 'boolean') return typeof value === 'boolean'
+  if (parameter.kind === 'text') return typeof value === 'string' && isPhotonCadSafeText(value, PHOTON_CAD_LIMITS.text, parameter.required)
+  if (parameter.kind === 'choice') {
+    return typeof value === 'string' && Boolean(parameter.choices?.some((choice) => choice.value === value))
+  }
+  if (parameter.kind === 'vector3') {
+    return isVector(value)
+      && Object.keys(value).sort().join(',') === 'x,y,z'
+      && [value.x, value.y, value.z].every((item) => Number.isFinite(item) && Math.abs(item) <= PHOTON_CAD_LIMITS.absoluteMagnitude)
+  }
+  const entityIds = new Set(project.entities.map((entity) => entity.id))
+  if (parameter.kind === 'entity') return typeof value === 'string' && isPhotonCadIdentifier(value) && entityIds.has(value)
+  if (parameter.kind === 'entity-list') {
+    return Array.isArray(value)
+      && value.length <= 1_000
+      && new Set(value).size === value.length
+      && value.every((item) => isPhotonCadIdentifier(item) && entityIds.has(item))
+  }
+  return false
+}
+
+export function photonCadCapabilityInputsMatch(
+  capability: PhotonCadCapability,
+  inputs: Record<string, PhotonCadInputValue>,
+  project: PhotonCadProjectSnapshot,
+) {
+  const expected = capability.parameters.map((parameter) => parameter.id).sort()
+  const supplied = Object.keys(inputs).sort()
+  return expected.length === supplied.length
+    && expected.every((id, index) => id === supplied[index])
+    && capability.parameters.every((parameter) => validCapabilityInput(parameter, inputs[parameter.id], project))
+}
+
+function photonCadAssemblyPlaceSchemaMatches(capability: PhotonCadCapability) {
+  const parameters = new Map(capability.parameters.map((parameter) => [parameter.id, parameter]))
+  const source = parameters.get('sourceEntityId')
+  const parent = parameters.get('parentOccurrenceId')
+  const translation = parameters.get('translation')
+  const rotation = parameters.get('rotationDegrees')
+  const zeroVector = (value: PhotonCadInputValue | undefined) => isVector(value)
+    && value.x === 0 && value.y === 0 && value.z === 0
+  return capability.parameters.length === 4
+    && source?.kind === 'entity' && source.required && source.unit === undefined && source.defaultValue === null
+    && parent?.kind === 'text' && !parent.required && parent.unit === undefined && parent.defaultValue === null
+    && translation?.kind === 'vector3' && translation.required && translation.unit === 'length'
+    && translation.minimum === -1_000_000 && translation.maximum === 1_000_000 && zeroVector(translation.defaultValue)
+    && rotation?.kind === 'vector3' && rotation.required && rotation.unit === 'angle'
+    && rotation.minimum === -360 && rotation.maximum === 360 && zeroVector(rotation.defaultValue)
+}
+
+function photonCadAssemblyRemoveSchemaMatches(capability: PhotonCadCapability) {
+  return capability.parameters.length === 0
+}
+
+function photonCadAssemblyTransformSchemaMatches(capability: PhotonCadCapability) {
+  const parameters = new Map(capability.parameters.map((parameter) => [parameter.id, parameter]))
+  const translation = parameters.get('translation')
+  const rotation = parameters.get('rotationDegrees')
+  const zeroVector = (value: PhotonCadInputValue | undefined) => isVector(value)
+    && value.x === 0 && value.y === 0 && value.z === 0
+  return capability.parameters.length === 2
+    && translation?.kind === 'vector3' && translation.required && translation.unit === 'length'
+    && translation.minimum === -1_000_000 && translation.maximum === 1_000_000 && zeroVector(translation.defaultValue)
+    && rotation?.kind === 'vector3' && rotation.required && rotation.unit === 'angle'
+    && rotation.minimum === -360 && rotation.maximum === 360 && zeroVector(rotation.defaultValue)
+}
+
+export function photonCadCapabilityRunnable(capability: PhotonCadCapability) {
+  if (capability.experimental || !capability.previewSupported) return false
+  if (capability.id === PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID) {
+    return capability.operation === 'assemble' && photonCadAssemblyPlaceSchemaMatches(capability)
+  }
+  if (capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID) {
+    return capability.operation === 'assemble' && photonCadAssemblyTransformSchemaMatches(capability)
+  }
+  if (capability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID) {
+    return capability.operation === 'assemble' && photonCadAssemblyRemoveSchemaMatches(capability)
+  }
+  return capability.operation === 'create'
+}
+
+function photonCadRemovedOccurrenceIds(
+  occurrences: NonNullable<PhotonCadProjectSnapshot['occurrences']>,
+  targetOccurrenceId: string,
+) {
+  if (!occurrences.some((occurrence) => occurrence.occurrenceId === targetOccurrenceId)) return null
+  const removed = new Set([targetOccurrenceId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const occurrence of occurrences) {
+      if (occurrence.parentOccurrenceId && removed.has(occurrence.parentOccurrenceId) && !removed.has(occurrence.occurrenceId)) {
+        removed.add(occurrence.occurrenceId)
+        changed = true
+      }
+    }
+  }
+  return removed
+}
+
+export function photonCadStepExportEntity(project: PhotonCadProjectSnapshot | null, selectedEntityIds: readonly string[]) {
+  if (!project || selectedEntityIds.length !== 1) return null
+  return project.entities.find((entity) => entity.id === selectedEntityIds[0] && (entity.kind === 'body' || entity.kind === 'part')) ?? null
+}
+
+export function photonCadStepExportResultMatches(request: PhotonCadStepExportRequest, result: PhotonCadStepExportResult) {
+  if (result.requestId !== request.requestId || result.projectId !== request.projectId || result.revision !== request.revision) return false
+  if (result.status !== 'committed') {
+    return result.entityId === undefined && result.contentDigest === undefined && result.byteLength === undefined && result.destinationLabel === undefined
+  }
+  return result.entityId === request.entityId && isPhotonCadDigest(result.contentDigest)
+    && typeof result.byteLength === 'number' && Number.isSafeInteger(result.byteLength)
+    && result.byteLength > 0 && result.byteLength <= PHOTON_CAD_LIMITS.absoluteMagnitude
+    && isPhotonCadSafeText(result.destinationLabel, 256, true) && !/[\\/:]/u.test(result.destinationLabel)
+    && result.destinationLabel !== '.' && result.destinationLabel !== '..'
+}
+
+export function photonCadAuthorizePersistedScratchRequest(
+  runtime: PhotonCadRuntimeDescription,
+  project: PhotonCadProjectSnapshot,
+  request: PhotonCadOperationRequest,
+) {
+  const catalog = runtime.status === 'available' && runtime.catalog ? normalizePhotonCadCatalog(runtime.catalog) : null
+  const capability = catalog?.capabilities.find((candidate) => candidate.id === request.capabilityId)
+  if (!catalog || !capability
+    || !photonCadCapabilityRunnable(capability)
+    || project.mode !== 'canonical' || project.units !== 'millimeter' || project.dirty
+    || request.contractVersion !== PHOTON_CAD_CONTRACT_VERSION || request.mode !== 'scratch'
+    || request.sessionId !== project.sessionId || request.projectId !== project.projectId || request.baseRevision !== project.revision
+    || !photonCadCapabilityInputsMatch(capability, request.inputs, project)) return null
+  if (capability.id === PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID) {
+    const sourceEntityId = request.inputs.sourceEntityId
+    const parentOccurrenceId = request.inputs.parentOccurrenceId
+    const occurrences = project.occurrences ?? []
+    const source = typeof sourceEntityId === 'string'
+      ? project.entities.find((entity) => entity.id === sourceEntityId && entity.kind !== 'occurrence')
+      : undefined
+    const defaultParent = typeof sourceEntityId === 'string' ? `${sourceEntityId}.occ` : ''
+    if (!source
+      || !occurrences.some((occurrence) => occurrence.sourceEntityId === source.id)
+      || parentOccurrenceId !== null && (typeof parentOccurrenceId !== 'string'
+        || !occurrences.some((occurrence) => occurrence.occurrenceId === parentOccurrenceId))
+      || parentOccurrenceId === null && !occurrences.some((occurrence) => occurrence.occurrenceId === defaultParent)) return null
+    if (request.targetEntityIds.length !== 0) return null
+  } else if (capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID) {
+    const occurrences = project.occurrences ?? []
+    const target = request.targetEntityIds[0]
+    if (request.targetEntityIds.length !== 1
+      || !occurrences.some((occurrence) => occurrence.occurrenceId === target)
+      || !project.entities.some((entity) => entity.id === target && entity.kind === 'occurrence')) return null
+  } else if (capability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID) {
+    const occurrences = project.occurrences ?? []
+    const target = request.targetEntityIds[0]
+    const removed = request.targetEntityIds.length === 1 ? photonCadRemovedOccurrenceIds(occurrences, target) : null
+    if (!removed || removed.size >= occurrences.length
+      || !project.entities.some((entity) => entity.id === target && entity.kind === 'occurrence')) return null
+  } else if (request.targetEntityIds.length !== 0) {
+    return null
+  }
+  return photonCadCapabilityAuthorizationFingerprint(catalog.catalogRevision, capability)
+}
+
+export function photonCadAcceptedPersistedScratchSnapshot(
+  request: PhotonCadOperationRequest,
+  result: PhotonCadOperationResult,
+  authorizationCurrent: boolean,
+): PhotonCadProjectSnapshot | null {
+  const snapshot = result.snapshot
+  if (!authorizationCurrent || request.mode !== 'scratch' || request.targetEntityIds.length !== 0
+    || result.status !== 'accepted' || result.stale || !snapshot
+    || result.requestId !== request.requestId || result.projectId !== request.projectId
+    || result.baseRevision !== request.baseRevision || result.resultingRevision !== request.baseRevision + 2
+    || snapshot.sessionId !== request.sessionId || snapshot.projectId !== request.projectId
+    || snapshot.revision !== result.resultingRevision || snapshot.units !== 'millimeter'
+    || snapshot.mode !== 'canonical' || snapshot.dirty) return null
+  return snapshot
+}
+
+export function photonCadOperationContinuationAuthorizationBinding(
+  capabilityAuthorization: string,
+  project: PhotonCadProjectSnapshot | null,
+  stillAuthorized: boolean,
+) {
+  if (!stillAuthorized || !capabilityAuthorization || !project
+    || project.mode !== 'canonical' || project.units !== 'millimeter' || project.dirty) return ''
+  return `${capabilityAuthorization}\n${project.sessionId}\n${project.projectId}`
+}
+
+export function photonCadAcceptedPersistedScratchCommit(
+  request: PhotonCadOperationRequest,
+  result: PhotonCadOperationResult,
+  authorizationCurrent: boolean,
+) {
+  const snapshot = photonCadAcceptedPersistedScratchSnapshot(request, result, authorizationCurrent)
+  const preview = result.preview
+  if (!snapshot || !preview
+    || !isPhotonCadIdentifier(preview.previewId)
+    || preview.projectId !== request.projectId
+    || preview.revision !== result.resultingRevision
+    || preview.units !== 'millimeter'
+    || !isPhotonCadDigest(preview.contentDigest)
+    || !Number.isSafeInteger(preview.entityCount) || preview.entityCount < 1) return null
+  return { snapshot, preview }
+}
+
+function sameOccurrence(
+  left: NonNullable<PhotonCadProjectSnapshot['occurrences']>[number],
+  right: NonNullable<PhotonCadProjectSnapshot['occurrences']>[number],
+) {
+  return left.occurrenceId === right.occurrenceId
+    && left.parentOccurrenceId === right.parentOccurrenceId
+    && left.partNumber === right.partNumber
+    && left.sourceEntityId === right.sourceEntityId
+    && left.transform.every((value, index) => Math.abs(value - right.transform[index]) <= 1e-9)
+}
+
+export function photonCadAssemblyRigidTransform(translation: PhotonCadVector3, rotationDegrees: PhotonCadVector3) {
+  const x = rotationDegrees.x * Math.PI / 180
+  const y = rotationDegrees.y * Math.PI / 180
+  const z = rotationDegrees.z * Math.PI / 180
+  const sx = Math.sin(x); const cx = Math.cos(x)
+  const sy = Math.sin(y); const cy = Math.cos(y)
+  const sz = Math.sin(z); const cz = Math.cos(z)
+  return [
+    cz * cy, (cz * sy * sx) - (sz * cx), (cz * sy * cx) + (sz * sx), translation.x,
+    sz * cy, (sz * sy * sx) + (cz * cx), (sz * sy * cx) - (cz * sx), translation.y,
+    -sy, cy * sx, cy * cx, translation.z,
+    0, 0, 0, 1,
+  ] as NonNullable<PhotonCadProjectSnapshot['occurrences']>[number]['transform']
+}
+
+export function photonCadAcceptedAssemblySnapshot(
+  request: PhotonCadOperationRequest,
+  result: PhotonCadOperationResult,
+  previous: PhotonCadProjectSnapshot,
+  previousPreview?: PhotonCadPreviewReceipt | null,
+) {
+  const snapshot = result.snapshot
+  const preview = result.preview
+  const before = previous.occurrences
+  const after = snapshot?.occurrences
+  const beforeEntities = previous.entities
+  const afterEntities = snapshot?.entities
+  if (request.capabilityId !== PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID
+    && request.capabilityId !== PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+    && request.capabilityId !== PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+    || request.mode !== 'scratch'
+    || result.status !== 'accepted' || result.stale || !snapshot || !preview || !before || !after || !afterEntities
+    || result.requestId !== request.requestId || result.projectId !== request.projectId
+    || result.baseRevision !== request.baseRevision || result.resultingRevision !== request.baseRevision + 2
+    || snapshot.sessionId !== request.sessionId || snapshot.projectId !== request.projectId
+    || snapshot.revision !== result.resultingRevision || snapshot.units !== 'millimeter'
+    || snapshot.mode !== 'canonical' || snapshot.dirty
+    || preview.projectId !== request.projectId || preview.revision !== result.resultingRevision
+    || preview.units !== 'millimeter' || !isPhotonCadIdentifier(preview.previewId) || !isPhotonCadDigest(preview.contentDigest)
+    || preview.entityCount !== after.length
+    || previousPreview && previousPreview.contentDigest.toLowerCase() === preview.contentDigest.toLowerCase()) return null
+  if (request.capabilityId === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID) {
+    if (request.targetEntityIds.length !== 1 || Object.keys(request.inputs).length !== 0) return null
+    const removed = photonCadRemovedOccurrenceIds(before, request.targetEntityIds[0])
+    if (!removed || removed.size >= before.length || after.length !== before.length - removed.size
+      || after.some((occurrence) => removed.has(occurrence.occurrenceId))) return null
+    const expected = before.filter((occurrence) => !removed.has(occurrence.occurrenceId))
+    if (expected.some((occurrence) => {
+      const candidate = after.find((value) => value.occurrenceId === occurrence.occurrenceId)
+      return !candidate || !sameOccurrence(occurrence, candidate)
+    })) return null
+    const canonicalBefore = beforeEntities.filter((entity) => entity.kind !== 'occurrence')
+    const canonicalAfter = afterEntities.filter((entity) => entity.kind !== 'occurrence')
+    if (canonicalAfter.length !== canonicalBefore.length || canonicalBefore.some((entity) => {
+      const candidate = canonicalAfter.find((value) => value.id === entity.id)
+      return !candidate || JSON.stringify(candidate) !== JSON.stringify(entity)
+    })) return null
+    const occurrenceEntities = afterEntities.filter((entity) => entity.kind === 'occurrence')
+    if (occurrenceEntities.length !== after.length
+      || occurrenceEntities.some((entity) => !after.some((occurrence) => occurrence.occurrenceId === entity.id))) return null
+    return snapshot
+  }
+  if (request.capabilityId === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID) {
+    if (request.targetEntityIds.length !== 1 || after.length !== before.length
+      || afterEntities.length !== beforeEntities.length) return null
+    const targetId = request.targetEntityIds[0]
+    const translation = request.inputs.translation
+    const rotationDegrees = request.inputs.rotationDegrees
+    if (Object.keys(request.inputs).length !== 2 || !isVector(translation) || !isVector(rotationDegrees)) return null
+    const expectedTransform = photonCadAssemblyRigidTransform(translation, rotationDegrees)
+    if (before.some((occurrence) => {
+      const candidate = after.find((value) => value.occurrenceId === occurrence.occurrenceId)
+      if (!candidate) return true
+      if (occurrence.occurrenceId !== targetId) return !sameOccurrence(occurrence, candidate)
+      return candidate.parentOccurrenceId !== occurrence.parentOccurrenceId
+        || candidate.partNumber !== occurrence.partNumber
+        || candidate.sourceEntityId !== occurrence.sourceEntityId
+        || candidate.transform.some((value, index) => Math.abs(value - expectedTransform[index]) > 1e-9)
+    })) return null
+    if (beforeEntities.some((entity) => {
+      const candidate = afterEntities.find((value) => value.id === entity.id)
+      return !candidate || JSON.stringify(candidate) !== JSON.stringify(entity)
+    })) return null
+    return snapshot
+  }
+  if (request.targetEntityIds.length !== 0
+    || after.length !== before.length + 1 || afterEntities.length !== beforeEntities.length + 1) return null
+  const prior = new Map(before.map((occurrence) => [occurrence.occurrenceId, occurrence]))
+  if (before.some((occurrence) => {
+    const candidate = after.find((value) => value.occurrenceId === occurrence.occurrenceId)
+    return !candidate || !sameOccurrence(occurrence, candidate)
+  })) return null
+  const added = after.filter((occurrence) => !prior.has(occurrence.occurrenceId))
+  const priorEntities = new Map(beforeEntities.map((entity) => [entity.id, entity]))
+  if (beforeEntities.some((entity) => {
+    const candidate = afterEntities.find((value) => value.id === entity.id)
+    return !candidate || JSON.stringify(candidate) !== JSON.stringify(entity)
+  })) return null
+  const addedEntities = afterEntities.filter((entity) => !priorEntities.has(entity.id))
+  const sourceEntityId = request.inputs.sourceEntityId
+  const parentInput = request.inputs.parentOccurrenceId
+  const translation = request.inputs.translation
+  const rotationDegrees = request.inputs.rotationDegrees
+  if (added.length !== 1 || addedEntities.length !== 1 || typeof sourceEntityId !== 'string'
+    || parentInput !== null && typeof parentInput !== 'string'
+    || !isVector(translation) || !isVector(rotationDegrees)) return null
+  const sourceOccurrence = before.find((occurrence) => occurrence.sourceEntityId === sourceEntityId)
+  const sourceEntity = beforeEntities.find((entity) => entity.id === sourceEntityId && entity.kind !== 'occurrence')
+  const expectedParent = parentInput ?? `${sourceEntityId}.occ`
+  const expectedTransform = photonCadAssemblyRigidTransform(translation, rotationDegrees)
+  return sourceOccurrence && sourceEntity
+    && added[0].sourceEntityId === sourceEntityId
+    && added[0].parentOccurrenceId === expectedParent
+    && added[0].partNumber === sourceOccurrence.partNumber
+    && added[0].transform.every((value, index) => Math.abs(value - expectedTransform[index]) <= 1e-9)
+    && addedEntities[0].id === added[0].occurrenceId
+    && addedEntities[0].parentId === expectedParent
+    && addedEntities[0].kind === 'occurrence'
+    && addedEntities[0].name === added[0].partNumber
+    && addedEntities[0].visible && !addedEntities[0].suppressed
+    && addedEntities[0].sourceCapabilityId === sourceEntity.sourceCapabilityId
+    ? snapshot
+    : null
 }
 
 function issueTone(issue: PhotonCadIssue) {
@@ -315,9 +869,9 @@ function runtimeCopy(
   operationReady: boolean,
   evidenceMode: 'runtime' | 'fixture',
 ) {
-  if (evidenceMode === 'fixture') return 'Demonstration catalog only. No live CAD runtime action is implied.'
+  if (evidenceMode === 'fixture') return 'Fixture catalog only. No live CAD runtime action is implied.'
   if (runtime.status === 'checking') return 'Checking the installed CAD runtime…'
-  if (catalogReady && !operationReady) return 'The verified CAD catalog is available for inspection. Project editing and output actions remain locked.'
+  if (catalogReady && !operationReady) return 'Catalog connected · editing locked. Inspect tools and saved data; project editing and output actions remain locked.'
   if (operationReady) return photonCadReasonText(runtime.reason || 'ready')
   if (runtime.status === 'available') return 'The CAD runtime did not return a usable catalog. Design data was not changed.'
   if (runtime.status === 'error') return 'The CAD runtime check failed. Design data was not changed.'
@@ -342,11 +896,14 @@ export function PhotonCadWorkspace({
   initialStage = 'library',
   initialReleaseOutput = 'cad-package',
   evidenceMode = 'runtime',
+  persistedScratchAuthorized = false,
+  projectContentDigest = '',
   className = '',
 }: PhotonCadWorkspaceProps) {
   const workspaceId = useId()
   const [activeStage, setActiveStage] = useState<PhotonCadWorkspaceStage>(initialStage)
   const [runtimeView, setRuntimeView] = useState<PhotonCadRuntimeDescription>(() => runtime ?? defaultRuntime(controller))
+  const effectiveRuntime = runtime ?? runtimeView
   const [currentProject, setCurrentProject] = useState<PhotonCadProjectSnapshot | null>(project ?? null)
   const [query, setQuery] = useState('')
   const [selectedCapabilityId, setSelectedCapabilityId] = useState('')
@@ -355,10 +912,12 @@ export function PhotonCadWorkspace({
   const [previewReceipt, setPreviewReceipt] = useState<PhotonCadPreviewReceipt | null>(null)
   const [operationIssues, setOperationIssues] = useState<PhotonCadIssue[]>([])
   const [verificationView, setVerificationView] = useState<PhotonCadVerificationResult | null>(verification ?? null)
-  const [enabledChecks, setEnabledChecks] = useState(() => new Set(verificationChecks.map((check) => check.id)))
+  const [enabledChecks, setEnabledChecks] = useState(() => new Set(verificationChecks.filter((check) => check.available).map((check) => check.id)))
   const [selectedFormats, setSelectedFormats] = useState<Set<PhotonCadReleaseFormat>>(() => new Set(['step-ap242']))
   const [releaseReview, setReleaseReview] = useState<PhotonCadReleaseReviewResult | null>(null)
   const [releaseMessage, setReleaseMessage] = useState('')
+  const [stepExportResult, setStepExportResult] = useState<PhotonCadStepExportResult | null>(null)
+  const [stepExportMessage, setStepExportMessage] = useState('')
   const [releaseOutput, setReleaseOutput] = useState<PhotonCadReleaseOutput>(initialReleaseOutput)
   const [bomExportFormat, setBomExportFormat] = useState<PhotonCadBomExportFormat>('xlsx')
   const [bomExportReview, setBomExportReview] = useState<PhotonCadBomExportReviewResult | null>(null)
@@ -370,13 +929,19 @@ export function PhotonCadWorkspace({
   const [viewedPageKeys, setViewedPageKeys] = useState<Set<string>>(() => new Set())
   const [commercialMessage, setCommercialMessage] = useState('')
   const [outputBusy, setOutputBusy] = useState<'bom-review' | 'bom-commit' | 'commercial-review' | 'commercial-approve' | 'commercial-commit' | null>(null)
-  const [busy, setBusy] = useState<'describe' | 'operation' | 'verify' | 'review' | 'commit' | null>(null)
+  const [busy, setBusy] = useState<'describe' | 'operation' | 'verify' | 'review' | 'commit' | 'step-export' | null>(null)
   const [notice, setNotice] = useState<{ kind: 'status' | 'error'; text: string } | null>(null)
+  const [paneLayout, setPaneLayout] = useState(loadPhotonCadPaneLayout)
   const stageRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const requestGeneration = useRef({ operation: 0, verify: 0, release: 0 })
+  const paneResizeRef = useRef<{ pane: 'context' | 'inspector'; pointerId: number; startX: number; startWidth: number; scale: number } | null>(null)
+  const requestGeneration = useRef({ operation: 0, verify: 0, release: 0, stepExport: 0 })
   const ownedReviewHandle = useRef<string | null>(null)
   const ownedBomReviewHandle = useRef<string | null>(null)
   const ownedCommercialHandle = useRef<string | null>(null)
+
+  useEffect(() => {
+    savePhotonCadPaneLayout(paneLayout)
+  }, [paneLayout])
   const outputGeneration = useRef({ bom: 0, commercial: 0 })
   const releaseBinding = useRef('')
   const commercialSourceBinding = useRef('')
@@ -388,12 +953,14 @@ export function PhotonCadWorkspace({
   useEffect(() => { setVerificationView(verification ?? null) }, [verification])
 
   const catalog = useMemo(
-    () => runtimeView.catalog ? normalizePhotonCadCatalog(runtimeView.catalog) : null,
-    [runtimeView.catalog],
+    () => effectiveRuntime.catalog ? normalizePhotonCadCatalog(effectiveRuntime.catalog) : null,
+    [effectiveRuntime.catalog],
   )
   const capabilities = catalog?.capabilities ?? []
   const selectedCapability = capabilities.find((capability) => capability.id === selectedCapabilityId) ?? capabilities[0] ?? null
-
+  const selectedCapabilityAuthorization = selectedCapability && catalog
+    ? photonCadCapabilityAuthorizationFingerprint(catalog.catalogRevision, selectedCapability)
+    : ''
   useEffect(() => {
     if (!selectedCapability) {
       setSelectedCapabilityId('')
@@ -401,8 +968,14 @@ export function PhotonCadWorkspace({
       return
     }
     if (selectedCapability.id !== selectedCapabilityId) setSelectedCapabilityId(selectedCapability.id)
-    setInputs(initialInputs(selectedCapability))
-  }, [selectedCapability?.id])
+    setInputs(photonCadInitialCapabilityInputs(selectedCapability))
+  }, [selectedCapabilityAuthorization])
+
+  useEffect(() => {
+    if (activeStage !== 'design') return
+    const manualCapabilityId = photonCadManualDesignCapabilityId(capabilities, selectedCapabilityId)
+    if (manualCapabilityId && manualCapabilityId !== selectedCapabilityId) setSelectedCapabilityId(manualCapabilityId)
+  }, [activeStage, capabilities, selectedCapabilityId])
 
   useEffect(() => {
     if (runtime || !controller) return
@@ -429,6 +1002,7 @@ export function PhotonCadWorkspace({
       requestGeneration.current.operation += 1
       requestGeneration.current.verify += 1
       requestGeneration.current.release += 1
+      requestGeneration.current.stepExport += 1
       outputGeneration.current.bom += 1
       outputGeneration.current.commercial += 1
       if (ownedReviewHandle.current && controller) void controller.discardRelease(ownedReviewHandle.current)
@@ -493,17 +1067,54 @@ export function PhotonCadWorkspace({
   }, [capabilities, query])
 
   const documentTitle = safeText(currentProject?.title, 180) || 'Untitled CAD workspace'
-  const requiredInputsReady = Boolean(selectedCapability?.parameters.every((parameter) => hasRequiredValue(parameter, inputs[parameter.id])))
-  const catalogReady = runtimeView.status === 'available' && Boolean(catalog)
-  const operationReady = catalogReady && Boolean(controller)
+  const selectedTargetsReady = selectedCapability?.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+    || selectedCapability?.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+    ? selectedEntityIds.length === 1 && Boolean(currentProject?.entities.some((entity) =>
+        entity.id === selectedEntityIds[0] && entity.kind === 'occurrence'))
+    : true
+  const requiredInputsReady = Boolean(selectedCapability && currentProject
+    && photonCadCapabilityInputsMatch(selectedCapability, inputs, currentProject) && selectedTargetsReady)
+  const catalogReady = effectiveRuntime.status === 'available' && Boolean(catalog)
+  const selectedCapabilityRunnable = Boolean(selectedCapability && photonCadCapabilityRunnable(selectedCapability))
+  const operationReady = catalogReady && Boolean(controller) && persistedScratchAuthorized
+    && selectedCapabilityRunnable && currentProject?.mode === 'canonical' && currentProject.units === 'millimeter' && !currentProject.dirty
+  const operationDispatchAuthorizationRef = useRef('')
+  operationDispatchAuthorizationRef.current = operationReady && currentProject && selectedCapabilityAuthorization
+    ? `${selectedCapabilityAuthorization}\n${currentProject.sessionId}\n${currentProject.projectId}\n${currentProject.revision}`
+    : ''
+  const operationContinuationAuthorizationRef = useRef('')
+  operationContinuationAuthorizationRef.current = photonCadOperationContinuationAuthorizationBinding(
+    selectedCapabilityAuthorization,
+    currentProject,
+    operationReady,
+  )
   const browseOnly = evidenceMode === 'runtime' && catalogReady && !operationReady
   const selectedEntitySet = new Set(selectedEntityIds)
+  const stepExportEntity = photonCadStepExportEntity(currentProject, selectedEntityIds)
+  const stepExportAvailable = Boolean(controller?.exportStep && persistedScratchAuthorized && currentProject
+    && currentProject.mode === 'canonical' && currentProject.units === 'millimeter' && !currentProject.dirty
+    && isPhotonCadDigest(projectContentDigest) && stepExportEntity)
+  const stepExportBinding = stepExportAvailable && currentProject && stepExportEntity
+    ? `${currentProject.sessionId}\n${currentProject.projectId}\n${currentProject.revision}\n${projectContentDigest.toLowerCase()}\n${stepExportEntity.id}`
+    : ''
+  const stepExportBindingRef = useRef('')
+  stepExportBindingRef.current = stepExportBinding
+
+  useEffect(() => {
+    requestGeneration.current.stepExport += 1
+    setStepExportResult(null)
+    setStepExportMessage('')
+  }, [stepExportBinding])
   const commercialDraftIssues = useMemo(() => validatePhotonCadCommercialDraft(commercialDraft), [commercialDraft])
 
   function selectStage(stage: PhotonCadWorkspaceStage, focus = false) {
     const index = stages.findIndex((item) => item.id === stage)
     if (index < 0) return
     setActiveStage(stage)
+    if (stage === 'design') {
+      const manualCapabilityId = photonCadManualDesignCapabilityId(capabilities, selectedCapabilityId)
+      if (manualCapabilityId && manualCapabilityId !== selectedCapabilityId) setSelectedCapabilityId(manualCapabilityId)
+    }
     if (focus) queueMicrotask(() => stageRefs.current[index]?.focus())
   }
 
@@ -527,6 +1138,47 @@ export function PhotonCadWorkspace({
     setSelectedEntityIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
   }
 
+  function beginPaneResize(pane: 'context' | 'inspector', event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const scale = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-scale')) || 1
+    paneResizeRef.current = {
+      pane,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: pane === 'context' ? paneLayout.contextWidth : paneLayout.inspectorWidth,
+      scale,
+    }
+  }
+
+  function movePaneResize(event: PointerEvent<HTMLDivElement>) {
+    const active = paneResizeRef.current
+    if (!active || active.pointerId !== event.pointerId) return
+    const direction = active.pane === 'context' ? 1 : -1
+    const next = active.startWidth + ((event.clientX - active.startX) / active.scale) * direction
+    setPaneLayout((current) => active.pane === 'context'
+      ? { ...current, contextWidth: clampPhotonCadPaneWidth('context', next), contextCollapsed: false }
+      : { ...current, inspectorWidth: clampPhotonCadPaneWidth('inspector', next), inspectorCollapsed: false })
+  }
+
+  function endPaneResize(event: PointerEvent<HTMLDivElement>) {
+    const active = paneResizeRef.current
+    if (!active || active.pointerId !== event.pointerId) return
+    paneResizeRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  function resizePaneWithKeyboard(pane: 'context' | 'inspector', event: KeyboardEvent<HTMLDivElement>) {
+    const currentWidth = pane === 'context' ? paneLayout.contextWidth : paneLayout.inspectorWidth
+    const next = photonCadKeyboardPaneWidth(pane, currentWidth, event.key, event.shiftKey)
+    if (next === null) return
+    event.preventDefault()
+    setPaneLayout((current) => pane === 'context'
+      ? { ...current, contextWidth: next, contextCollapsed: false }
+      : { ...current, inspectorWidth: next, inspectorCollapsed: false })
+  }
+
   function toggleViewedPage(page: PhotonCadCommercialPreviewPage) {
     const key = commercialPageKey(page)
     setViewedPageKeys((current) => {
@@ -539,34 +1191,66 @@ export function PhotonCadWorkspace({
 
   async function runOperation() {
     if (!operationReady || !controller || !currentProject || !selectedCapability || !requiredInputsReady || busy) return
+    const request: PhotonCadOperationRequest = {
+      contractVersion: PHOTON_CAD_CONTRACT_VERSION,
+      requestId: requestId('cad-operation'),
+      sessionId: currentProject.sessionId,
+      projectId: currentProject.projectId,
+      baseRevision: currentProject.revision,
+      mode: 'scratch',
+      capabilityId: selectedCapability.id,
+      inputs,
+      targetEntityIds: selectedCapability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+        || selectedCapability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+        ? [...selectedEntityIds]
+        : [],
+    }
+    const authorization = photonCadAuthorizePersistedScratchRequest(effectiveRuntime, currentProject, request)
+    const authorizationBinding = authorization
+      ? `${authorization}\n${request.sessionId}\n${request.projectId}\n${request.baseRevision}`
+      : ''
+    if (!authorization || authorizationBinding !== operationDispatchAuthorizationRef.current) {
+      setNotice({ kind: 'error', text: 'The host-described catalog or parameter schema is no longer authorized. Design data was not changed.' })
+      return
+    }
     const generation = ++requestGeneration.current.operation
+    const continuationAuthorizationBinding = photonCadOperationContinuationAuthorizationBinding(
+      authorization,
+      currentProject,
+      true,
+    )
     setBusy('operation')
     setNotice(null)
     setOperationIssues([])
     try {
-      const result = await controller.execute({
-        contractVersion: PHOTON_CAD_CONTRACT_VERSION,
-        requestId: requestId('cad-operation'),
-        sessionId: currentProject.sessionId,
-        projectId: currentProject.projectId,
-        baseRevision: currentProject.revision,
-        mode: currentProject.mode === 'scratch' ? 'scratch' : 'suggest',
-        capabilityId: selectedCapability.id,
-        inputs,
-        targetEntityIds: selectedEntityIds,
-      })
+      const result = await controller.execute(request)
       if (!mounted.current || generation !== requestGeneration.current.operation) return
+      if (operationContinuationAuthorizationRef.current !== continuationAuthorizationBinding) {
+        setNotice({ kind: 'error', text: 'The host-described catalog changed while the operation was running. Refresh the project before continuing.' })
+        return
+      }
       setOperationIssues(result.issues)
       if (result.stale) {
         setNotice({ kind: 'error', text: photonCadReasonText('stale-result') })
       } else if (result.status === 'accepted') {
-        if (result.snapshot) setCurrentProject(result.snapshot)
-        setPreviewReceipt(result.preview ?? null)
+        const commit = selectedCapability.id === PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID
+          || selectedCapability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+          || selectedCapability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+          ? (() => {
+              const snapshot = photonCadAcceptedAssemblySnapshot(request, result, currentProject, previewReceipt)
+              return snapshot && result.preview ? { snapshot, preview: result.preview } : null
+            })()
+          : photonCadAcceptedPersistedScratchCommit(request, result, true)
+        if (!commit) {
+          setNotice({ kind: 'error', text: 'The CAD operation did not return the exact persisted revision, occurrence, and preview evidence. Design data was not changed.' })
+          return
+        }
+        setCurrentProject(commit.snapshot)
+        setPreviewReceipt(commit.preview)
+        setSelectedEntityIds((current) => current.filter((id) => commit.snapshot.entities.some((entity) => entity.id === id)))
         setNotice({
           kind: 'status',
-          text: currentProject.mode === 'scratch'
-            ? 'The scratch draft completed. It is not a released or verified design.'
-            : 'A design suggestion is ready for review. It was not applied as an autonomous canonical write.',
+          text: 'The host-authorized scratch operation was persisted. Verification and release remain separate human actions.',
         })
       } else {
         setNotice({ kind: 'error', text: photonCadReasonText(result.reason) })
@@ -909,49 +1593,64 @@ export function PhotonCadWorkspace({
     }
   }
 
+  async function exportSelectedStep() {
+    if (!controller?.exportStep || !currentProject || !stepExportEntity || !stepExportAvailable || busy) return
+    const request: PhotonCadStepExportRequest = {
+      contractVersion: PHOTON_CAD_CONTRACT_VERSION,
+      requestId: requestId('cad-step-export'),
+      sessionId: currentProject.sessionId,
+      projectId: currentProject.projectId,
+      revision: currentProject.revision,
+      contentDigest: projectContentDigest,
+      entityId: stepExportEntity.id,
+    }
+    const binding = stepExportBinding
+    const generation = ++requestGeneration.current.stepExport
+    setBusy('step-export')
+    setStepExportResult(null)
+    setStepExportMessage('')
+    try {
+      const result = await controller.exportStep(request)
+      if (!mounted.current || generation !== requestGeneration.current.stepExport || binding !== stepExportBindingRef.current) return
+      if (!photonCadStepExportResultMatches(request, result)) {
+        setStepExportMessage('The native STEP export result did not match the selected entity and project revision. No success was accepted.')
+        return
+      }
+      setStepExportResult(result)
+      setStepExportMessage(result.status === 'committed'
+        ? `STEP export committed as ${result.destinationLabel}.`
+        : result.status === 'cancelled'
+          ? 'STEP export was cancelled. No file success was recorded.'
+          : photonCadReasonText(result.reason))
+    } catch {
+      if (mounted.current && generation === requestGeneration.current.stepExport) {
+        setStepExportMessage('The native STEP export did not return a usable result. No file success was recorded.')
+      }
+    } finally {
+      if (mounted.current && generation === requestGeneration.current.stepExport) setBusy(null)
+    }
+  }
+
   const previewContext: PhotonCadPreviewContext = {
     project: currentProject,
     receipt: previewReceipt,
     selectedEntityIds,
     stage: activeStage,
+    acceptHydratedReceipt: (receipt) => {
+      if (!currentProject || receipt.projectId !== currentProject.projectId || receipt.revision !== currentProject.revision) return false
+      setPreviewReceipt(receipt)
+      return true
+    },
   }
 
   return (
     <main
       className={`photon-cad-workspace ${className}`.trim()}
+      aria-label={`${documentTitle} CAD workspace`}
       data-stage={activeStage}
-      data-runtime={runtimeView.status}
+      data-runtime={effectiveRuntime.status}
       data-operation-access={operationReady ? 'enabled' : 'locked'}
     >
-      <div className="pcad-document-tabs" role="group" aria-label="CAD documents">
-        <div className="pcad-document-tab" aria-current="page">
-          <Box size={13} aria-hidden="true" />
-          <span>{documentTitle}</span>
-          {currentProject?.dirty ? <i aria-label="Unsaved CAD changes">●</i> : null}
-        </div>
-        <span className="pcad-document-spacer" />
-        <span className={`pcad-runtime-chip ${runtimeView.status}`} role="status">
-          {evidenceMode === 'fixture' ? <Gauge size={12} />
-            : runtimeView.status === 'checking' ? <LoaderCircle className="pcad-spin" size={12} />
-            : runtimeView.status === 'available' ? <CheckCircle2 size={12} /> : <CircleAlert size={12} />}
-          {evidenceMode === 'fixture' ? 'Fixture catalog'
-            : browseOnly ? 'Catalog connected · editing locked'
-              : operationReady ? 'Runtime ready'
-                : runtimeView.status === 'checking' ? 'Checking runtime' : 'Runtime unavailable'}
-        </span>
-      </div>
-
-      <header className="pcad-context-bar">
-        <div className="pcad-breadcrumbs" aria-label="CAD document location">
-          <span>Photon CAD</span><ChevronRight size={11} /><strong>{documentTitle}</strong>
-        </div>
-        <div className="pcad-document-meta" aria-label="CAD document status">
-          <span>{currentProject ? `Revision ${currentProject.revision}` : 'No project snapshot'}</span>
-          <span>{currentProject ? unitAbbreviation(currentProject) : 'Units unavailable'}</span>
-          <span className={currentProject?.mode === 'scratch' ? 'scratch' : ''}>{currentProject?.mode === 'scratch' ? 'Scratch workspace' : 'Canonical workspace'}</span>
-        </div>
-      </header>
-
       {evidenceMode === 'fixture' ? (
         <div className="pcad-fixture-banner" role="note">
           <Gauge size={13} /><strong>Demonstration fixture</strong><span>No CAD runtime action, geometry render, verification pass, or release success is implied.</span>
@@ -989,23 +1688,56 @@ export function PhotonCadWorkspace({
         id={`${workspaceId}-pcad-panel-${activeStage}`}
         role="tabpanel"
         aria-labelledby={`${workspaceId}-pcad-tab-${activeStage}`}
-        className="pcad-stage"
+        className={`pcad-stage ${paneLayout.contextCollapsed ? 'context-collapsed' : ''} ${paneLayout.inspectorCollapsed ? 'inspector-collapsed' : ''}`}
+        style={{
+          '--pcad-context-width': paneLayout.contextCollapsed ? '0px' : `${paneLayout.contextWidth}px`,
+          '--pcad-inspector-width': paneLayout.inspectorCollapsed ? '0px' : `${paneLayout.inspectorWidth}px`,
+        } as CSSProperties}
       >
+        <div className="pcad-pane-layout-controls" role="group" aria-label="CAD work area visibility">
+          <button
+            type="button"
+            aria-pressed={!paneLayout.contextCollapsed}
+            title={paneLayout.contextCollapsed ? 'Restore parts and context pane' : 'Collapse parts and context pane'}
+            onClick={() => setPaneLayout((current) => ({ ...current, contextCollapsed: !current.contextCollapsed }))}
+          ><PanelLeftClose size={12} /><span>Parts</span></button>
+          <button
+            type="button"
+            aria-pressed={!paneLayout.inspectorCollapsed}
+            title={paneLayout.inspectorCollapsed ? 'Restore parameter inspector' : 'Collapse parameter inspector'}
+            onClick={() => setPaneLayout((current) => ({ ...current, inspectorCollapsed: !current.inspectorCollapsed }))}
+          ><PanelRightClose size={12} /><span>Inspector</span></button>
+        </div>
         <aside className="pcad-context-pane" aria-label={`${stages.find((item) => item.id === activeStage)?.label} context`}>
           {activeStage === 'library' ? (
             <CatalogPane
               catalog={catalog}
               capabilities={filteredCapabilities}
+              project={currentProject}
               query={query}
               selectedCapabilityId={selectedCapability?.id ?? ''}
               onQueryChange={setQuery}
               onSelectCapability={setSelectedCapabilityId}
             />
-          ) : activeStage === 'design' || activeStage === 'assemble' ? (
+          ) : activeStage === 'design' ? (
+            <>
+              <ManualDesignTools
+                capabilities={capabilities}
+                selectedCapabilityId={selectedCapability?.id ?? ''}
+                onSelectCapability={setSelectedCapabilityId}
+              />
+              <ModelTreePane
+                project={currentProject}
+                selectedEntityIds={selectedEntitySet}
+                assemblyOnly={false}
+                onToggle={toggleEntity}
+              />
+            </>
+          ) : activeStage === 'assemble' ? (
             <ModelTreePane
               project={currentProject}
               selectedEntityIds={selectedEntitySet}
-              assemblyOnly={activeStage === 'assemble'}
+              assemblyOnly
               onToggle={toggleEntity}
             />
           ) : activeStage === 'verify' ? (
@@ -1019,11 +1751,9 @@ export function PhotonCadWorkspace({
               />
               {releaseOutput === 'cad-package' ? (
                 <ReleasePlan
-                  selectedFormats={selectedFormats}
-                  destination={destination}
-                  disabled={!operationReady || busy === 'review' || busy === 'commit'}
-                  onToggleFormat={toggleFormat}
-                  onChooseDestination={onChooseDestination}
+                  project={currentProject}
+                  selectedEntityIds={selectedEntitySet}
+                  onToggleEntity={toggleEntity}
                 />
               ) : releaseOutput === 'bom-export' ? (
                 <BomExportPlan
@@ -1051,6 +1781,24 @@ export function PhotonCadWorkspace({
           )}
         </aside>
 
+        {!paneLayout.contextCollapsed ? (
+          <div
+            className="pcad-pane-resizer pcad-pane-resizer--context"
+            role="separator"
+            aria-label="Resize parts and context pane"
+            aria-orientation="vertical"
+            aria-valuemin={PHOTON_CAD_PANE_BOUNDS.context.minimum}
+            aria-valuemax={PHOTON_CAD_PANE_BOUNDS.context.maximum}
+            aria-valuenow={paneLayout.contextWidth}
+            tabIndex={0}
+            onPointerDown={(event) => beginPaneResize('context', event)}
+            onPointerMove={movePaneResize}
+            onPointerUp={endPaneResize}
+            onPointerCancel={endPaneResize}
+            onKeyDown={(event) => resizePaneWithKeyboard('context', event)}
+          />
+        ) : null}
+
         {activeStage === 'release' && releaseOutput === 'commercial-document' ? (
           <CommercialPreviewPane
             review={commercialReview}
@@ -1061,6 +1809,24 @@ export function PhotonCadWorkspace({
             onToggleViewed={toggleViewedPage}
           />
         ) : <PreviewPane context={previewContext} previewSurface={previewSurface} />}
+
+        {!paneLayout.inspectorCollapsed ? (
+          <div
+            className="pcad-pane-resizer pcad-pane-resizer--inspector"
+            role="separator"
+            aria-label="Resize parameter inspector"
+            aria-orientation="vertical"
+            aria-valuemin={PHOTON_CAD_PANE_BOUNDS.inspector.minimum}
+            aria-valuemax={PHOTON_CAD_PANE_BOUNDS.inspector.maximum}
+            aria-valuenow={paneLayout.inspectorWidth}
+            tabIndex={0}
+            onPointerDown={(event) => beginPaneResize('inspector', event)}
+            onPointerMove={movePaneResize}
+            onPointerUp={endPaneResize}
+            onPointerCancel={endPaneResize}
+            onKeyDown={(event) => resizePaneWithKeyboard('inspector', event)}
+          />
+        ) : null}
 
         <aside className="pcad-inspector-pane" aria-label={`${stages.find((item) => item.id === activeStage)?.label} details`}>
           {activeStage === 'library' || activeStage === 'design' ? (
@@ -1073,6 +1839,10 @@ export function PhotonCadWorkspace({
               operationReady={operationReady}
               busy={busy === 'operation'}
               requiredInputsReady={requiredInputsReady}
+              manualDesign={activeStage === 'design'
+                && selectedCapability !== null
+                && selectedCapability.operation === 'create'
+                && catalogSectionId(selectedCapability) === 'build123d-design'}
               onInput={updateInput}
               onRun={() => void runOperation()}
             />
@@ -1090,14 +1860,12 @@ export function PhotonCadWorkspace({
             />
           ) : releaseOutput === 'cad-package' ? (
             <ReleasePane
-              review={releaseReview}
-              message={releaseMessage}
-              selectedFormatCount={selectedFormats.size}
-              destinationReady={Boolean(destination)}
-              available={Boolean(operationReady && currentProject)}
-              busy={busy === 'review' || busy === 'commit'}
-              onPrepare={() => void prepareRelease()}
-              onCommit={() => void commitRelease()}
+              stepExportEntity={stepExportEntity}
+              stepExportResult={stepExportResult}
+              stepExportMessage={stepExportMessage}
+              stepExportAvailable={stepExportAvailable}
+              stepExportBusy={busy === 'step-export'}
+              onExportStep={() => void exportSelectedStep()}
             />
           ) : releaseOutput === 'bom-export' ? (
             <BomExportPane
@@ -1131,10 +1899,14 @@ export function PhotonCadWorkspace({
       </section>
 
       <footer className="pcad-statusbar">
-        <span className={`pcad-status-dot ${runtimeView.status}`} aria-hidden="true" />
-        <span>{runtimeCopy(runtimeView, catalogReady, operationReady, evidenceMode)}</span>
+        <span className={`pcad-status-dot ${effectiveRuntime.status}`} aria-hidden="true" />
+        <span>{runtimeCopy(effectiveRuntime, catalogReady, operationReady, evidenceMode)}</span>
         {notice ? <strong className={notice.kind} role={notice.kind === 'error' ? 'alert' : 'status'} aria-live="polite">{notice.text}</strong> : null}
         <span className="pcad-status-spacer" />
+        {currentProject?.dirty ? <span className="pcad-unsaved-status">Unsaved changes</span> : null}
+        <span>{currentProject ? `Revision ${currentProject.revision}` : 'No project snapshot'}</span>
+        <span>{currentProject ? unitAbbreviation(currentProject) : 'Units unavailable'}</span>
+        <span>{currentProject?.mode === 'scratch' ? 'Scratch workspace' : 'Canonical workspace'}</span>
         <span>{catalog ? `${catalog.capabilities.length} catalog operations` : 'No catalog evidence'}</span>
         <span>{currentProject ? `${currentProject.entities.length} entities` : 'No geometry snapshot'}</span>
       </footer>
@@ -1145,6 +1917,7 @@ export function PhotonCadWorkspace({
 function CatalogPane({
   catalog,
   capabilities,
+  project,
   query,
   selectedCapabilityId,
   onQueryChange,
@@ -1152,51 +1925,158 @@ function CatalogPane({
 }: {
   catalog: ReturnType<typeof normalizePhotonCadCatalog>
   capabilities: PhotonCadCapability[]
+  project: PhotonCadProjectSnapshot | null
   query: string
   selectedCapabilityId: string
   onQueryChange: (value: string) => void
   onSelectCapability: (id: string) => void
 }) {
+  const [visibleLimit, setVisibleLimit] = useState(PHOTON_CAD_CATALOG_PAGE_SIZE)
+  const sections = photonCadCatalogSections(capabilities)
+  const projectParts = photonCadProjectParts(project, query)
+  const selectedSectionId = sections.find((section) => section.capabilities.some((capability) => capability.id === selectedCapabilityId))?.id
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(() => new Set([
+    ...(projectParts.length ? ['project-parts'] : []),
+    ...(selectedSectionId ? [selectedSectionId] : []),
+  ]))
+  const shownCapabilities = capabilities.slice(0, visibleLimit)
+  const hiddenCapabilityCount = Math.max(0, capabilities.length - shownCapabilities.length)
+  const shownCapabilityIds = new Set(shownCapabilities.map((capability) => capability.id))
+  const shownSections = sections
+    .map((section) => ({ ...section, capabilities: section.capabilities.filter((capability) => shownCapabilityIds.has(capability.id)) }))
+    .filter((section) => section.capabilities.length > 0)
+  const queryActive = Boolean(query.trim())
+
+  useEffect(() => {
+    setVisibleLimit(PHOTON_CAD_CATALOG_PAGE_SIZE)
+  }, [query, capabilities.length])
+
+  useEffect(() => {
+    if (!selectedSectionId) return
+    setExpandedSections((current) => current.has(selectedSectionId) ? current : new Set([...current, selectedSectionId]))
+  }, [selectedSectionId])
+
+  const setSectionExpanded = (sectionId: string, expanded: boolean) => {
+    if (queryActive) return
+    setExpandedSections((current) => {
+      const next = new Set(current)
+      if (expanded) next.add(sectionId)
+      else next.delete(sectionId)
+      return next
+    })
+  }
+
+  const libraryLabel = (library: PhotonCadCatalogSection['library']) => {
+    if (library === 'build123d') return 'Build123d generator'
+    if (library === 'bd-warehouse') return 'BD Warehouse'
+    if (library === 'assembly') return 'Assembly tools'
+    return 'Verified catalog'
+  }
   return (
     <>
       <header className="pcad-pane-header">
-        <span><BookOpen size={14} /><strong>Operation library</strong></span>
-        <small>{catalog ? `${catalog.coverage.available} available` : 'Unavailable'}</small>
+        <span><BookOpen size={14} /><strong>Parts library</strong></span>
+        <small>{catalog ? `${catalog.coverage.available} available${catalog.coverage.unavailable ? ` · ${catalog.coverage.unavailable} unavailable` : ''}` : 'Unavailable'}</small>
       </header>
       <label className="pcad-search">
         <Search size={13} aria-hidden="true" />
-        <span className="pcad-visually-hidden">Search CAD operations</span>
+        <span className="pcad-visually-hidden">Search CAD parts and tools</span>
         <input value={query} placeholder="Search parts, tools, operations…" onChange={(event) => onQueryChange(event.target.value)} />
       </label>
-      {catalog ? (
-        <div className="pcad-coverage" role="note">
-          <strong>Catalog coverage</strong>
-          <span>{catalog.coverage.discovered} discovered · {catalog.coverage.available} available · {catalog.coverage.unavailable} unavailable</span>
-          <small>Showing {capabilities.length} matching operation{capabilities.length === 1 ? '' : 's'}. Coverage is declared by the supplied catalog.</small>
-          {catalog.coverage.unavailableReasons.map((reason) => <small key={reason}>{safeText(reason)}</small>)}
-        </div>
-      ) : null}
-      <div className="pcad-catalog-list" aria-label="Available CAD operations">
-        {capabilities.length ? capabilities.map((capability) => (
-          <button
-            type="button"
-            className={selectedCapabilityId === capability.id ? 'selected' : ''}
-            aria-pressed={selectedCapabilityId === capability.id}
-            key={capability.id}
-            onClick={() => onSelectCapability(capability.id)}
+      <div className="pcad-catalog-tree" aria-label="Part library categories">
+        {projectParts.length ? (
+          <details
+            className="pcad-catalog-group project"
+            open={queryActive || expandedSections.has('project-parts')}
+            onToggle={(event) => setSectionExpanded('project-parts', event.currentTarget.open)}
           >
-            <span className="pcad-capability-icon">{capability.backend === 'assembly' ? <Layers3 size={14} /> : <Box size={14} />}</span>
-            <span>
-              <strong>{safeText(capability.title, 180)}</strong>
-              <small>{safeText(capability.category, 90)} · {safeText(capability.operation, 40)}</small>
-            </span>
-            {capability.experimental ? <i>Experimental</i> : null}
+            <summary><span><PackageCheck size={13} /><strong>Project parts</strong><small>Current project</small></span><b>{projectParts.length}</b></summary>
+            <div className="pcad-catalog-group-body pcad-project-parts">
+              <p>Reusable definitions already sealed in this project. Place another occurrence from Assemble.</p>
+              {projectParts.map((part) => (
+                <article className="pcad-project-part" key={part.id}>
+                  <span className="pcad-capability-icon"><PackageCheck size={14} /></span>
+                  <span><strong>{safeText(part.name, 180)}</strong><small>{part.kind} · reusable source</small></span>
+                  <i>{part.occurrenceCount} placed</i>
+                </article>
+              ))}
+            </div>
+          </details>
+        ) : null}
+        {shownCapabilities.length ? shownSections.map((section) => (
+          <details
+            className="pcad-catalog-group"
+            data-library={section.library}
+            key={section.id}
+            open={queryActive || expandedSections.has(section.id)}
+            onToggle={(event) => setSectionExpanded(section.id, event.currentTarget.open)}
+          >
+            <summary>
+              <span>{section.library === 'assembly' ? <Layers3 size={13} /> : <Box size={13} />}<strong>{section.label}</strong><small>{libraryLabel(section.library)}</small></span>
+              <b>{section.capabilities.length}</b>
+            </summary>
+            <div className="pcad-catalog-group-body">
+              {section.capabilities.map((capability) => (
+              <button
+                type="button"
+                className={selectedCapabilityId === capability.id ? 'selected' : ''}
+                aria-pressed={selectedCapabilityId === capability.id}
+                key={capability.id}
+                onClick={() => onSelectCapability(capability.id)}
+              >
+                <span className="pcad-capability-icon">{capability.backend === 'assembly' ? <Layers3 size={14} /> : <Box size={14} />}</span>
+                <span>
+                  <strong>{safeText(capability.title, 180)}</strong>
+                  <small>{safeText(capability.category, 90)} · {safeText(capability.operation, 40)}</small>
+                </span>
+                {capability.experimental ? <i>Experimental</i> : null}
+              </button>
+              ))}
+            </div>
+          </details>
+        )) : !projectParts.length ? (
+          <div className="pcad-empty compact"><Search size={20} /><strong>No matching part or tool</strong><p>Change the search or choose another library category.</p></div>
+        ) : null}
+        {hiddenCapabilityCount ? (
+          <button className="pcad-catalog-more" type="button" onClick={() => setVisibleLimit((current) => current + PHOTON_CAD_CATALOG_PAGE_SIZE)}>
+            Show {Math.min(PHOTON_CAD_CATALOG_PAGE_SIZE, hiddenCapabilityCount)} more <span>{hiddenCapabilityCount} remaining</span>
           </button>
-        )) : (
-          <div className="pcad-empty compact"><Search size={20} /><strong>No matching operation</strong><p>Change the search or inspect unavailable catalog coverage.</p></div>
-        )}
+        ) : null}
       </div>
     </>
+  )
+}
+
+function ManualDesignTools({
+  capabilities,
+  selectedCapabilityId,
+  onSelectCapability,
+}: {
+  capabilities: readonly PhotonCadCapability[]
+  selectedCapabilityId: string
+  onSelectCapability: (id: string) => void
+}) {
+  const tools = capabilities.filter((capability) => catalogSectionId(capability) === 'build123d-design' && capability.operation === 'create')
+  return (
+    <section className="pcad-manual-design" aria-label="Manual solid tools">
+      <header className="pcad-pane-header">
+        <span><Wrench size={14} /><strong>Manual solid tools</strong></span>
+        <small>{tools.length} available</small>
+      </header>
+      <p>Create an exact parametric B-rep solid, then inspect the persisted body in the model tree.</p>
+      <div role="group" aria-label="Build123d solid constructors">
+        {tools.map((capability) => (
+          <button
+            type="button"
+            aria-pressed={selectedCapabilityId === capability.id}
+            className={selectedCapabilityId === capability.id ? 'selected' : ''}
+            key={capability.id}
+            onClick={() => onSelectCapability(capability.id)}
+          ><Plus size={12} /><span><strong>{safeText(capability.title, 80)}</strong><small>{capability.parameters.length} dimensions</small></span></button>
+        ))}
+      </div>
+      {!tools.length ? <small>No verified manual solid constructor is mounted.</small> : null}
+    </section>
   )
 }
 
@@ -1313,6 +2193,7 @@ function CapabilityInspector({
   operationReady,
   busy,
   requiredInputsReady,
+  manualDesign = false,
   onInput,
   onRun,
 }: {
@@ -1324,6 +2205,7 @@ function CapabilityInspector({
   operationReady: boolean
   busy: boolean
   requiredInputsReady: boolean
+  manualDesign?: boolean
   onInput: (id: string, value: PhotonCadInputValue) => void
   onRun: () => void
 }) {
@@ -1342,7 +2224,12 @@ function CapabilityInspector({
           <dl>
             <div><dt>Backend</dt><dd>{safeText(capability.backend, 40)}</dd></div>
             <div><dt>Operation</dt><dd>{safeText(capability.operation, 40)}</dd></div>
-            <div><dt>Targets</dt><dd>{selectedEntityIds.length || 'None selected'}</dd></div>
+            <div><dt>Targets</dt><dd>{capability.operation === 'create'
+              ? 'New part'
+              : capability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+                || capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+                ? selectedEntityIds.length === 1 ? '1 occurrence selected' : 'Select one occurrence'
+                : selectedEntityIds.length || 'None selected'}</dd></div>
           </dl>
         </section>
         <div className="pcad-parameter-list">
@@ -1370,16 +2257,26 @@ function CapabilityInspector({
         {issues.length ? <IssueList issues={issues} label="Operation issues" /> : null}
       </div>
       <footer className="pcad-pane-actions">
-        <p>{!operationReady
-          ? mode === 'scratch'
-            ? 'Catalog parameters are read-only until model operations can be committed to the authoritative project file. Autonomy stays inside scratch drafting.'
-            : 'Catalog parameters are read-only until model operations can be committed to the authoritative project file. Canonical designs accept suggestions only; no write is available.'
+        <p>{operationReady
+          ? capability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+            ? 'Select one occurrence in Assemble. Its descendants leave the scene and BOM; the reusable source part and STEP remain in the project.'
+            : capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+              ? 'Select one occurrence in Assemble. Translation and rotation replace only that occurrence transform and reseal the complete preview.'
+            : manualDesign
+              ? 'Add one exact parametric solid to this project. Its canonical STEP and preview are persisted before the operation is accepted.'
+            : 'This exact host-described scratch operation will be persisted to the attached project. Verification and release remain separate human actions.'
           : mode === 'scratch'
-            ? 'Autonomy stays inside scratch drafting. Verification and release remain separate human actions.'
-            : 'Canonical designs accept suggestions only. This action never performs an autonomous canonical write.'}</p>
+            ? 'Catalog parameters are read-only until model operations can be committed to the authoritative project file. Autonomy stays inside scratch drafting.'
+            : 'Catalog parameters are read-only until model operations can be committed to the authoritative project file. Canonical designs accept suggestions only; no write is available.'}</p>
         <button type="button" disabled={!operationReady || !project || !requiredInputsReady || busy} onClick={onRun}>
           {busy ? <LoaderCircle className="pcad-spin" size={13} /> : <Play size={13} />}
-          {mode === 'scratch' ? 'Run scratch draft' : 'Prepare suggestion'}
+          {operationReady
+            ? capability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+              ? 'Remove selected occurrence'
+              : capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+                ? 'Move selected occurrence'
+              : manualDesign ? 'Add solid to project' : 'Run persisted scratch operation'
+            : mode === 'scratch' ? 'Run scratch draft' : 'Prepare suggestion'}
         </button>
       </footer>
     </>
@@ -1413,10 +2310,11 @@ function ParameterField({
       </select>
     )
   } else if (parameter.kind === 'entity') {
+    const entities = (project?.entities ?? []).filter((entity) => parameter.id !== 'sourceEntityId' || entity.kind !== 'occurrence')
     control = (
       <select {...common} value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value || null)}>
         <option value="">Select an entity…</option>
-        {(project?.entities ?? []).map((entity) => <option key={entity.id} value={entity.id}>{safeText(entity.name, 180)}</option>)}
+        {entities.map((entity) => <option key={entity.id} value={entity.id}>{safeText(entity.name, 180)}</option>)}
       </select>
     )
   } else if (parameter.kind === 'entity-list') {
@@ -1436,7 +2334,7 @@ function ParameterField({
     control = (
       <div className="pcad-vector-input">
         {(['x', 'y', 'z'] as const).map((axis) => (
-          <label key={axis}><span>{axis.toUpperCase()}</span><input {...common} aria-label={`${parameter.label} ${axis.toUpperCase()}`} type="number" value={vector[axis]} onChange={(event) => onChange({ ...vector, [axis]: Number(event.target.value) })} /></label>
+          <label key={axis}><span>{axis.toUpperCase()}</span><input {...common} aria-label={`${parameter.label} ${axis.toUpperCase()}`} type="number" min={parameter.minimum} max={parameter.maximum} step={parameter.step ?? 'any'} value={vector[axis]} onChange={(event) => onChange({ ...vector, [axis]: Number(event.target.value) })} /></label>
         ))}
       </div>
     )
@@ -1457,7 +2355,7 @@ function ParameterField({
       </div>
     )
   } else {
-    control = <input {...common} type="text" maxLength={4_096} value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value)} />
+    control = <input {...common} type="text" maxLength={4_096} value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value || (parameter.required ? '' : null))} />
   }
   return (
     <label className={`pcad-parameter ${parameter.kind === 'boolean' ? 'boolean' : ''}`}>
@@ -1515,14 +2413,15 @@ function VerificationChecklist({
       <header className="pcad-pane-header"><span><ShieldCheck size={14} /><strong>Verification plan</strong></span><small>{checks.size} selected</small></header>
       <div className="pcad-check-list">
         {verificationChecks.map((check) => (
-          <label key={check.id}>
-            <input type="checkbox" checked={checks.has(check.id)} disabled={disabled} onChange={() => {
+          <label key={check.id} data-available={check.available || undefined}>
+            <input type="checkbox" checked={checks.has(check.id)} disabled={disabled || !check.available} onChange={() => {
+              if (!check.available) return
               const next = new Set(checks)
               if (next.has(check.id)) next.delete(check.id)
               else next.add(check.id)
               onChange(next)
             }} />
-            <span><strong>{check.label}</strong><small>{check.detail}</small></span>
+            <span><strong>{check.label}{check.available ? '' : ' — unavailable'}</strong><small>{check.detail}</small></span>
           </label>
         ))}
       </div>
@@ -1566,7 +2465,7 @@ function VerificationPane({
         )}
         {result?.issues.length ? <IssueList issues={result.issues} label="Verification issues" /> : null}
         {!result && projectIssues.length ? <IssueList issues={[...projectIssues]} label="Project issues before verification" /> : null}
-        <section className="pcad-trust-note"><ShieldCheck size={14} /><p><strong>Evidence boundary</strong> Preview answers “can it be shown?” Verification answers “did these checks pass for this revision?” Release review is a third, separate decision.</p></section>
+        <section className="pcad-trust-note"><ShieldCheck size={14} /><p><strong>Evidence boundary</strong> Preview answers “can it be shown?” Verification answers “did these checks pass for this revision?” STEP export is a third, separate action.</p></section>
       </div>
       <footer className="pcad-pane-actions">
         <p>{enabledCheckCount ? `${enabledCheckCount} checks will run against ${project ? `revision ${project.revision}` : 'no loaded revision'}.` : 'Select at least one explicit check.'}</p>
@@ -1587,20 +2486,21 @@ function ReleaseOutputPicker({
 }) {
   const groupName = useId()
   const options: Array<{ id: PhotonCadReleaseOutput; label: string; icon: typeof PackageCheck }> = [
-    { id: 'cad-package', label: 'CAD', icon: PackageCheck },
-    { id: 'bom-export', label: 'BOM', icon: Table2 },
-    { id: 'commercial-document', label: 'Quote / invoice', icon: ReceiptText },
+    { id: 'cad-package', label: 'STEP', icon: PackageCheck },
   ]
   return (
-    <fieldset className="pcad-release-output" disabled={disabled}>
-      <legend className="pcad-visually-hidden">Release output type</legend>
-      {options.map(({ id, label, icon: Icon }) => (
-        <label className={value === id ? 'selected' : ''} key={id}>
-          <input type="radio" name={groupName} checked={value === id} onChange={() => onChange(id)} />
-          <Icon size={12} aria-hidden="true" /><span>{label}</span>
-        </label>
-      ))}
-    </fieldset>
+    <>
+      <fieldset className="pcad-release-output" disabled={disabled}>
+        <legend className="pcad-visually-hidden">Release output type</legend>
+        {options.map(({ id, label, icon: Icon }) => (
+          <label className={value === id ? 'selected' : ''} key={id}>
+            <input type="radio" name={groupName} checked={value === id} onChange={() => onChange(id)} />
+            <Icon size={12} aria-hidden="true" /><span>{label}</span>
+          </label>
+        ))}
+      </fieldset>
+      <p className="pcad-pane-note">BOM files and quote/invoice output are not mounted yet, so no inactive controls are shown.</p>
+    </>
   )
 }
 
@@ -1896,88 +2796,95 @@ function CommercialReviewPane({
 }
 
 function ReleasePlan({
-  selectedFormats,
-  destination,
-  disabled,
-  onToggleFormat,
-  onChooseDestination,
+  project,
+  selectedEntityIds,
+  onToggleEntity,
 }: {
-  selectedFormats: Set<PhotonCadReleaseFormat>
-  destination: PhotonCadWorkspaceProps['destination']
-  disabled: boolean
-  onToggleFormat: (format: PhotonCadReleaseFormat) => void
-  onChooseDestination?: () => void
+  project: PhotonCadProjectSnapshot | null
+  selectedEntityIds: Set<string>
+  onToggleEntity: (id: string) => void
 }) {
   return (
     <>
-      <header className="pcad-pane-header"><span><PackageCheck size={14} /><strong>Package plan</strong></span><small>{selectedFormats.size} formats</small></header>
-      <div className="pcad-format-list">
-        {releaseFormats.map((format) => (
-          <label key={format.id}>
-            <input type="checkbox" checked={selectedFormats.has(format.id)} disabled={disabled} onChange={() => onToggleFormat(format.id)} />
-            <span><strong>{format.label}</strong><small>{format.detail}</small></span>
-          </label>
-        ))}
-      </div>
-      <section className="pcad-destination">
-        <span><strong>Destination</strong><small>{destination ? safeText(destination.label, 256) : 'No destination selected'}</small></span>
-        {onChooseDestination ? <button type="button" disabled={disabled} onClick={onChooseDestination}>Choose…</button> : <span className="pcad-unavailable-action">Desktop picker unavailable</span>}
-      </section>
-      <p className="pcad-pane-note">Only an opaque destination handle reaches the renderer contract. Existing files are never selected for overwrite here.</p>
+      <header className="pcad-pane-header"><span><PackageCheck size={14} /><strong>Portable STEP source</strong></span><small>Generic Part 21</small></header>
+      <p className="pcad-pane-note">Select exactly one saved Body or Part. The native exporter writes its canonical generic STEP bytes; AP-specific and multi-file package claims remain unavailable.</p>
+      <ModelTreePane project={project} selectedEntityIds={selectedEntityIds} assemblyOnly={false} onToggle={onToggleEntity} />
     </>
   )
 }
 
 function ReleasePane({
-  review,
-  message,
-  selectedFormatCount,
-  destinationReady,
-  available,
-  busy,
-  onPrepare,
-  onCommit,
+  stepExportEntity,
+  stepExportResult,
+  stepExportMessage,
+  stepExportAvailable,
+  stepExportBusy,
+  onExportStep,
 }: {
-  review: PhotonCadReleaseReviewResult | null
-  message: string
-  selectedFormatCount: number
-  destinationReady: boolean
-  available: boolean
-  busy: boolean
-  onPrepare: () => void
-  onCommit: () => void
+  stepExportEntity: PhotonCadProjectSnapshot['entities'][number] | null
+  stepExportResult: PhotonCadStepExportResult | null
+  stepExportMessage: string
+  stepExportAvailable: boolean
+  stepExportBusy: boolean
+  onExportStep: () => void
 }) {
-  const ready = review?.status === 'ready' && Boolean(review.reviewHandle && review.packageFingerprint)
   return (
     <>
-      <header className="pcad-pane-header"><span><PackageCheck size={14} /><strong>Release review</strong></span><small>{review?.status ?? 'Not prepared'}</small></header>
+      <header className="pcad-pane-header"><span><PackageCheck size={14} /><strong>STEP export</strong></span><small>Selected part</small></header>
       <div className="pcad-inspector-scroll">
         <section className="pcad-release-trust">
           <ShieldCheck size={17} />
-          <div><strong>Review before write</strong><p>A fresh review is bound to the project revision, selected formats, and destination. Preparing never creates files.</p></div>
+          <div><strong>Canonical source export</strong><p>The export is bound to the selected saved entity and exact project revision. The native picker opens only after an explicit export click.</p></div>
         </section>
         <section className="pcad-step-authority" role="note">
           <strong>STEP is the portable source of truth.</strong>
           <p>Autodesk Inventor is an optional later bridge and is never required for Photon CAD design, verification, backup, or release.</p>
         </section>
-        {review ? (
-          <section className={`pcad-review-result ${review.status}`}>
-            <header><strong>{ready ? 'Package plan ready' : 'Package plan needs attention'}</strong><span>{review.files.length} files</span></header>
-            <p>{safeText(message) || photonCadReasonText(review.reason)}</p>
-            {review.files.length ? <ul>{review.files.map((file) => <li key={`${file.role}:${file.relativePath}`}><span>{safeText(file.role, 80)}</span><code>{safeText(file.relativePath, 512)}</code></li>)}</ul> : null}
-            {review.issues.length ? <IssueList issues={review.issues} label="Release review issues" /> : null}
-            {review.expiresAtUtc ? <small>Review expires {formatTimestamp(review.expiresAtUtc)}.</small> : null}
-          </section>
-        ) : (
-          <div className="pcad-empty"><PackageCheck size={24} /><strong>No release review</strong><p>Select formats and an empty destination, then prepare a revision-bound package plan.</p></div>
-        )}
-        {message && !review ? <p className="pcad-release-message" role="status">{safeText(message)}</p> : null}
+        <PhotonCadStepExportPane
+          entity={stepExportEntity}
+          result={stepExportResult}
+          message={stepExportMessage}
+          available={stepExportAvailable}
+          busy={stepExportBusy}
+          onExport={onExportStep}
+        />
       </div>
-      <footer className="pcad-pane-actions split">
-        <button type="button" disabled={!available || !destinationReady || selectedFormatCount === 0 || busy} onClick={onPrepare}>{busy && !ready ? <LoaderCircle className="pcad-spin" size={13} /> : <RefreshCw size={13} />}Prepare review</button>
-        <button className="primary" type="button" disabled={!ready || busy} onClick={onCommit}>{busy && ready ? <LoaderCircle className="pcad-spin" size={13} /> : <PackageCheck size={13} />}Create package</button>
-      </footer>
     </>
+  )
+}
+
+export function PhotonCadStepExportPane({
+  entity,
+  result,
+  message,
+  available,
+  busy,
+  onExport,
+}: {
+  entity: PhotonCadProjectSnapshot['entities'][number] | null
+  result: PhotonCadStepExportResult | null
+  message: string
+  available: boolean
+  busy: boolean
+  onExport: () => void
+}) {
+  return (
+    <section className="pcad-step-export" aria-label="Selected STEP export">
+      <strong>Export selected STEP</strong>
+      <p>{entity ? `Selected ${safeText(entity.name, 180)} (${safeText(entity.kind, 24)}).` : 'Select exactly one Body or Part in the model tree.'}</p>
+      <button type="button" disabled={!available || busy} onClick={onExport}>
+        {busy ? <LoaderCircle className="pcad-spin" size={13} /> : <PackageCheck size={13} />}Export selected STEP
+      </button>
+      {message ? <p role="status">{safeText(message)}</p> : null}
+      {result?.status === 'committed' ? (
+        <dl>
+          <div><dt>File</dt><dd>{safeText(result.destinationLabel, 256)}</dd></div>
+          <div><dt>Bytes</dt><dd>{result.byteLength?.toLocaleString()}</dd></div>
+          <div><dt>Digest</dt><dd>{safeText(result.contentDigest, 80)}</dd></div>
+        </dl>
+      ) : null}
+      <small>The native picker opens only after this click. No path enters the renderer, and no overwrite or release-package claim is made.</small>
+    </section>
   )
 }
 
