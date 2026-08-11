@@ -10,6 +10,8 @@ public sealed record PhotonCadWindowsDialogResult(bool Accepted, string? ExactPa
 public interface IPhotonCadWindowsFileDialog
 {
     PhotonCadWindowsDialogResult Show(string purpose);
+
+    PhotonCadWindowsDialogResult Show(string purpose, string? suggestedName) => Show(purpose);
 }
 
 public sealed class PhotonCadWindowsFileDialog : IPhotonCadWindowsFileDialog
@@ -25,7 +27,9 @@ public sealed class PhotonCadWindowsFileDialog : IPhotonCadWindowsFileDialog
         _showDialog = showDialog ?? ((dialog, owner) => dialog.ShowDialog(owner));
     }
 
-    public PhotonCadWindowsDialogResult Show(string purpose)
+    public PhotonCadWindowsDialogResult Show(string purpose) => Show(purpose, null);
+
+    public PhotonCadWindowsDialogResult Show(string purpose, string? suggestedName)
     {
         if (!OperatingSystem.IsWindows()) return new PhotonCadWindowsDialogResult(false, null);
         var owner = _ownerProvider()
@@ -40,6 +44,8 @@ public sealed class PhotonCadWindowsFileDialog : IPhotonCadWindowsFileDialog
             dialog.DefaultExt = ".photoncad";
             dialog.Filter = "Photon CAD projects (*.photoncad)|*.photoncad";
             dialog.CheckPathExists = true;
+            if (purpose is "new" or "save-as" && SafeSuggestedFileName(suggestedName) is { } fileName)
+                dialog.FileName = fileName;
             dialog.Title = purpose switch
             {
                 "new" => "Create Photon CAD project",
@@ -52,6 +58,16 @@ public sealed class PhotonCadWindowsFileDialog : IPhotonCadWindowsFileDialog
         }
         var dispatcher = owner.Dispatcher;
         return dispatcher is not null && !dispatcher.CheckAccess() ? dispatcher.Invoke(Invoke) : Invoke();
+    }
+
+    private static string? SafeSuggestedFileName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var sanitized = new string(value.Trim().Take(120)
+            .Select(character => invalid.Contains(character) || char.IsControl(character) ? '-' : character)
+            .ToArray()).Trim().TrimEnd('.', ' ');
+        return string.IsNullOrWhiteSpace(sanitized) || sanitized is "." or ".." ? null : sanitized;
     }
 }
 
@@ -66,14 +82,20 @@ public sealed class PhotonCadWindowsWorkspacePicker : IPhotonCadNativeWorkspaceP
         _dialog = dialog ?? new PhotonCadWindowsFileDialog(() => Application.Current?.MainWindow);
     }
 
-    public ValueTask<PhotonCadNativeWorkspaceSelection> ChooseAsync(string purpose, CancellationToken cancellationToken = default)
+    public ValueTask<PhotonCadNativeWorkspaceSelection> ChooseAsync(string purpose, CancellationToken cancellationToken = default) =>
+        ChooseAsync(purpose, null, cancellationToken);
+
+    public ValueTask<PhotonCadNativeWorkspaceSelection> ChooseAsync(
+        string purpose,
+        string? suggestedName,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (purpose is not ("new" or "open" or "save-as")) return ValueTask.FromResult(Rejected("unsupported-picker-purpose"));
         if (!_registry.Available) return ValueTask.FromResult(Unavailable("windows-native-picker-unavailable"));
         try
         {
-            var result = _dialog.Show(purpose);
+            var result = _dialog.Show(purpose, suggestedName);
             cancellationToken.ThrowIfCancellationRequested();
             if (!result.Accepted)
                 return ValueTask.FromResult(new PhotonCadNativeWorkspaceSelection(PhotonCadNativeServiceStatus.Cancelled, "native-picker-cancelled", null));

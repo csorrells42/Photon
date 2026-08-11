@@ -64,12 +64,23 @@ await suite.RunAsync("native project dialog is invoked once with the exact live 
                 {
                     calls++;
                     True(ReferenceEquals(owner, actualOwner), "dialog owner identity");
-                    Equal("Open Photon CAD project", candidate.Title, "dialog title");
+                    if (calls == 1)
+                    {
+                        Equal("Open Photon CAD project", candidate.Title, "open dialog title");
+                        Equal(string.Empty, candidate.FileName, "open dialog has no suggested file");
+                    }
+                    else
+                    {
+                        Equal("Create Photon CAD project", candidate.Title, "new dialog title");
+                        Equal("Gearbox Input", candidate.FileName, "new dialog receives the modal project name");
+                    }
                     return false;
                 });
             var result = dialog.Show("open");
             True(!result.Accepted && result.ExactPath is null, "owned dialog cancellation");
-            Equal(1, calls, "single owned dialog invocation");
+            var newResult = dialog.Show("new", "Gearbox Input");
+            True(!newResult.Accepted && newResult.ExactPath is null, "suggested-name dialog cancellation");
+            Equal(2, calls, "one invocation per owned dialog request");
             completed.SetResult();
         }
         catch (Exception exception) { completed.SetException(exception); }

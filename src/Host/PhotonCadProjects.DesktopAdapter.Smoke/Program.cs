@@ -41,7 +41,8 @@ internal static class Program
     private static async Task FullLifecycleAsync()
     {
         await using var context = new SmokeContext();
-        var workspace = await PickAsync(context, "picker-new-1", "new").ConfigureAwait(false);
+        var workspace = await PickAsync(context, "picker-new-1", "new", "Gearbox").ConfigureAwait(false);
+        Assert(context.Host.LastSuggestedName == "Gearbox", "pathless suggested project name reached native host");
         var created = await CreateAsync(context, "create-1", workspace, "Gearbox").ConfigureAwait(false);
         Assert(created.GetProperty("snapshot").GetProperty("revision").GetInt64() == 0, "created revision");
 
@@ -262,16 +263,12 @@ internal static class Program
         Assert(context.Frame("photonCad.project.error", "duplicate-field-2").GetProperty("code").GetString() == "invalid-project-request", "duplicate field rejected");
     }
 
-    private static async Task<string> PickAsync(SmokeContext context, string requestId, string purpose)
+    private static async Task<string> PickAsync(SmokeContext context, string requestId, string purpose, string? suggestedName = null)
     {
-        await context.Dispatcher.HandleAsync("photonCad.project.picker", Frame(new
-        {
-            type = "photonCad.project.picker",
-            version = 1,
-            contractVersion = 1,
-            requestId,
-            purpose,
-        })).ConfigureAwait(false);
+        var frame = suggestedName is null
+            ? Frame(new { type = "photonCad.project.picker", version = 1, contractVersion = 1, requestId, purpose })
+            : Frame(new { type = "photonCad.project.picker", version = 1, contractVersion = 1, requestId, purpose, suggestedName });
+        await context.Dispatcher.HandleAsync("photonCad.project.picker", frame).ConfigureAwait(false);
         var result = context.Result("photonCad.project.picker.result", requestId);
         Assert(result.GetProperty("status").GetString() == "selected", $"picker {requestId}");
         return result.GetProperty("workspaceHandle").GetString()!;

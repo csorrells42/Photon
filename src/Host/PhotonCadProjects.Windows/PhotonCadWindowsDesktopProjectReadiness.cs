@@ -86,6 +86,12 @@ public interface IPhotonCadDesktopProjectHost : IAsyncDisposable
         string purpose,
         CancellationToken cancellationToken = default);
 
+    ValueTask<PhotonCadDesktopProjectPickerOutcome> ChooseWorkspaceAsync(
+        string requestId,
+        string purpose,
+        string? suggestedName,
+        CancellationToken cancellationToken = default) => ChooseWorkspaceAsync(requestId, purpose, cancellationToken);
+
     ValueTask<PhotonCadProjectDocument> CreateProjectAsync(
         PhotonCadProjectCreateRequest request,
         CancellationToken cancellationToken = default);

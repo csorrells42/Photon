@@ -510,6 +510,7 @@ export function PhotonCadDesktopWorkspace({
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
   const newProjectDialogRef = useRef<HTMLDialogElement>(null)
   const newProjectSubmissionPending = useRef(false)
+  const lifecycleGeneration = useRef(0)
   const newProjectDialogVisible = newProjectDraft !== null
   const documentsRef = useRef(documents)
   documentsRef.current = documents
@@ -607,12 +608,19 @@ export function PhotonCadDesktopWorkspace({
       : value)
   }, [projectActionsAvailable, activeTab?.document.projectHandle, activeTab?.runtimeAttached, runtimeProjectSyncAvailable])
 
-  useEffect(() => () => {
-    coreBusyHandler.current = () => undefined
-    commercialAdapterRef.current?.invalidate()
-    if (ownsProjectController.current) projectControllerRef.current?.close?.()
-    if (ownsCoreController.current) coreControllerRef.current?.close?.()
-    if (ownsCommercialTransport.current) commercialTransportRef.current?.close?.()
+  useEffect(() => {
+    const generation = ++lifecycleGeneration.current
+    return () => schedulePhotonCadLifecycleCleanup(
+      () => lifecycleGeneration.current,
+      generation,
+      () => {
+        coreBusyHandler.current = () => undefined
+        commercialAdapterRef.current?.invalidate()
+        if (ownsProjectController.current) projectControllerRef.current?.close?.()
+        if (ownsCoreController.current) coreControllerRef.current?.close?.()
+        if (ownsCommercialTransport.current) commercialTransportRef.current?.close?.()
+      },
+    )
   }, [])
 
   function nextRequestId(kind: string) {
@@ -699,8 +707,13 @@ export function PhotonCadDesktopWorkspace({
   }
   mutationHandler.current = refreshAfterAcceptedSnapshot
 
-  async function runPicker(purpose: 'new' | 'open' | 'save-as') {
-    const result = await projectControllerRef.current!.chooseWorkspace({ contractVersion: 1, requestId: nextRequestId('picker'), purpose })
+  async function runPicker(purpose: 'new' | 'open' | 'save-as', suggestedName?: string) {
+    const result = await projectControllerRef.current!.chooseWorkspace({
+      contractVersion: 1,
+      requestId: nextRequestId('picker'),
+      purpose,
+      ...(suggestedName ? { suggestedName } : {}),
+    })
     if (result.status !== 'selected' || !result.workspaceHandle) {
       setStatus(result.reason)
       return null
@@ -773,7 +786,7 @@ export function PhotonCadDesktopWorkspace({
     setBusy('picker')
     setStatus('choosing-project-workspace')
     try {
-      const workspaceHandle = await runPicker('new')
+      const workspaceHandle = await runPicker('new', details.title)
       if (!workspaceHandle) return
       setBusy('create')
       setStatus('creating-project')
@@ -1156,6 +1169,17 @@ export function projectStatusText(reason: string) {
     'project-metadata-untracked': 'The accepted project revision is not associated with an open tab.',
   }
   return messages[reason] ?? `The project action failed (${reason || 'reason-unavailable'}).`
+}
+
+export function schedulePhotonCadLifecycleCleanup(
+  currentGeneration: () => number,
+  scheduledGeneration: number,
+  cleanup: () => void,
+  schedule: (callback: () => void) => void = queueMicrotask,
+) {
+  schedule(() => {
+    if (currentGeneration() === scheduledGeneration) cleanup()
+  })
 }
 
 export function normalizePhotonCadNewProjectDetails(value: NewProjectDraft | null | undefined): NewProjectDraft | null {

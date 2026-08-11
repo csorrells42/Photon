@@ -60,15 +60,16 @@ public sealed class PhotonCadPreviewCustody : IAsyncDisposable
         var digest = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(bytes));
         if (!CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(digest), Encoding.ASCII.GetBytes(artifact.Digest)))
             throw PreviewGuards.Failure("committed_preview_digest_mismatch");
-        var expectedEntityIds = state.Entities.Where(entity => entity.Visible && !entity.Suppressed)
-            .Select(entity => entity.Id).ToHashSet(StringComparer.Ordinal);
-        if (expectedEntityIds.Count > 100_000) throw PreviewGuards.Failure("glb_resource_limit");
-        PhotonCadGlbEnvelopeValidator.Validate(bytes, expectedEntityIds);
+        var expectedOccurrenceIds = state.Occurrences
+            .Select(occurrence => occurrence.OccurrenceId).ToHashSet(StringComparer.Ordinal);
+        if (expectedOccurrenceIds.Count == 0 || expectedOccurrenceIds.Count > 100_000)
+            throw PreviewGuards.Failure("glb_resource_limit");
+        PhotonCadGlbEnvelopeValidator.Validate(bytes, expectedOccurrenceIds);
         var bounds = new PhotonCadPreviewBounds(
             new PhotonCadPreviewVector(artifact.Bounds.Minimum.X, artifact.Bounds.Minimum.Y, artifact.Bounds.Minimum.Z),
             new PhotonCadPreviewVector(artifact.Bounds.Maximum.X, artifact.Bounds.Maximum.Y, artifact.Bounds.Maximum.Z));
         var previewId = "preview-" + PreviewGuards.NewToken();
-        var receipt = new PhotonCadPreviewReceipt(previewId, context, digest, bytes.LongLength, state.Units, bounds, expectedEntityIds.Count);
+        var receipt = new PhotonCadPreviewReceipt(previewId, context, digest, bytes.LongLength, state.Units, bounds, expectedOccurrenceIds.Count);
         lock (_sync)
         {
             ThrowIfDisposed();

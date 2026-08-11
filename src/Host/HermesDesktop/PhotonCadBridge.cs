@@ -1137,16 +1137,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 title = state.Title,
                 units = state.Units == PhotonCadProjectUnit.Millimeter ? "millimeter" : "inch",
                 mode = "canonical",
-                entities = state.Entities.Select(entity => new
-                {
-                    id = entity.Id,
-                    parentId = entity.ParentId,
-                    kind = entity.Kind.ToString().ToLowerInvariant(),
-                    name = entity.Name,
-                    visible = entity.Visible,
-                    suppressed = entity.Suppressed,
-                    sourceCapabilityId = entity.SourceCapabilityId,
-                }).ToArray(),
+                entities = ExternalCommittedEntities(state),
                 operations = state.Operations.Select(operation => new
                 {
                     id = operation.Id,
@@ -1176,20 +1167,62 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         foreach (var property in JsonSerializer.SerializeToElement(projected).EnumerateObject())
             extended[property.Name] = property.Value.Clone();
         extended["preview"] = new
+        {
+            previewId = preview.PreviewId,
+            projectId = preview.Context.ProjectId,
+            revision = preview.Context.Revision,
+            contentDigest = preview.ContentDigest,
+            units = preview.Units == PhotonCadProjectUnit.Millimeter ? "millimeter" : "inch",
+            bounds = new
             {
-                previewId = preview.PreviewId,
-                projectId = preview.Context.ProjectId,
-                revision = preview.Context.Revision,
-                contentDigest = preview.ContentDigest,
-                units = preview.Units == PhotonCadProjectUnit.Millimeter ? "millimeter" : "inch",
-                bounds = new
-                {
-                    minimum = new { x = preview.Bounds.Minimum.X, y = preview.Bounds.Minimum.Y, z = preview.Bounds.Minimum.Z },
-                    maximum = new { x = preview.Bounds.Maximum.X, y = preview.Bounds.Maximum.Y, z = preview.Bounds.Maximum.Z },
-                },
-                entityCount = preview.EntityCount,
-            };
+                minimum = new { x = preview.Bounds.Minimum.X, y = preview.Bounds.Minimum.Y, z = preview.Bounds.Minimum.Z },
+                maximum = new { x = preview.Bounds.Maximum.X, y = preview.Bounds.Maximum.Y, z = preview.Bounds.Maximum.Z },
+            },
+            entityCount = preview.EntityCount,
+        };
         return extended;
+    }
+
+    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> ExternalCommittedEntities(
+        PhotonCadProjectStateV1 state)
+    {
+        var projected = new List<IReadOnlyDictionary<string, object?>>(state.Entities.Count + state.Occurrences.Count);
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sourceCapabilities = state.Entities.ToDictionary(
+            entity => entity.Id,
+            entity => entity.SourceCapabilityId,
+            StringComparer.Ordinal);
+        foreach (var entity in state.Entities)
+        {
+            if (!ids.Add(entity.Id)) throw new InvalidOperationException("The canonical CAD inventory contains duplicate identifiers.");
+            projected.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["id"] = entity.Id,
+                ["parentId"] = entity.ParentId,
+                ["kind"] = entity.Kind.ToString().ToLowerInvariant(),
+                ["name"] = entity.Name,
+                ["visible"] = entity.Visible,
+                ["suppressed"] = entity.Suppressed,
+                ["sourceCapabilityId"] = entity.SourceCapabilityId,
+            });
+        }
+        foreach (var occurrence in state.Occurrences)
+        {
+            if (!ids.Add(occurrence.OccurrenceId)
+                || !sourceCapabilities.TryGetValue(occurrence.SourceEntityId, out var sourceCapabilityId))
+                throw new InvalidOperationException("The canonical CAD occurrence inventory is not bound to one exact source entity.");
+            projected.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["id"] = occurrence.OccurrenceId,
+                ["parentId"] = occurrence.ParentOccurrenceId,
+                ["kind"] = "occurrence",
+                ["name"] = occurrence.PartNumber,
+                ["visible"] = true,
+                ["suppressed"] = false,
+                ["sourceCapabilityId"] = sourceCapabilityId,
+            });
+        }
+        return projected;
     }
 
     private static object ExternalSnapshot(CadProjectSnapshot snapshot, ExternalRuntimeRequest external) => new

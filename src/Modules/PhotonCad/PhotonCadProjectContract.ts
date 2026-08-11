@@ -25,6 +25,7 @@ export type PhotonCadProjectPickerRequest = {
   contractVersion: typeof PHOTON_CAD_PROJECT_CONTRACT_VERSION
   requestId: string
   purpose: PhotonCadProjectPickerPurpose
+  suggestedName?: string
 }
 
 export type PhotonCadProjectPickerResult = {
@@ -204,6 +205,7 @@ export function validatePhotonCadProjectPickerRequest(request: PhotonCadProjectP
   return request.contractVersion === PHOTON_CAD_PROJECT_CONTRACT_VERSION
     && isPhotonCadIdentifier(request.requestId)
     && ['new', 'open', 'save-as'].includes(request.purpose)
+    && (request.suggestedName === undefined || isDisplayLabel(request.suggestedName, PHOTON_CAD_PROJECT_LIMITS.title))
 }
 
 export function validatePhotonCadProjectCreateRequest(request: PhotonCadProjectCreateRequest) {

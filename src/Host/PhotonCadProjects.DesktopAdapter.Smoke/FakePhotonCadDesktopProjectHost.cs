@@ -19,6 +19,7 @@ internal sealed class FakePhotonCadDesktopProjectHost : IPhotonCadDesktopProject
     internal TaskCompletionSource? BlockOpen { get; set; }
     internal TaskCompletionSource? BlockSave { get; set; }
     internal int CloseCalls { get; private set; }
+    internal string? LastSuggestedName { get; private set; }
 
     public PhotonCadWindowsDesktopProjectReadiness Readiness => new(
         Available && !_disposed,
@@ -28,9 +29,17 @@ internal sealed class FakePhotonCadDesktopProjectHost : IPhotonCadDesktopProject
         string requestId,
         string purpose,
         CancellationToken cancellationToken = default)
+        => ChooseWorkspaceAsync(requestId, purpose, null, cancellationToken);
+
+    public ValueTask<PhotonCadDesktopProjectPickerOutcome> ChooseWorkspaceAsync(
+        string requestId,
+        string purpose,
+        string? suggestedName,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
+        LastSuggestedName = suggestedName;
         var index = Interlocked.Increment(ref _sequence);
         var workspace = new PhotonCadWorkspaceRegistration(
             new PhotonCadWorkspaceHandle(Handle("cad-workspace:", $"workspace{index}")),

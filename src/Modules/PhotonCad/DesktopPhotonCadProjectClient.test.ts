@@ -102,6 +102,22 @@ describe('Photon CAD project protocol normalization', () => {
 })
 
 describe('DesktopPhotonCadProjectClient', () => {
+  it('sends the modal project name as a pathless native-picker suggestion', async () => {
+    const bridge = new FakeBridge()
+    const client = new DesktopPhotonCadProjectClient({ getBridge: () => bridge })
+    const pending = client.chooseWorkspace({ contractVersion: 1, requestId: 'picker:prefill', purpose: 'new', suggestedName: 'Gearbox Input' })
+    expect(bridge.messages).toContainEqual({
+      type: 'photonCad.project.picker', version: 1, contractVersion: 1,
+      requestId: 'picker:prefill', purpose: 'new', suggestedName: 'Gearbox Input',
+    })
+    bridge.emit({
+      type: 'photonCad.project.picker.result', version: 1,
+      value: { contractVersion: 1, requestId: 'picker:prefill', status: 'cancelled', reason: 'native-picker-cancelled' },
+    })
+    await expect(pending).resolves.toMatchObject({ status: 'cancelled' })
+    client.close()
+  })
+
   it('reports honest unavailable lifecycle results without an HTTP fallback', async () => {
     const client = new DesktopPhotonCadProjectClient({ getBridge: () => null })
     await expect(client.openProject(openRequest())).resolves.toEqual({ contractVersion: 1, requestId: 'open:1', status: 'unavailable', reason: 'desktop-host-unavailable' })

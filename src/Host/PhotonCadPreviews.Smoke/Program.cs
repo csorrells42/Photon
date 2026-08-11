@@ -240,14 +240,15 @@ static PhotonCadCanonicalProject BuildProject(string sessionId, string projectId
     return codec.Encode(state);
 }
 
-static byte[] BuildGlb(string entityId)
+static byte[] BuildGlb(string sourceEntityId)
 {
+    var occurrenceId = sourceEntityId + "-occ";
     var json = JsonSerializer.SerializeToUtf8Bytes(new
     {
         asset = new { version = "2.0" },
         scene = 0,
         scenes = new[] { new { nodes = new[] { 0 } } },
-        nodes = new[] { new { mesh = 0, extras = new { photonEntityId = entityId } } },
+        nodes = new[] { new { mesh = 0, extras = new { photonEntityId = occurrenceId } } },
         meshes = new[] { new { primitives = new[] { new { attributes = new { POSITION = 0 } } } } },
         accessors = new[] { new { bufferView = 0, componentType = 5126, count = 1, type = "VEC3" } },
         bufferViews = new[] { new { buffer = 0, byteOffset = 0, byteLength = 12 } },

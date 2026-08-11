@@ -197,12 +197,19 @@ public sealed class PhotonCadWindowsDesktopProjectHost : IPhotonCadDesktopProjec
     public ValueTask<PhotonCadDesktopProjectPickerOutcome> ChooseWorkspaceAsync(
         string requestId,
         string purpose,
+        CancellationToken cancellationToken = default) =>
+        ChooseWorkspaceAsync(requestId, purpose, null, cancellationToken);
+
+    public ValueTask<PhotonCadDesktopProjectPickerOutcome> ChooseWorkspaceAsync(
+        string requestId,
+        string purpose,
+        string? suggestedName,
         CancellationToken cancellationToken = default) => UseAsync(async (generation, token) =>
     {
         _ = SafeRequestId(requestId);
         if (purpose is not ("new" or "open" or "save-as"))
             throw Failure("unsupported_picker_purpose", nameof(purpose));
-        var selection = await generation.Composition.Picker.ChooseAsync(purpose, token).ConfigureAwait(false);
+        var selection = await generation.Composition.Picker.ChooseAsync(purpose, suggestedName, token).ConfigureAwait(false);
         EnsureCurrent(generation);
         if (selection.Status != PhotonCadNativeServiceStatus.Selected)
             return new PhotonCadDesktopProjectPickerOutcome(selection.Status, selection.Reason, null);

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text.Json;
 using System.Reflection;
 using System.Runtime.Loader;
@@ -7,7 +8,9 @@ using HermesDesktop;
 using PhotonCadProjects;
 using PhotonCadProjects.Codec;
 using PhotonCadProjects.DesktopAdapter;
+using PhotonCadProjects.RuntimeSync;
 using PhotonCadProjects.Windows;
+using PhotonCadPreviews;
 using PhotonCadRuntime;
 
 internal static class PhotonCadBridgeSmoke
@@ -21,12 +24,141 @@ internal static class PhotonCadBridgeSmoke
         try
         {
             if (!await RunPersistedPrimitiveFlowAsync(tempRoot)) return false;
+            if (!await IndustrialMissingEvidenceStaysUnavailableAsync(tempRoot)) return false;
+            if (!await RunIndustrialPreviewFlowAsync(tempRoot)) return false;
             if (!await HostileRuntimeResultMatrixAsync(tempRoot)) return false;
             if (!await PersistenceFailureCompensatesAsync(tempRoot)) return false;
             if (!await CancellationDrainsAsync(tempRoot)) return false;
             return true;
         }
         finally { DeleteOwnedSmokeRoot(tempRoot); }
+    }
+
+    private static async Task<bool> IndustrialMissingEvidenceStaysUnavailableAsync(string tempRoot)
+    {
+        var installRoot = Path.Combine(tempRoot, "missing-industrial-assets");
+        Directory.CreateDirectory(installRoot);
+        var frames = new List<JsonElement>();
+        await using var bridge = new PhotonCadBridge(
+            installRoot,
+            message => frames.Add(JsonSerializer.SerializeToElement(message)));
+        var epoch = await bridge.ResetAsync();
+        if (!bridge.TryOpenRendererGeneration(epoch))
+            return Fail("Missing-evidence industrial bridge generation did not open.");
+        await SendAsync(bridge,
+            """{"type":"photonCad.describe","version":1,"contractVersion":1,"requestId":"industrial-missing-evidence"}""");
+        var value = Frame(frames, "photonCad.describe.result").GetProperty("value");
+        if (Text(value, "status") != "unavailable"
+            || Text(value, "reason") != "industrial_runtime_unavailable"
+            || Directory.Exists(Path.Combine(installRoot, "runtime-assets", "photon-cad-industrial")))
+            return Fail("Industrial CAD did not remain truthfully unavailable without exact installer-owned evidence.");
+        return true;
+    }
+
+    private static async Task<bool> RunIndustrialPreviewFlowAsync(string tempRoot)
+    {
+        var path = Path.Combine(tempRoot, "industrial-preview.photoncad");
+        var frames = new List<JsonElement>();
+        SmokeIndustrialProvider? provider = null;
+        var origin = new Uri("https://127.0.0.1:4173/", UriKind.Absolute);
+        await using var bridge = new PhotonCadBridge(
+            Directory.GetCurrentDirectory(),
+            message => frames.Add(JsonSerializer.SerializeToElement(message)),
+            projectDialog: new SmokeProjectDialog(path),
+            workbenchOrigin: origin,
+            industrialBindingFactory: (request, _) =>
+            {
+                var syncRequest = new PhotonCadRuntimeSyncRequest(
+                    request.RequestId,
+                    request.SessionId,
+                    request.ProjectId,
+                    request.BaseRevision,
+                    request.CapabilityId,
+                    PhotonCadOperationModeV1.Scratch,
+                    request.Inputs.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                        .Select(pair => new PhotonCadSyncOperationInput(pair.Key, PhotonCadSyncInputValue.Number(pair.Value))),
+                    [request.EntityId]);
+                provider = new SmokeIndustrialProvider(syncRequest, request.EntityId);
+                return ValueTask.FromResult(new IndustrialMutationBinding(syncRequest, provider, provider));
+            });
+
+        var epoch = await bridge.ResetAsync();
+        if (!bridge.TryOpenRendererGeneration(epoch)) return Fail("Industrial preview bridge generation did not open.");
+        var identity = await CreateCanonicalProjectAsync(bridge, frames, "industrial-preview");
+        await SendPrimitiveAsync(bridge, "industrial-box", identity.SessionId, identity.ProjectId, 0,
+            CadPinnedCapabilityCatalog.BoxCapabilityId);
+        var result = Frame(frames, "photonCad.execute.result").GetProperty("value");
+        if (provider is null
+            || provider.ApplyCount != 1
+            || Text(result, "status") != "accepted"
+            || result.GetProperty("resultingRevision").GetInt64() != 2
+            || !result.TryGetProperty("preview", out var preview)
+            || preview.GetProperty("entityCount").GetInt32() != 1)
+            return Fail("Industrial CAD did not publish one exact committed preview receipt.");
+
+        var snapshot = result.GetProperty("snapshot");
+        var occurrence = snapshot.GetProperty("entities").EnumerateArray()
+            .SingleOrDefault(entity => Text(entity, "kind") == "occurrence");
+        if (occurrence.ValueKind != JsonValueKind.Object
+            || Text(occurrence, "id") != provider.OccurrenceId
+            || snapshot.GetProperty("entities").GetArrayLength() != 2)
+            return Fail("Industrial CAD did not project the GLB occurrence tag into the viewer inventory.");
+
+        var codec = new PhotonCadCanonicalProjectCodecV1();
+        var persisted = codec.Decode(await File.ReadAllBytesAsync(path));
+        var persistedState = codec.Inspect(persisted);
+        if (persisted.Dirty || persisted.Revision != 2
+            || persistedState.Occurrences.Count != 1
+            || persistedState.Occurrences[0].OccurrenceId != provider.OccurrenceId)
+            return Fail("Industrial CAD did not durably save the exact preview occurrence before acceptance.");
+
+        var previewId = Text(preview, "previewId")!;
+        var digest = Text(preview, "contentDigest")!;
+        async Task<Uri> ResolveAsync(string requestId)
+        {
+            await SendAsync(bridge, $$"""
+                {"type":"photonCad.preview.resolve","version":1,"contractVersion":1,"requestId":"{{requestId}}","sessionId":"{{identity.SessionId}}","projectId":"{{identity.ProjectId}}","revision":2,"previewId":"{{previewId}}","expectedDigest":"{{digest}}","maximumBytes":1048576}
+                """);
+            var resolved = Frame(frames, "photonCad.preview.resolve.result").GetProperty("value");
+            if (Text(resolved, "status") != "available"
+                || Text(resolved, "contentDigest") != digest
+                || Text(resolved, "mediaType") != PhotonCadPreviewContract.MediaType)
+                throw new InvalidOperationException("The committed preview did not resolve through its exact receipt.");
+            return new Uri(Text(resolved, "url")!, UriKind.Absolute);
+        }
+
+        var rangeUrl = await ResolveAsync("preview-range");
+        using (var range = bridge.TryRespondPreviewResource("GET", rangeUrl, true,
+                   new Dictionary<string, string> { ["Range"] = "bytes=0-1" })!)
+        {
+            if (range.StatusCode != 404) return Fail("Industrial preview accepted a range request.");
+        }
+        var assetUrl = await ResolveAsync("preview-get");
+        if (assetUrl.GetLeftPart(UriPartial.Authority) != origin.GetLeftPart(UriPartial.Authority)
+            || !assetUrl.AbsolutePath.StartsWith(PhotonCadBridge.PreviewResourcePathPrefix, StringComparison.Ordinal)
+            || assetUrl.AbsoluteUri.Contains(identity.ProjectId, StringComparison.Ordinal))
+            return Fail("Industrial preview resource was not fixed-origin and opaque.");
+        using (var response = bridge.TryRespondPreviewResource("GET", assetUrl, true)!)
+        {
+            if (response.StatusCode != 200 || response.Content is null)
+                return Fail("Industrial preview resource was unavailable on its one authorized GET.");
+            using var memory = new MemoryStream();
+            await response.Content.CopyToAsync(memory);
+            if (!memory.ToArray().SequenceEqual(provider.Glb))
+                return Fail("Industrial preview responder changed the sealed GLB bytes.");
+        }
+        using (var replay = bridge.TryRespondPreviewResource("GET", assetUrl, true)!)
+        {
+            if (replay.StatusCode != 404) return Fail("Industrial preview resource replay was accepted.");
+        }
+        var revokedUrl = await ResolveAsync("preview-reset");
+        var resetEpoch = await bridge.ResetAsync();
+        if (!bridge.TryOpenRendererGeneration(resetEpoch)) return Fail("Industrial preview reset did not reopen cleanly.");
+        using var revoked = bridge.TryRespondPreviewResource("GET", revokedUrl, true)!;
+        if (revoked.StatusCode != 404) return Fail("Industrial preview survived renderer reset.");
+        if (JsonSerializer.Serialize(frames).Contains(tempRoot, StringComparison.OrdinalIgnoreCase))
+            return Fail("Industrial preview frames leaked a host path.");
+        return true;
     }
 
     private static void EnsureRuntimeSyncLoadedForSmoke()
@@ -568,6 +700,133 @@ internal static class PhotonCadBridgeSmoke
     {
         Console.Error.WriteLine(message);
         return false;
+    }
+
+    private sealed class SmokeIndustrialProvider : IPhotonCadSealedMutationProvider, IPhotonCadSealedMutationCompensator
+    {
+        private static readonly string ReceiptDigest = "sha256:" + new string('a', 64);
+        private static readonly string ImageDigest = "sha256:" + new string('b', 64);
+        private static readonly string BaseImageDigest = "sha256:" + new string('c', 64);
+        private readonly PhotonCadRuntimeSyncRequest _request;
+        private readonly string _entityId;
+
+        internal SmokeIndustrialProvider(PhotonCadRuntimeSyncRequest request, string entityId)
+        {
+            _request = request;
+            _entityId = entityId;
+            OccurrenceId = entityId + ".occ";
+            Glb = BuildGlb(OccurrenceId);
+        }
+
+        internal int ApplyCount { get; private set; }
+        internal string OccurrenceId { get; }
+        internal byte[] Glb { get; }
+
+        public ValueTask<PhotonCadSealedMutationDelta> ApplyAsync(
+            PhotonCadSealedMutationProviderRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(request.Request, _request)
+                || request.Units != PhotonCadProjectUnit.Millimeter
+                || request.BaseEntities.Count != 0
+                || request.BaseArtifacts.Count != 0
+                || request.BaseOccurrences.Count != 0)
+                throw new InvalidOperationException("The industrial smoke provider received a foreign canonical base.");
+            ApplyCount++;
+            var source = new PhotonCadSourceIdentityV1(
+                "photon-cad-industrial", "0.1.0", ImageDigest, "redistribution-blocked");
+            var evidence = new PhotonCadProviderEvidence(
+                PhotonCadBackendV1.Assembly,
+                "photon.cad.industrial.smoke.v1",
+                ["photon.cad.industrial.protocol.v1"],
+                "catalog-v1",
+                "industrial-bundle",
+                ReceiptDigest,
+                ReceiptDigest,
+                ImageDigest,
+                BaseImageDigest,
+                source);
+            var createOperationId = $"operation-{Guid.NewGuid():N}";
+            var previewOperationId = $"operation-{Guid.NewGuid():N}";
+            var createdAt = DateTimeOffset.UtcNow;
+            var step = Encoding.ASCII.GetBytes(
+                "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('sealed'),'2;1');\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n");
+            var bounds = new PhotonCadBoundsV1(new(0, 0, 0), new(10, 20, 30));
+            var mutation = new PhotonCadSealedMutationDelta(
+                $"mutation-{Guid.NewGuid():N}",
+                _request.RequestId,
+                _request.SessionId,
+                _request.ProjectId,
+                _request.BaseRevision,
+                checked(_request.BaseRevision + 2),
+                [
+                    new PhotonCadAppliedOperationDelta(
+                        checked(_request.BaseRevision + 1), createOperationId, _request.CapabilityId,
+                        "Create industrial primitive", createdAt, _request.Mode, _request.Inputs, [_entityId], evidence),
+                    new PhotonCadAppliedOperationDelta(
+                        checked(_request.BaseRevision + 2), previewOperationId, "industrial.preview.glb.v1",
+                        "Seal complete-project preview", createdAt.AddMilliseconds(1), _request.Mode, [], [_entityId], evidence),
+                ],
+                [new PhotonCadEntityV1(_entityId, null, PhotonCadEntityKindV1.Body, "Box", true, false, _request.CapabilityId)],
+                [new PhotonCadOccurrenceV1(OccurrenceId, null, "BOX", _entityId,
+                    new double[] { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 })],
+                [],
+                [],
+                [
+                    new PhotonCadSealedArtifactDelta(
+                        PhotonCadArtifactRoleV1.AuthoritativeGeometry, PhotonCadArtifactKindV1.Step, _entityId,
+                        checked(_request.BaseRevision + 1), step, step.LongLength, Digest(step), "model/step", null,
+                        createOperationId, evidence),
+                    new PhotonCadSealedArtifactDelta(
+                        PhotonCadArtifactRoleV1.ProjectPreview, PhotonCadArtifactKindV1.Glb, null,
+                        checked(_request.BaseRevision + 2), Glb, Glb.LongLength, Digest(Glb), PhotonCadPreviewContract.MediaType,
+                        bounds, previewOperationId, evidence),
+                ],
+                occurrenceMergeMode: PhotonCadCollectionMergeMode.ReplaceAll);
+            return ValueTask.FromResult(mutation);
+        }
+
+        public ValueTask CompensateAsync(
+            PhotonCadSealedMutationDelta mutation,
+            string reason,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        private static string Digest(ReadOnlySpan<byte> bytes) =>
+            "sha256:" + Convert.ToHexStringLower(SHA256.HashData(bytes));
+
+        private static byte[] BuildGlb(string occurrenceId)
+        {
+            var json = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                asset = new { version = "2.0" },
+                scene = 0,
+                scenes = new[] { new { nodes = new[] { 0 } } },
+                nodes = new[] { new { mesh = 0, extras = new { photonEntityId = occurrenceId } } },
+                meshes = new[] { new { primitives = new[] { new { attributes = new { POSITION = 0 } } } } },
+                accessors = new[] { new { bufferView = 0, componentType = 5126, count = 1, type = "VEC3" } },
+                bufferViews = new[] { new { buffer = 0, byteOffset = 0, byteLength = 12 } },
+                buffers = new[] { new { byteLength = 12 } },
+            });
+            var jsonLength = (json.Length + 3) & ~3;
+            const int binaryLength = 12;
+            var output = new byte[12 + 8 + jsonLength + 8 + binaryLength];
+            BinaryPrimitives.WriteUInt32LittleEndian(output, 0x46546C67);
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(4), 2);
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(8), checked((uint)output.Length));
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(12), checked((uint)jsonLength));
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(16), 0x4E4F534A);
+            json.CopyTo(output.AsSpan(20));
+            output.AsSpan(20 + json.Length, jsonLength - json.Length).Fill(0x20);
+            var binaryHeader = 20 + jsonLength;
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(binaryHeader), binaryLength);
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(binaryHeader + 4), 0x004E4942);
+            return output;
+        }
     }
 
     private sealed class SmokeCadBroker : ICadRuntimeBroker, IAsyncDisposable

@@ -17,6 +17,7 @@ import {
   photonCadRuntimeAttachmentForLoad,
   projectStatusText,
   runPhotonCadNewProjectDialogAction,
+  schedulePhotonCadLifecycleCleanup,
 } from './PhotonCadDesktopWorkspace'
 import type { PhotonCadController, PhotonCadOperationRequest, PhotonCadOperationResult } from './PhotonCadContract'
 import type { PhotonCadProjectController, PhotonCadProjectDocument } from './PhotonCadProjectContract'
@@ -254,6 +255,21 @@ describe('PhotonCadDesktopWorkspace', () => {
     expect(requestNativePicker).not.toHaveBeenCalled()
     expect(afterDismiss).not.toHaveBeenCalled()
     expect(events).toEqual(['status:invalid-project-details'])
+  })
+
+  it('does not close desktop clients during the Strict Mode effect replay but closes on real unmount', () => {
+    let generation = 1
+    const scheduled: Array<() => void> = []
+    const cleanup = vi.fn()
+
+    schedulePhotonCadLifecycleCleanup(() => generation, 1, cleanup, (callback) => scheduled.push(callback))
+    generation = 2
+    scheduled.shift()!()
+    expect(cleanup).not.toHaveBeenCalled()
+
+    schedulePhotonCadLifecycleCleanup(() => generation, 2, cleanup, (callback) => scheduled.push(callback))
+    scheduled.shift()!()
+    expect(cleanup).toHaveBeenCalledTimes(1)
   })
 
   it('renders an honest empty project shell without inventing a viewer or host success', () => {

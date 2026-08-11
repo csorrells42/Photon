@@ -32,7 +32,7 @@ public abstract record PhotonCadProjectDesktopRequest(
     PhotonCadProjectDesktopOperation Operation,
     string RequestId);
 
-public sealed record PhotonCadProjectDesktopPickerRequest(string RequestId, string Purpose)
+public sealed record PhotonCadProjectDesktopPickerRequest(string RequestId, string Purpose, string? SuggestedName)
     : PhotonCadProjectDesktopRequest(PhotonCadProjectDesktopOperation.Picker, RequestId);
 
 public sealed record PhotonCadProjectDesktopCreateRequest(PhotonCadProjectCreateRequest Value)

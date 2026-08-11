@@ -1063,6 +1063,11 @@ public interface IPhotonCadNativeWorkspacePicker
     ValueTask<PhotonCadNativeWorkspaceSelection> ChooseAsync(
         string purpose,
         CancellationToken cancellationToken = default);
+
+    ValueTask<PhotonCadNativeWorkspaceSelection> ChooseAsync(
+        string purpose,
+        string? suggestedName,
+        CancellationToken cancellationToken = default) => ChooseAsync(purpose, cancellationToken);
 }
 
 public interface IPhotonCadNativeWorkspaceMount

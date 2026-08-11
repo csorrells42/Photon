@@ -168,7 +168,7 @@ public sealed class PhotonCadProjectDesktopDispatcher : IAsyncDisposable
     {
         PhotonCadProjectDesktopPickerRequest picker => PickerFrame(
             request.RequestId,
-            await _host.ChooseWorkspaceAsync(request.RequestId, picker.Purpose, cancellationToken).ConfigureAwait(false)),
+            await _host.ChooseWorkspaceAsync(request.RequestId, picker.Purpose, picker.SuggestedName, cancellationToken).ConfigureAwait(false)),
         PhotonCadProjectDesktopCreateRequest create => LoadFrame(
             "photonCad.project.create.result",
             request.RequestId,

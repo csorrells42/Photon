@@ -45,10 +45,17 @@ public static class PhotonCadProjectEnvelopeParser
 
     private static PhotonCadProjectDesktopRequest? ParsePicker(JsonElement frame)
     {
-        if (!Exact(frame, "type", "version", "contractVersion", "requestId", "purpose")
+        var hasSuggestedName = frame.TryGetProperty("suggestedName", out _);
+        if (!(hasSuggestedName
+                ? Exact(frame, "type", "version", "contractVersion", "requestId", "purpose", "suggestedName")
+                : Exact(frame, "type", "version", "contractVersion", "requestId", "purpose"))
             || !Contract(frame) || !TryIdentifier(frame, "requestId", out var requestId)
             || !TryString(frame, "purpose", out var purpose) || purpose is not ("new" or "open" or "save-as")) return null;
-        return new PhotonCadProjectDesktopPickerRequest(requestId, purpose);
+        string? suggestedName = null;
+        if (hasSuggestedName
+            && (!TryString(frame, "suggestedName", out suggestedName)
+                || !IsSafeDisplayName(suggestedName, PhotonCadProjectContract.MaximumDisplayNameLength))) return null;
+        return new PhotonCadProjectDesktopPickerRequest(requestId, purpose, suggestedName);
     }
 
     private static PhotonCadProjectDesktopRequest? ParseCreate(JsonElement frame)
@@ -196,6 +203,14 @@ public static class PhotonCadProjectEnvelopeParser
     private static bool IsIdentifier(string value) => value.Length is > 0 and <= PhotonCadProjectContract.MaximumIdentifierLength
         && char.IsAsciiLetterOrDigit(value[0])
         && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.' or ':');
+
+    private static bool IsSafeDisplayName(string value, int maximum) => value.Length is > 0
+        && value.Length <= maximum
+        && !string.IsNullOrWhiteSpace(value)
+        && !value.Contains('/')
+        && !value.Contains('\\')
+        && !(value.Length >= 2 && char.IsAsciiLetter(value[0]) && value[1] == ':')
+        && value.All(character => !char.IsControl(character) && char.GetUnicodeCategory(character) != System.Globalization.UnicodeCategory.Format);
 
     private static bool TryRevision(JsonElement frame, string name, out long value) =>
         TryInteger(frame, name, out value) && value is >= 0 and <= PhotonCadProjectContract.MaximumSafeInteger;
