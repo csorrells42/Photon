@@ -1,0 +1,4 @@
+# build123d installs cadquery-ocp-novtk, which overwrites the same native OCP
+# module as the VTK-enabled package. Reinstall the exact VTK wheel last.
+cadquery-ocp==7.9.3.1.1 \
+    --hash=sha256:1a876fe9f43083a23bc8154d2387599e03c9ea5268bbd954200f63fab391bd58

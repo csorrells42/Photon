@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photon.local/schemas/runtime/image-lock-v1.json",
+  "title": "Photon verified runtime image generation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId", "protocolVersion", "generationId", "verifiedAtUtc", "imageTag",
+    "imageId", "sourceCommit", "sourceRemote", "sourceDigest", "dockerfileSha256",
+    "sourceManifestSha256", "labels", "probe"
+  ],
+  "properties": {
+    "schemaId": { "const": "photon.runtime.image-lock/v1" },
+    "protocolVersion": { "const": 1 },
+    "generationId": { "type": "string", "pattern": "^[a-f0-9]{16}-[a-f0-9]{12}$" },
+    "verifiedAtUtc": { "type": "string", "format": "date-time" },
+    "imageTag": { "type": "string", "pattern": "^[a-z0-9._/-]+:(dev|release)-[a-f0-9]{12}-[a-f0-9]{16}$" },
+    "imageId": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sourceRemote": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "sourceDigest": { "$ref": "#/$defs/sha256" },
+    "dockerfileSha256": { "$ref": "#/$defs/sha256" },
+    "sourceManifestSha256": { "$ref": "#/$defs/sha256" },
+    "labels": { "type": "object", "minProperties": 8 },
+    "probe": { "type": "object" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

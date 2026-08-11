@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photon.local/schemas/runtime/source-lock-v1.json",
+  "title": "Photon full-source release lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaId", "protocolVersion", "sourceCommit", "sourceRemote",
+    "sourceDigest", "dockerfileSha256", "sourceManifestSha256",
+    "mem0Version", "qdrantClientVersion"
+  ],
+  "properties": {
+    "schemaId": { "const": "photon.runtime.source-lock/v1" },
+    "protocolVersion": { "const": 1 },
+    "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sourceRemote": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "sourceDigest": { "$ref": "#/$defs/sha256" },
+    "dockerfileSha256": { "$ref": "#/$defs/sha256" },
+    "sourceManifestSha256": { "$ref": "#/$defs/sha256" },
+    "mem0Version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "qdrantClientVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

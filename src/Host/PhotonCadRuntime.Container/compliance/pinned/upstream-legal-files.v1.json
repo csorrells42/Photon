@@ -1,0 +1,13 @@
+{
+  "schema": "photon.cad.upstream-legal-files/v1",
+  "entries": [
+    { "id": "geometry-build123d-mcp-license", "role": "geometry", "repository": "https://github.com/pzfreo/build123d-mcp", "revision": "8fb7cefb28daa7f9f68b7e653244256f09b22b1f", "path": "LICENSE", "resolutionStatus": "pending-artifact", "sha256": null },
+    { "id": "geometry-bd-warehouse-license", "role": "geometry", "repository": "pypi:bd-warehouse", "revision": "0.2.0", "path": "LICENSE", "resolutionStatus": "pending-artifact", "sha256": null },
+    { "id": "geometry-ocp-kernel-legal-coverage", "role": "geometry", "repository": "pypi:cadquery-ocp-novtk", "revision": "7.9.3.1", "path": null, "resolutionStatus": "unresolved", "sha256": null },
+    { "id": "assembly-partcad-license", "role": "assembly", "repository": "https://github.com/partcad/partcad", "revision": "b77c2c08f4a63b97070fcaf9e26bc09f34f95037", "path": "LICENSE", "resolutionStatus": "pending-artifact", "sha256": null },
+    { "id": "assembly-partcad-modification-notice", "role": "assembly", "repository": "https://github.com/partcad/partcad", "revision": "b77c2c08f4a63b97070fcaf9e26bc09f34f95037", "path": "PHOTON-MODIFICATIONS.txt", "resolutionStatus": "unresolved", "sha256": null },
+    { "id": "assembly-ocp-kernel-legal-coverage", "role": "assembly", "repository": "pypi:cadquery-ocp", "revision": "7.9.3.1.1", "path": "cadquery_ocp/LICENSE", "resolutionStatus": "pending-kernel-review", "sha256": null },
+    { "id": "geometry-debian-corresponding-source", "role": "geometry", "repository": "debian:bookworm", "revision": "exact-installed-source-versions-required", "path": "geometry/debian-source-offer.json", "resolutionStatus": "unresolved", "sha256": null },
+    { "id": "assembly-debian-corresponding-source", "role": "assembly", "repository": "debian:bookworm", "revision": "exact-installed-source-versions-required", "path": "assembly/debian-source-offer.json", "resolutionStatus": "unresolved", "sha256": null }
+  ]
+}

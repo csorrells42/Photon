@@ -1,0 +1,7 @@
+export { AgentPanelRegistry } from './AgentPanelRegistry'
+export { AgentPanelFactoryCatalog, createAgentPanelDockRegistrations } from './AgentPanelFactoryCatalog'
+export type { AgentPanelFactoryResolution } from './AgentPanelFactoryCatalog'
+export { createDeterministicAgentPanelFixtures, DETERMINISTIC_AGENT_PANEL_FIXTURES } from './deterministicFixtures'
+export { serializeAgentPanelRegistry, parseAgentPanelRegistry, createAgentPanelRegistryFromSerialized } from './registryPersistence'
+export { validateAgentPanelDescriptor, validateAgentPanelRegistrySnapshot, AGENT_PANEL_REGISTRY_LIMITS } from './registryValidation'
+export * from './contracts'

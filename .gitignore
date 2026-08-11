@@ -1,0 +1,73 @@
+# Local credentials and machine-bound state
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+*.pem
+*.ppk
+auth.json
+credentials.json
+secrets.json
+vault/
+
+# Runtime data, logs, process identity, and local indexes
+data/
+logs/
+workspace/
+.serena/
+!remote-install/.serena/
+!remote-install/.serena/project.yml
+*.pid
+*.nonce
+installer-failure.log
+runtime/runtime-image.env
+runtime/runtime-image.lock.json
+runtime/runtime-image.previous.lock.json
+# Receipt-bound CAD images are local engineering inputs, not source or
+# redistributable release content. The tracked installer consumes them only
+# when explicitly supplied and verified against its immutable lock.
+runtime-assets/photon-cad/
+
+# JavaScript dependencies, caches, and builds
+node_modules/
+.pnpm-store/
+.npm/
+.cache/
+packages/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# .NET and IDE build state
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Generated release/install artifacts
+artifacts/
+outputs/
+debuggers/
+*.zip
+*.zip.sha256
+remote-install/client/
+remote-install/runtime/runtime-image.env
+remote-install/runtime/runtime-image.lock.json
+remote-install/runtime/runtime-image.previous.lock.json
+
+# Operating-system noise
+Thumbs.db
+Desktop.ini
+.DS_Store

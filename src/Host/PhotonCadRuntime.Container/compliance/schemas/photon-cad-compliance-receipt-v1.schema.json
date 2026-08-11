@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photon.local/schemas/photon-cad-compliance-receipt-v1.schema.json",
+  "title": "Photon CAD container compliance receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "createdAtUtc",
+    "platform",
+    "scanner",
+    "policy",
+    "maps",
+    "bundles",
+    "status",
+    "blockers"
+  ],
+  "properties": {
+    "schema": { "const": "photon.cad.compliance-receipt/v1" },
+    "createdAtUtc": { "type": "string", "format": "date-time" },
+    "platform": { "const": "linux/amd64" },
+    "scanner": { "$ref": "#/$defs/scanner" },
+    "policy": { "$ref": "#/$defs/artifact" },
+    "maps": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pythonLicenses", "upstreamLegalFiles", "receiptSchema"],
+      "properties": {
+        "pythonLicenses": { "$ref": "#/$defs/artifact" },
+        "upstreamLegalFiles": { "$ref": "#/$defs/artifact" },
+        "receiptSchema": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "bundles": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/bundle" }
+    },
+    "status": { "const": "pass" },
+    "blockers": { "type": "array", "maxItems": 0 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "byteLength"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "byteLength": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "scanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "digest", "buildxVersion"],
+      "properties": {
+        "uri": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" },
+        "buildxVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "packageCount", "directCount", "transitiveCount", "residualCount"],
+      "properties": {
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "packageCount": { "type": "integer", "minimum": 1 },
+        "directCount": { "type": "integer", "minimum": 1 },
+        "transitiveCount": { "type": "integer", "minimum": 0 },
+        "residualCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "tag", "image", "source", "baseImage", "attestations", "inventories", "legal", "status", "blockers"],
+      "properties": {
+        "role": { "enum": ["geometry", "assembly"] },
+        "tag": { "type": "string", "minLength": 1 },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["indexDigest", "platformManifestDigest", "configDigest", "attestationManifestDigest", "archive"],
+          "properties": {
+            "indexDigest": { "$ref": "#/$defs/digest" },
+            "platformManifestDigest": { "$ref": "#/$defs/digest" },
+            "configDigest": { "$ref": "#/$defs/digest" },
+            "attestationManifestDigest": { "$ref": "#/$defs/digest" },
+            "archive": { "$ref": "#/$defs/artifact" }
+          }
+        },
+        "source": { "type": "object" },
+        "baseImage": { "type": "object" },
+        "attestations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["imageIndex", "imageManifest", "attestationManifest", "sbom", "provenance"],
+          "properties": {
+            "imageIndex": { "$ref": "#/$defs/artifact" },
+            "imageManifest": { "$ref": "#/$defs/artifact" },
+            "attestationManifest": { "$ref": "#/$defs/artifact" },
+            "sbom": { "type": "object" },
+            "provenance": { "type": "object" }
+          }
+        },
+        "inventories": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["python", "debian"],
+          "properties": {
+            "python": { "$ref": "#/$defs/inventory" },
+            "debian": { "$ref": "#/$defs/inventory" }
+          }
+        },
+        "legal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["manifest", "sourceOffer", "thirdPartyNotices", "packageCount", "noticeCount", "files"],
+          "properties": {
+            "manifest": { "$ref": "#/$defs/artifact" },
+            "sourceOffer": { "$ref": "#/$defs/artifact" },
+            "thirdPartyNotices": { "$ref": "#/$defs/artifact" },
+            "packageCount": { "type": "integer", "minimum": 1 },
+            "noticeCount": { "type": "integer", "minimum": 0 },
+            "files": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/artifact" } }
+          }
+        },
+        "status": { "const": "pass" },
+        "blockers": { "type": "array", "maxItems": 0 }
+      }
+    }
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Hermes: Launch",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Launch-Hermes.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Hermes: Check",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Test-Hermes.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Hermes: Shutdown",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Shutdown-Hermes.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Hermes: Update (confirmed, rollback protected)",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Update-Hermes.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Hermes: Docker status",
+      "type": "process",
+      "command": "docker",
+      "args": ["compose", "ps"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Frontend: Dev",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Invoke-HermesFrontend.ps1",
+        "-Action",
+        "dev"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Frontend: Test",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Invoke-HermesFrontend.ps1",
+        "-Action",
+        "test"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Frontend: Build",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\Invoke-HermesFrontend.ps1",
+        "-Action",
+        "build"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Scripts: Installer smoke test",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tests\\Install-Hermes.Smoke.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Scripts: Shutdown smoke test",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tests\\Shutdown-Hermes.Smoke.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Scripts: Update smoke test",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tests\\Update-Hermes.Smoke.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Scripts: NetCoreDbg provisioning smoke test",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\tests\\NetCoreDbg-Provisioning.Smoke.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Hermes: Verify offline",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Frontend: Test",
+        "Frontend: Build",
+        "Scripts: Installer smoke test",
+        "Scripts: Shutdown smoke test",
+        "Scripts: Update smoke test",
+        "Scripts: NetCoreDbg provisioning smoke test"
+      ],
+      "problemMatcher": [],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Installer: Build portable ZIP",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\remote-install\\Build-Install-Zip.ps1"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

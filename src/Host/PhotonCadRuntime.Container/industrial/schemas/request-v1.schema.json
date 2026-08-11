@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "photon.cad.industrial.request/v1",
+  "title": "Photon CAD industrial container request",
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "catalog" }
+      },
+      "required": ["schema", "operation"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "createPrimitive" },
+        "primitive": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "const": "box" },
+                "dimensions": {
+                  "type": "object",
+                  "properties": {
+                    "lengthMm": { "$ref": "#/$defs/positiveDimension" },
+                    "widthMm": { "$ref": "#/$defs/positiveDimension" },
+                    "heightMm": { "$ref": "#/$defs/positiveDimension" }
+                  },
+                  "required": ["lengthMm", "widthMm", "heightMm"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["kind", "dimensions"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "const": "cylinder" },
+                "dimensions": {
+                  "type": "object",
+                  "properties": {
+                    "radiusMm": { "$ref": "#/$defs/positiveDimension" },
+                    "heightMm": { "$ref": "#/$defs/positiveDimension" }
+                  },
+                  "required": ["radiusMm", "heightMm"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["kind", "dimensions"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": ["schema", "operation", "primitive"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "createCatalogItem" },
+        "catalogDigest": { "$ref": "#/$defs/digest" },
+        "itemId": { "type": "string", "pattern": "^bdw_[0-9a-f]{48}$" },
+        "parameters": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "type": ["string", "number", "integer", "boolean", "null"]
+          }
+        }
+      },
+      "required": ["schema", "operation", "catalogDigest", "itemId", "parameters"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "createPreview" },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/source" }
+        },
+        "occurrences": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/occurrence" }
+        },
+        "tessellation": {
+          "type": "object",
+          "properties": {
+            "linearToleranceMm": { "type": "number", "minimum": 0.01, "maximum": 10 },
+            "angularToleranceRad": { "type": "number", "minimum": 0.01, "maximum": 1 }
+          },
+          "required": ["linearToleranceMm", "angularToleranceRad"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema", "operation", "sources", "occurrences"],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$" },
+    "slot": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+    "positiveDimension": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 },
+    "source": {
+      "type": "object",
+      "properties": {
+        "sourcePartId": { "$ref": "#/$defs/identifier" },
+        "inputSlot": { "$ref": "#/$defs/slot" },
+        "expectedDigest": { "$ref": "#/$defs/digest" }
+      },
+      "required": ["sourcePartId", "inputSlot", "expectedDigest"],
+      "additionalProperties": false
+    },
+    "occurrence": {
+      "type": "object",
+      "properties": {
+        "entityId": { "$ref": "#/$defs/identifier" },
+        "sourcePartId": { "$ref": "#/$defs/identifier" },
+        "parentEntityId": {
+          "oneOf": [
+            { "$ref": "#/$defs/identifier" },
+            { "type": "null" }
+          ]
+        },
+        "transform": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": { "type": "number", "minimum": -1000000000, "maximum": 1000000000 }
+        }
+      },
+      "required": ["entityId", "sourcePartId", "parentEntityId", "transform"],
+      "additionalProperties": false
+    }
+  }
+}

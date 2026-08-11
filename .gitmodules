@@ -1,0 +1,4 @@
+[submodule "source"]
+	path = source
+	url = https://github.com/csorrells42/Photon.git
+	branch = photon-hermes

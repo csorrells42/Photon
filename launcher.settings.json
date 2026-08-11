@@ -1,0 +1,7 @@
+{
+  "ClientExecutable": "artifacts\\desktop\\win-x64\\HermesDesktop.exe",
+  "ClientWorkingDirectory": "artifacts\\desktop\\win-x64",
+  "WorkbenchUrl": "http://127.0.0.1:4173",
+  "NodeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+  "WorkspacePath": "C:\\Users\\clsor\\OneDrive\\Desktop\\Hermes"
+}

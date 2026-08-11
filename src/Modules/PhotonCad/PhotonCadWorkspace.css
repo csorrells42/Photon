@@ -1,0 +1,880 @@
+.photon-cad-workspace {
+  grid-area: editor;
+  min-width: 0;
+  min-height: 0;
+  container-type: inline-size;
+  display: grid;
+  grid-template-rows: 32px 34px auto 45px minmax(0, 1fr) 24px;
+  overflow: hidden;
+  border-right: 1px solid var(--line, rgba(255, 255, 255, .075));
+  background:
+    radial-gradient(circle at 52% 30%, rgba(67, 201, 171, .045), transparent 34%),
+    #0a0d14;
+  color: #d8deea;
+  font: 10px/1.4 "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+}
+
+.photon-cad-workspace button,
+.photon-cad-workspace input,
+.photon-cad-workspace select,
+.photon-cad-workspace textarea {
+  font: inherit;
+}
+
+.photon-cad-workspace button {
+  color: inherit;
+}
+
+.photon-cad-workspace button:focus-visible,
+.photon-cad-workspace input:focus-visible,
+.photon-cad-workspace select:focus-visible,
+.photon-cad-workspace textarea:focus-visible {
+  outline: 1px solid #a38ff3;
+  outline-offset: 1px;
+}
+
+.pcad-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.pcad-document-tabs {
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line, rgba(255, 255, 255, .075));
+  background: #090c13;
+}
+
+.pcad-document-tab {
+  min-width: 150px;
+  max-width: 270px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  border: 0;
+  border-top: 1px solid #8064ff;
+  border-right: 1px solid var(--line, rgba(255, 255, 255, .075));
+  background: #0e111a;
+  padding: 0 10px;
+  color: #d9dee8;
+  text-align: left;
+}
+
+.pcad-document-tab > svg {
+  flex: 0 0 auto;
+  color: #63cbb4;
+}
+
+.pcad-document-tab > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcad-document-tab > i {
+  margin-left: auto;
+  color: #c6a75e;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.pcad-document-spacer,
+.pcad-status-spacer {
+  min-width: 0;
+  flex: 1;
+}
+
+.pcad-runtime-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  color: #7d8799;
+  font-size: 8px;
+}
+
+.pcad-runtime-chip.available { color: #67c8ad; }
+.pcad-runtime-chip.error,
+.pcad-runtime-chip.unavailable { color: #d28b98; }
+.pcad-runtime-chip.checking { color: #c7a060; }
+
+.pcad-context-bar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255, 255, 255, .04);
+  padding: 0 10px;
+  background: rgba(13, 16, 25, .88);
+}
+
+.pcad-breadcrumbs,
+.pcad-document-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pcad-breadcrumbs {
+  flex: 1;
+  overflow: hidden;
+  color: #657084;
+}
+
+.pcad-breadcrumbs > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #afb7c6;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pcad-breadcrumbs > svg { flex: 0 0 auto; color: #4f596a; }
+
+.pcad-document-meta {
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.pcad-document-meta > span {
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .025);
+  padding: 2px 6px;
+  color: #697487;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.pcad-document-meta > span.scratch {
+  border-color: rgba(219, 163, 76, .18);
+  background: rgba(130, 84, 23, .08);
+  color: #c49d61;
+}
+
+.pcad-fixture-banner {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid rgba(222, 166, 78, .14);
+  background: rgba(112, 75, 21, .08);
+  padding: 5px 10px;
+  color: #a98e68;
+  font-size: 8px;
+}
+
+.pcad-fixture-banner > svg { flex: 0 0 auto; color: #d4a453; }
+.pcad-fixture-banner > strong { color: #d0b482; }
+
+.pcad-workflow-tabs {
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--line, rgba(255, 255, 255, .075));
+  background: #0c0f17;
+  scrollbar-width: thin;
+}
+
+.pcad-workflow-tabs > button {
+  min-width: 110px;
+  flex: 1 0 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: 5px 8px 4px;
+  color: #697386;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pcad-workflow-tabs > button:hover { background: rgba(255, 255, 255, .025); color: #aab3c2; }
+.pcad-workflow-tabs > button.active { border-bottom-color: #8064ff; background: rgba(121, 91, 227, .07); color: #b8acf0; }
+.pcad-workflow-tabs > button > svg { flex: 0 0 auto; }
+.pcad-workflow-tabs > button > span { min-width: 0; display: flex; flex-direction: column; }
+.pcad-workflow-tabs > button strong { color: #b7bfcc; font-size: 9px; font-weight: 600; }
+.pcad-workflow-tabs > button small { overflow: hidden; text-overflow: ellipsis; color: #505b6e; font-size: 6.5px; white-space: nowrap; }
+.pcad-workflow-tabs > button.active small { color: #716899; }
+
+.pcad-stage {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(155px, .72fr) minmax(230px, 1.5fr) minmax(185px, .86fr);
+  grid-template-areas: "context viewer inspector";
+  overflow: hidden;
+}
+
+.pcad-context-pane,
+.pcad-inspector-pane,
+.pcad-preview-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pcad-context-pane,
+.pcad-inspector-pane {
+  display: flex;
+  flex-direction: column;
+  background: rgba(13, 16, 24, .96);
+}
+
+.pcad-context-pane { grid-area: context; border-right: 1px solid var(--line, rgba(255, 255, 255, .075)); }
+.pcad-inspector-pane { grid-area: inspector; border-left: 1px solid var(--line, rgba(255, 255, 255, .075)); }
+
+.pcad-pane-header {
+  min-height: 35px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid rgba(255, 255, 255, .055);
+  padding: 0 9px;
+}
+
+.pcad-pane-header > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pcad-pane-header > span > svg { flex: 0 0 auto; color: #8f7ce3; }
+.pcad-pane-header strong { overflow: hidden; text-overflow: ellipsis; color: #b7bfcc; font-size: 8.5px; font-weight: 600; white-space: nowrap; }
+.pcad-pane-header small { flex: 0 0 auto; color: #596477; font-size: 7px; }
+
+.pcad-search {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin: 7px 7px 4px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 6px;
+  background: #090c13;
+  padding: 0 7px;
+  color: #596477;
+}
+
+.pcad-search:focus-within { border-color: rgba(140, 114, 255, .4); box-shadow: 0 0 0 2px rgba(120, 90, 225, .07); }
+.pcad-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: #c5ccd8; font-size: 8px; }
+.pcad-search input::placeholder { color: #4f596b; }
+
+.pcad-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin: 3px 7px 5px;
+  border: 1px solid rgba(85, 192, 163, .1);
+  border-radius: 6px;
+  background: rgba(47, 129, 108, .05);
+  padding: 6px 7px;
+}
+
+.pcad-coverage strong { color: #8fcab9; font-size: 7.5px; }
+.pcad-coverage span { color: #718b85; font-size: 7px; }
+.pcad-coverage small { color: #536b67; font-size: 6.5px; line-height: 1.35; }
+
+.pcad-catalog-list,
+.pcad-model-tree,
+.pcad-inspector-scroll,
+.pcad-table-scroll {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #32294f transparent;
+}
+
+.pcad-catalog-list { flex: 1; padding: 2px 5px 8px; }
+
+.pcad-catalog-list > button {
+  width: 100%;
+  min-height: 47px;
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  padding: 5px 6px;
+  color: #8a94a5;
+  text-align: left;
+}
+
+.pcad-catalog-list > button:hover { background: rgba(255, 255, 255, .03); }
+.pcad-catalog-list > button.selected { border-color: rgba(139, 112, 237, .2); background: linear-gradient(90deg, rgba(113, 84, 217, .13), rgba(43, 137, 115, .04)); }
+.pcad-capability-icon { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 7px; background: rgba(117, 89, 225, .1); color: #9583dd; }
+.pcad-catalog-list > button > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pcad-catalog-list > button strong { overflow: hidden; text-overflow: ellipsis; color: #b7bfcd; font-size: 8px; font-weight: 500; white-space: nowrap; }
+.pcad-catalog-list > button small { overflow: hidden; text-overflow: ellipsis; color: #596578; font-size: 6.5px; text-transform: capitalize; white-space: nowrap; }
+.pcad-catalog-list > button > i { border-radius: 8px; background: rgba(209, 156, 72, .09); padding: 2px 4px; color: #a78450; font-size: 5.5px; font-style: normal; }
+
+.pcad-model-tree { flex: 1; padding: 4px 4px 8px; }
+.pcad-model-tree > button {
+  --pcad-depth: 0;
+  width: 100%;
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 3px 5px 3px calc(5px + var(--pcad-depth) * 11px);
+  color: #7c8799;
+  text-align: left;
+}
+
+.pcad-model-tree > button:hover { background: rgba(255, 255, 255, .03); }
+.pcad-model-tree > button.selected { background: rgba(117, 89, 225, .12); color: #a794ed; }
+.pcad-model-tree > button > span:first-child { display: grid; place-items: center; }
+.pcad-model-tree > button > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }
+.pcad-model-tree strong { overflow: hidden; text-overflow: ellipsis; color: #abb4c3; font-size: 8px; font-weight: 500; white-space: nowrap; }
+.pcad-model-tree small { color: #535f72; font-size: 6px; text-transform: capitalize; }
+.pcad-model-tree i { color: #a58154; font-size: 6px; font-style: normal; }
+
+.pcad-pane-note {
+  flex: 0 0 auto;
+  margin: 0;
+  border-top: 1px solid rgba(255, 255, 255, .045);
+  padding: 7px 8px;
+  color: #536073;
+  font-size: 6.5px;
+  line-height: 1.4;
+}
+
+.pcad-preview-pane {
+  grid-area: viewer;
+  display: grid;
+  grid-template-rows: 35px minmax(0, 1fr) auto;
+  background: #080b11;
+}
+
+.pcad-preview-pane > header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, .045);
+  padding: 0 9px;
+  background: #0b0e15;
+}
+
+.pcad-preview-pane > header > span,
+.pcad-preview-pane > header > div { display: flex; align-items: center; gap: 6px; }
+.pcad-preview-pane > header > span > svg { color: #66c7b0; }
+.pcad-preview-pane > header strong { color: #aeb7c5; font-size: 8.5px; }
+.pcad-preview-pane > header > div span { border-radius: 8px; background: rgba(255, 255, 255, .035); padding: 2px 5px; color: #5f6a7d; font-size: 6.5px; }
+
+.pcad-preview-boundary {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background-color: #080b11;
+  background-image:
+    linear-gradient(rgba(113, 126, 151, .045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(113, 126, 151, .045) 1px, transparent 1px),
+    radial-gradient(circle at 50% 48%, rgba(69, 187, 158, .06), transparent 42%);
+  background-size: 24px 24px, 24px 24px, auto;
+}
+
+.pcad-preview-boundary::before,
+.pcad-preview-boundary::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.pcad-preview-boundary::before { inset: 10px; border: 1px solid rgba(255, 255, 255, .035); border-radius: 8px; }
+.pcad-preview-boundary::after { left: 50%; top: 14%; bottom: 14%; border-left: 1px dashed rgba(98, 197, 173, .08); }
+
+.pcad-preview-empty {
+  position: relative;
+  z-index: 1;
+  width: min(320px, calc(100% - 34px));
+  height: 100%;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #536073;
+  text-align: center;
+}
+
+.pcad-preview-orbit {
+  position: relative;
+  width: 78px;
+  height: 78px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(103, 203, 178, .15);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(88, 193, 166, .09), transparent 65%);
+  color: #5abca4;
+}
+
+.pcad-preview-orbit::before,
+.pcad-preview-orbit::after {
+  content: "";
+  position: absolute;
+  inset: 13px -8px;
+  border: 1px solid rgba(135, 108, 233, .13);
+  border-radius: 50%;
+  transform: rotate(24deg);
+}
+
+.pcad-preview-orbit::after { transform: rotate(-24deg); }
+.pcad-preview-empty strong { color: #9ba6b7; font-size: 10px; }
+.pcad-preview-empty p { max-width: 270px; margin: 0; color: #596579; font-size: 7.5px; line-height: 1.5; }
+
+.pcad-preview-pane > footer {
+  min-height: 31px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, .045);
+  background: #0b0e15;
+  padding: 7px 9px;
+  color: #647084;
+  font-size: 6.5px;
+  line-height: 1.4;
+}
+
+.pcad-preview-pane > footer > svg { flex: 0 0 auto; color: #be9452; }
+.pcad-preview-pane > footer strong { color: #8893a4; font-weight: 500; }
+
+.pcad-inspector-scroll { flex: 1; padding: 7px; }
+
+.pcad-capability-summary,
+.pcad-provenance,
+.pcad-verification-result,
+.pcad-trust-note,
+.pcad-release-trust,
+.pcad-step-authority,
+.pcad-review-result {
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .018);
+}
+
+.pcad-capability-summary { padding: 8px; }
+.pcad-capability-summary > div { display: flex; align-items: center; gap: 5px; }
+.pcad-capability-summary > div strong { color: #c1c8d4; font-size: 9px; }
+.pcad-capability-summary > div span { border-radius: 8px; background: rgba(199, 143, 59, .1); padding: 2px 5px; color: #b08b50; font-size: 6px; }
+.pcad-capability-summary > p { margin: 5px 0 7px; color: #6c788a; font-size: 7px; line-height: 1.45; }
+.pcad-capability-summary dl,
+.pcad-provenance dl { margin: 0; }
+.pcad-capability-summary dl > div,
+.pcad-provenance dl > div { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.pcad-capability-summary dt,
+.pcad-provenance dt { color: #545f72; }
+.pcad-capability-summary dd,
+.pcad-provenance dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; color: #8f99a9; text-transform: capitalize; white-space: nowrap; }
+
+.pcad-parameter-list { display: flex; flex-direction: column; gap: 8px; margin-top: 9px; }
+.pcad-parameter { display: flex; flex-direction: column; gap: 4px; color: #707b8d; }
+.pcad-parameter > span { display: flex; align-items: center; gap: 5px; }
+.pcad-parameter > span strong { color: #9da7b7; font-size: 7.5px; font-weight: 500; }
+.pcad-parameter > span i { margin-left: auto; color: #4e596b; font-size: 6px; font-style: normal; }
+.pcad-parameter > small { color: #525e70; font-size: 6.5px; line-height: 1.35; }
+.pcad-parameter > input:not([type="checkbox"]),
+.pcad-parameter > select,
+.pcad-number-input,
+.pcad-vector-input input {
+  min-width: 0;
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 6px;
+  outline: 0;
+  background: #090c13;
+  color: #c4cbd7;
+}
+
+.pcad-parameter > input:not([type="checkbox"]),
+.pcad-parameter > select { padding: 0 7px; }
+.pcad-parameter > select[multiple] { min-height: 68px; padding: 4px; }
+.pcad-parameter.boolean { display: grid; grid-template-columns: minmax(0, 1fr) 18px; align-items: center; }
+.pcad-parameter.boolean > input { grid-column: 2; grid-row: 1; accent-color: #8064ff; }
+.pcad-parameter.boolean > span { grid-column: 1; grid-row: 1; }
+.pcad-parameter.boolean > small { grid-column: 1 / -1; }
+.pcad-number-input { display: flex; align-items: center; overflow: hidden; }
+.pcad-number-input input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; padding: 0 7px; color: #c4cbd7; }
+.pcad-number-input span { flex: 0 0 auto; border-left: 1px solid rgba(255, 255, 255, .06); padding: 0 7px; color: #657184; font-size: 6.5px; }
+.pcad-vector-input { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.pcad-vector-input label { position: relative; min-width: 0; }
+.pcad-vector-input label span { position: absolute; left: 6px; top: 8px; color: #5a6577; font-size: 6px; }
+.pcad-vector-input input { padding: 0 5px 0 17px; }
+.pcad-no-parameters { margin: 0; border: 1px dashed rgba(255, 255, 255, .07); border-radius: 6px; padding: 8px; color: #5c687a; font-size: 7px; }
+
+.pcad-provenance { margin-top: 9px; padding: 7px; }
+.pcad-provenance > header { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; color: #64c0a9; }
+.pcad-provenance > header strong { color: #93aaa5; font-size: 7.5px; }
+.pcad-provenance > p { margin: 5px 0 0; border-top: 1px solid rgba(255, 255, 255, .04); padding-top: 5px; color: #505d6f; font-size: 6.2px; line-height: 1.4; }
+.pcad-provenance dl > div { font-size: 6.5px; }
+.pcad-provenance dd { max-width: 62%; font-family: "Cascadia Code", Consolas, monospace; text-transform: none; }
+
+.pcad-pane-actions {
+  flex: 0 0 auto;
+  border-top: 1px solid rgba(255, 255, 255, .055);
+  padding: 7px;
+}
+
+.pcad-pane-actions > p { margin: 0 0 6px; color: #596678; font-size: 6.5px; line-height: 1.4; }
+.pcad-pane-actions > button,
+.pcad-destination > button {
+  min-height: 29px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(117, 207, 184, .2);
+  border-radius: 6px;
+  background: linear-gradient(145deg, rgba(54, 148, 125, .14), rgba(104, 76, 201, .12));
+  padding: 0 8px;
+  color: #9bd7c8;
+  font-size: 7px;
+}
+
+.pcad-pane-actions > button { width: 100%; }
+.pcad-pane-actions > button:hover:not(:disabled),
+.pcad-destination > button:hover:not(:disabled) { border-color: rgba(117, 207, 184, .35); background: linear-gradient(145deg, rgba(54, 148, 125, .21), rgba(104, 76, 201, .18)); }
+.pcad-pane-actions > button:disabled,
+.pcad-destination > button:disabled { cursor: not-allowed; opacity: .4; }
+.pcad-pane-actions.split { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.pcad-pane-actions.split > button.primary { border-color: rgba(139, 112, 237, .3); background: rgba(112, 83, 211, .17); color: #c0b2f5; }
+
+.pcad-bom-summary {
+  min-height: 39px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, .045);
+  padding: 0 9px;
+}
+
+.pcad-bom-summary strong { color: #aeb7c5; font-size: 8px; }
+.pcad-bom-summary span { color: #596578; font-size: 6.5px; }
+.pcad-table-scroll { flex: 1; }
+.pcad-bom-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.pcad-bom-table th,
+.pcad-bom-table td { overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid rgba(255, 255, 255, .04); padding: 6px 7px; color: #717d8f; font-size: 6.5px; text-align: left; white-space: nowrap; }
+.pcad-bom-table thead th { position: sticky; top: 0; z-index: 1; background: #0c0f17; color: #596578; font-weight: 500; }
+.pcad-bom-table tbody th { color: #a4adbb; font-family: "Cascadia Code", Consolas, monospace; font-weight: 500; }
+.pcad-bom-table th:nth-child(1) { width: 31%; }
+.pcad-bom-table th:nth-child(2) { width: 43%; }
+.pcad-bom-table th:nth-child(3) { width: 26%; }
+
+.pcad-check-list,
+.pcad-format-list { min-height: 0; margin: 0; overflow: auto; border: 0; padding: 5px; }
+.pcad-check-list { flex: 1; }
+.pcad-check-list > label,
+.pcad-format-list > label {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  border-radius: 6px;
+  padding: 5px;
+}
+
+.pcad-check-list > label:hover,
+.pcad-format-list > label:hover { background: rgba(255, 255, 255, .025); }
+.pcad-check-list input,
+.pcad-format-list input { accent-color: #8064ff; }
+.pcad-check-list label > span,
+.pcad-format-list label > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pcad-check-list strong,
+.pcad-format-list strong { color: #aab3c1; font-size: 7.5px; font-weight: 500; }
+.pcad-check-list small,
+.pcad-format-list small { color: #566275; font-size: 6.3px; line-height: 1.35; }
+
+.pcad-verification-result { display: grid; grid-template-columns: 31px minmax(0, 1fr); align-items: start; gap: 7px; padding: 8px; }
+.pcad-verification-result > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: rgba(209, 154, 69, .09); color: #d0a255; }
+.pcad-verification-result.passed > span { background: rgba(60, 155, 129, .1); color: #61c6a9; }
+.pcad-verification-result.failed > span,
+.pcad-verification-result.stale > span { background: rgba(155, 48, 66, .09); color: #d77f8e; }
+.pcad-verification-result > div strong { color: #b8c0cc; font-size: 8.5px; }
+.pcad-verification-result > div p { margin: 3px 0 0; color: #606c7f; font-size: 6.5px; line-height: 1.4; }
+.pcad-trust-note,
+.pcad-release-trust { display: flex; align-items: flex-start; gap: 7px; margin-top: 8px; padding: 8px; }
+.pcad-trust-note > svg,
+.pcad-release-trust > svg { flex: 0 0 auto; color: #62bea8; }
+.pcad-trust-note p,
+.pcad-release-trust p { margin: 0; color: #5f6c7e; font-size: 6.5px; line-height: 1.45; }
+.pcad-trust-note strong,
+.pcad-release-trust strong { display: block; margin-bottom: 2px; color: #9ea8b7; font-size: 7.5px; }
+
+.pcad-destination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border-top: 1px solid rgba(255, 255, 255, .045);
+  padding: 7px;
+}
+
+.pcad-destination > span:first-child { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.pcad-destination strong { color: #9fa8b6; font-size: 7.5px; }
+.pcad-destination small { overflow: hidden; text-overflow: ellipsis; color: #566275; font-size: 6.5px; white-space: nowrap; }
+.pcad-destination > button { min-height: 25px; flex: 0 0 auto; }
+.pcad-unavailable-action { color: #505b6d; font-size: 6px; }
+
+.pcad-release-trust { margin: 0; }
+.pcad-step-authority { margin-top: 8px; padding: 8px; border-color: rgba(88, 194, 166, .12); background: rgba(43, 129, 107, .045); }
+.pcad-step-authority strong { color: #90c6b8; font-size: 8px; }
+.pcad-step-authority p { margin: 3px 0 0; color: #5d776f; font-size: 6.5px; line-height: 1.45; }
+.pcad-review-result { margin-top: 8px; overflow: hidden; }
+.pcad-review-result > header { min-height: 31px; display: flex; align-items: center; justify-content: space-between; gap: 6px; border-bottom: 1px solid rgba(255, 255, 255, .045); padding: 0 7px; }
+.pcad-review-result > header strong { color: #aeb7c5; font-size: 7.5px; }
+.pcad-review-result > header span { color: #596578; font-size: 6.5px; }
+.pcad-review-result > p { margin: 0; padding: 7px; color: #697588; font-size: 6.5px; line-height: 1.4; }
+.pcad-review-result > ul { max-height: 150px; margin: 0; overflow: auto; border-top: 1px solid rgba(255, 255, 255, .04); padding: 0; list-style: none; }
+.pcad-review-result > ul li { min-height: 28px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid rgba(255, 255, 255, .035); padding: 4px 7px; }
+.pcad-review-result > ul span { flex: 0 0 auto; color: #6f7b8d; font-size: 6px; }
+.pcad-review-result > ul code { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #9aa4b3; font: 6.5px "Cascadia Code", Consolas, monospace; white-space: nowrap; }
+.pcad-review-result > small { display: block; padding: 6px 7px; color: #806f55; font-size: 6px; }
+.pcad-release-message { border: 1px solid rgba(216, 101, 120, .14); border-radius: 6px; background: rgba(125, 39, 55, .07); padding: 7px; color: #c48491; font-size: 6.5px; }
+
+.pcad-issues { margin-top: 8px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .055); border-radius: 7px; }
+.pcad-issues > header { min-height: 29px; display: flex; align-items: center; gap: 5px; border-bottom: 1px solid rgba(255, 255, 255, .045); padding: 0 7px; color: #b88850; }
+.pcad-issues > header strong { color: #9ca6b5; font-size: 7px; }
+.pcad-issues > header span { margin-left: auto; color: #596477; font-size: 6px; }
+.pcad-issues article { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 5px; padding: 6px 7px; }
+.pcad-issues article + article { border-top: 1px solid rgba(255, 255, 255, .035); }
+.pcad-issues article > span { color: #718399; }
+.pcad-issues article.warning > span { color: #c99a51; }
+.pcad-issues article.error > span { color: #d37284; }
+.pcad-issues article strong { color: #9da7b6; font-size: 6.5px; }
+.pcad-issues article p { margin: 2px 0 0; color: #667285; font-size: 6.5px; line-height: 1.4; }
+.pcad-issues article small { color: #4f5b6d; font-size: 5.8px; }
+
+.pcad-empty {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 18px 12px;
+  color: #655b91;
+  text-align: center;
+}
+
+.pcad-empty.compact { min-height: 95px; }
+.pcad-empty strong { color: #9ea8b7; font-size: 8.5px; }
+.pcad-empty p { max-width: 220px; margin: 0; color: #566275; font-size: 6.8px; line-height: 1.45; }
+
+.pcad-statusbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  border-top: 1px solid rgba(126, 99, 226, .18);
+  background: #151126;
+  padding: 0 8px;
+  color: #7a8496;
+  font-size: 6.5px;
+}
+
+.pcad-statusbar > span,
+.pcad-statusbar > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcad-statusbar > strong { max-width: 45%; color: #88cdbb; font-weight: 500; }
+.pcad-statusbar > strong.error { color: #d58a98; }
+.pcad-status-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #667084; }
+.pcad-status-dot.available { background: #55c6a8; box-shadow: 0 0 6px rgba(85, 198, 168, .55); }
+.pcad-status-dot.checking { background: #d0a34f; }
+.pcad-status-dot.error,
+.pcad-status-dot.unavailable { background: #c75d72; }
+
+.pcad-release-output {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: .65fr .65fr 1.35fr;
+  gap: 3px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .055);
+  padding: 4px;
+}
+
+.pcad-release-output label {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 5px 4px;
+  color: #657184;
+  cursor: pointer;
+}
+
+.pcad-release-output label.selected { border-color: rgba(147, 127, 233, .28); background: rgba(111, 87, 210, .1); color: #b7a9ef; }
+.pcad-release-output label:focus-within { outline: 1px solid #a38ff3; outline-offset: 1px; }
+.pcad-release-output input { position: absolute; opacity: 0; pointer-events: none; }
+.pcad-release-output span { overflow: hidden; text-overflow: ellipsis; font-size: 9px; white-space: nowrap; }
+
+.pcad-commercial-editor {
+  min-height: 0;
+  overflow: auto;
+  padding: 7px;
+  scrollbar-color: #343c4b transparent;
+  scrollbar-width: thin;
+}
+
+.pcad-inline-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 0 8px;
+  border: 0;
+  padding: 0;
+}
+
+.pcad-inline-choice legend { width: 100%; margin-bottom: 3px; color: #8e98a8; font-size: 10px; font-weight: 600; }
+.pcad-inline-choice label { display: flex; align-items: center; gap: 4px; border: 1px solid rgba(255, 255, 255, .065); border-radius: 5px; padding: 4px 6px; color: #7c8798; font-size: 9px; cursor: pointer; }
+.pcad-inline-choice label:has(input:checked) { border-color: rgba(99, 203, 180, .25); background: rgba(65, 167, 145, .08); color: #9dccbf; }
+
+.pcad-form-grid,
+.pcad-adjustments { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.pcad-form-grid.compact { margin-bottom: 7px; }
+.pcad-form-grid label,
+.pcad-adjustments label,
+.pcad-textarea-field,
+.pcad-commercial-lines article > label:not(.pcad-check-inline) { min-width: 0; display: flex; flex-direction: column; gap: 3px; color: #667285; font-size: 9px; }
+.pcad-form-grid label.wide { grid-column: 1 / -1; }
+.pcad-form-grid input,
+.pcad-form-grid select,
+.pcad-form-grid textarea,
+.pcad-adjustments input,
+.pcad-textarea-field textarea,
+.pcad-commercial-lines input { min-width: 0; box-sizing: border-box; width: 100%; border: 1px solid rgba(255, 255, 255, .075); border-radius: 4px; background: #0a0d14; padding: 5px 6px; color: #b9c1ce; font-size: 10px; }
+.pcad-form-grid textarea,
+.pcad-textarea-field textarea { min-height: 48px; resize: vertical; }
+.pcad-textarea-field { margin-top: 7px; }
+
+.pcad-party { margin: 0 0 7px; border: 1px solid rgba(255, 255, 255, .055); border-radius: 6px; background: rgba(255, 255, 255, .012); }
+.pcad-party summary { padding: 6px 7px; color: #9ea8b7; font-size: 10px; font-weight: 600; cursor: pointer; }
+.pcad-party .pcad-form-grid { border-top: 1px solid rgba(255, 255, 255, .045); padding: 7px; }
+
+.pcad-commercial-lines { margin: 7px 0; }
+.pcad-commercial-lines > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; color: #99a4b4; font-size: 10px; }
+.pcad-commercial-lines > header button,
+.pcad-commercial-lines article > button { display: flex; align-items: center; gap: 3px; border: 1px solid rgba(255, 255, 255, .07); border-radius: 4px; background: rgba(255, 255, 255, .02); padding: 4px 5px; color: #798698; }
+.pcad-commercial-lines article { display: grid; grid-template-columns: minmax(95px, 1fr) minmax(54px, .5fr) minmax(75px, .75fr); gap: 5px; margin-bottom: 4px; border: 1px solid rgba(255, 255, 255, .05); border-radius: 5px; padding: 6px; }
+.pcad-commercial-lines article > div { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.pcad-commercial-lines article > div strong,
+.pcad-commercial-lines article > div small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcad-commercial-lines article > div strong { color: #aab3c1; font-size: 9px; }
+.pcad-commercial-lines article > div small { color: #596678; font-size: 8px; }
+.pcad-check-inline { display: flex; align-items: center; gap: 4px; color: #687587; font-size: 9px; }
+.pcad-commercial-lines article > button { justify-self: start; color: #b77884; }
+
+.pcad-document-preview .pcad-document-pages { min-height: 0; overflow: auto; padding: 9px; background: #080b11; }
+.pcad-document-pages > article { max-width: 760px; margin: 0 auto 12px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 7px; background: #10141d; box-shadow: 0 8px 28px rgba(0, 0, 0, .2); }
+.pcad-document-pages > article > header { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255, 255, 255, .06); padding: 6px 8px; color: #8f99a9; font-size: 9px; }
+.pcad-document-pages > article > header span { font-family: "Cascadia Code", Consolas, monospace; color: #596578; }
+.pcad-document-page { min-height: 260px; display: grid; place-items: stretch; overflow: hidden; background: #151a24; }
+.pcad-document-page > * { min-width: 0; max-width: 100%; }
+.pcad-document-pages > article > label { display: flex; align-items: center; gap: 6px; border-top: 1px solid rgba(255, 255, 255, .06); padding: 7px 8px; color: #849184; font-size: 9px; }
+.pcad-document-preview > footer { min-height: 32px; }
+
+.pcad-commercial-guard { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 6px; border: 1px solid rgba(99, 203, 180, .13); border-radius: 7px; background: rgba(52, 131, 114, .05); padding: 8px; color: #6da898; }
+.pcad-commercial-guard strong { color: #9bc4ba; font-size: 10px; }
+.pcad-commercial-guard p { margin: 2px 0 0; color: #61776f; font-size: 9px; line-height: 1.45; }
+.pcad-draft-issues { margin-top: 8px; border: 1px solid rgba(205, 157, 72, .13); border-radius: 6px; background: rgba(124, 87, 26, .05); padding: 7px; }
+.pcad-draft-issues > strong { color: #bd985c; font-size: 10px; }
+.pcad-draft-issues ul { margin: 5px 0 0; padding-left: 17px; color: #806f55; font-size: 9px; }
+.pcad-ready-note { display: flex; align-items: center; gap: 5px; margin: 8px 0 0; color: #77a99c; font-size: 9px; }
+.pcad-commercial-totals { margin-top: 8px; border: 1px solid rgba(255, 255, 255, .06); border-radius: 6px; overflow: hidden; }
+.pcad-commercial-totals > div { display: flex; justify-content: space-between; padding: 5px 7px; color: #657184; font-size: 9px; }
+.pcad-commercial-totals > div.total { border-top: 1px solid rgba(99, 203, 180, .16); background: rgba(53, 139, 120, .05); color: #9cc9be; font-size: 10px; }
+.pcad-commercial-message { border: 1px solid rgba(111, 87, 210, .13); border-radius: 6px; background: rgba(90, 70, 166, .05); padding: 7px; color: #8f82bc; font-size: 9px; line-height: 1.45; }
+.pcad-expiry { margin: 6px 0 0; color: #8d7756; font-size: 9px; }
+.pcad-commercial-actions { display: grid; grid-template-columns: 1fr; gap: 4px; border-top: 1px solid rgba(255, 255, 255, .055); padding: 6px; }
+.pcad-commercial-actions button { min-height: 27px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid rgba(255, 255, 255, .07); border-radius: 5px; background: rgba(255, 255, 255, .025); color: #929cab; font-size: 9px; }
+.pcad-commercial-actions button.primary { border-color: rgba(99, 203, 180, .18); background: rgba(53, 139, 120, .08); color: #9cc9be; }
+.pcad-commercial-actions button:disabled { opacity: .38; cursor: not-allowed; }
+.pcad-pane-note.warning { color: #9a7b4f; }
+
+/* Keep dense engineering metadata legible at the shell's supported 100% scale. */
+.photon-cad-workspace :where(small, p, dt, dd, i) { font-size: 9px !important; }
+.photon-cad-workspace strong { font-size: 10px !important; }
+.photon-cad-workspace :where(input, select, textarea, button),
+.pcad-bom-table :where(th, td),
+.pcad-statusbar,
+.pcad-preview-pane > header > div span { font-size: 10px; }
+
+.pcad-spin { animation: pcad-spin .85s linear infinite; }
+@keyframes pcad-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .pcad-spin { animation: none; }
+}
+
+@container (max-width: 760px) {
+  .pcad-stage {
+    grid-template-columns: minmax(145px, .72fr) minmax(220px, 1.28fr);
+    grid-template-rows: minmax(230px, 1fr) minmax(170px, .72fr);
+    grid-template-areas:
+      "context viewer"
+      "inspector inspector";
+    overflow: auto;
+  }
+
+  .pcad-inspector-pane {
+    min-height: 170px;
+    border-top: 1px solid var(--line, rgba(255, 255, 255, .075));
+    border-left: 0;
+  }
+
+  .pcad-document-meta > span:nth-child(2) { display: none; }
+}
+
+@container (max-width: 520px) {
+  .photon-cad-workspace { grid-template-rows: 32px 34px auto 43px minmax(0, 1fr) 24px; }
+  .pcad-document-meta > span:not(:first-child) { display: none; }
+  .pcad-workflow-tabs > button { min-width: 82px; flex-basis: 82px; gap: 4px; }
+  .pcad-workflow-tabs > button small { display: none; }
+  .pcad-stage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(230px, 1fr) minmax(150px, auto) minmax(180px, auto);
+    grid-template-areas: "viewer" "context" "inspector";
+  }
+  .pcad-context-pane { min-height: 150px; border-top: 1px solid var(--line, rgba(255, 255, 255, .075)); border-right: 0; }
+  .pcad-preview-pane > header > div span:first-child { display: none; }
+  .pcad-statusbar > span:last-child { display: none; }
+}

@@ -1,0 +1,61 @@
+﻿.session-admin-workspace {
+  box-sizing: border-box; display: grid; gap: 1rem; width: 100%; max-width: 100%; min-width: 0;
+  padding: clamp(.75rem, 2vw, 1.5rem); color: inherit; font-size: 1rem; line-height: 1.5; overflow-wrap: anywhere;
+}
+.session-admin-workspace *, .session-admin-workspace *::before, .session-admin-workspace *::after { box-sizing: inherit; }
+.session-admin-heading, .session-admin-panel > header, .session-admin-dialog > header, .session-admin-dialog > footer { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.session-admin-heading h1, .session-admin-panel h2, .session-admin-dialog h2 { margin: .15rem 0; line-height: 1.2; }
+.session-admin-heading p, .session-admin-panel header p, .session-admin-dialog p { margin: .25rem 0; max-width: 72ch; }
+.session-admin-heading small { letter-spacing: .08em; }
+.session-admin-workspace button, .session-admin-workspace input, .session-admin-workspace select, .session-admin-workspace textarea { font: inherit; }
+.session-admin-workspace button { min-height: 2.75em; padding: .5em .8em; cursor: pointer; }
+.session-admin-workspace button:disabled { cursor: not-allowed; opacity: .6; }
+.session-admin-workspace input:not([type="checkbox"]), .session-admin-workspace select, .session-admin-workspace textarea { width: 100%; min-width: 0; padding: .65em; border: 1px solid currentColor; border-radius: .35rem; background: inherit; color: inherit; }
+.session-admin-workspace textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.session-admin-workspace label { display: grid; gap: .3rem; margin-block: .65rem; font-weight: 600; }
+.session-admin-profile, .session-admin-error, .session-admin-notice, .session-admin-pending { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; padding: .75rem; border: 1px solid currentColor; border-radius: .5rem; }
+.session-admin-capabilities { display: flex; gap: .45rem 1rem; align-items: center; flex-wrap: wrap; padding: .75rem; border: 1px solid color-mix(in srgb, #5de5c1 45%, transparent); border-radius: .5rem; background: color-mix(in srgb, #5de5c1 7%, transparent); }
+.session-admin-capabilities span { color: #75dbc1; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.session-admin-capabilities small { flex-basis: 100%; opacity: .76; }
+.session-admin-error { color: #b42318; }
+.session-admin-notice { color: #027a48; }
+.session-admin-error button, .session-admin-notice button { margin-inline-start: auto; }
+.session-admin-pending span { display: inline-flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.session-admin-panel { min-width: 0; padding: 1rem; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: .6rem; }
+.session-admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr)); gap: 1rem; min-width: 0; }
+.session-admin-actions, .session-admin-row-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-block: .75rem; }
+.session-admin-session-list { display: grid; gap: .75rem; }
+.session-admin-session-list > article { min-width: 0; padding: .8rem; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: .5rem; }
+.session-admin-session-list label { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+.session-admin-session-list label span { display: grid; }
+.session-admin-session-list input[type="checkbox"], .session-admin-check input { width: 1.25em; height: 1.25em; }
+.session-admin-session-list dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; }
+.session-admin-session-list dl div { min-width: 0; }
+.session-admin-session-list dt { font-size: .85em; opacity: .7; }
+.session-admin-session-list dd { margin: 0; }
+.session-admin-tree { max-height: 18rem; overflow: auto; padding: .7rem; border-radius: .35rem; background: color-mix(in srgb, currentColor 7%, transparent); }
+.session-admin-tree ul { margin: .3rem 0 .3rem 1rem; padding: 0; }
+.session-admin-statistics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr)); gap: .7rem; }
+.session-admin-statistics article { display: grid; padding: .7rem; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: .4rem; }
+.session-admin-statistics strong { font-size: clamp(1.15rem, 3vw, 1.6rem); }
+.session-admin-statistics small { opacity: .75; }
+.session-admin-validation { margin-top: .75rem; padding: .75rem; border: 1px solid currentColor; border-radius: .45rem; }
+.session-admin-validation.valid { color: #027a48; }
+.session-admin-validation.invalid { color: #b42318; }
+.session-admin-import-preview { display: grid; gap: .5rem; margin-top: .75rem; color: inherit; }
+.session-admin-import-preview article { padding: .5rem; background: color-mix(in srgb, currentColor 6%, transparent); }
+.session-admin-import-preview h4, .session-admin-import-preview p { margin: .2rem 0; }
+.session-admin-import-preview pre { margin: .3rem 0; padding: .4rem; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; }
+.session-admin-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 1rem; background: rgb(0 0 0 / .58); }
+.session-admin-dialog { width: min(48rem, 100%); max-height: calc(100vh - 2rem); overflow: auto; padding: 1rem; border-radius: .6rem; background: Canvas; color: CanvasText; box-shadow: 0 1rem 3rem rgb(0 0 0 / .35); outline: none; }
+.session-admin-dialog:focus-visible { outline: 3px solid Highlight; outline-offset: 2px; }
+.session-admin-dialog ul { max-height: 14rem; overflow: auto; }
+.session-admin-empty { padding: 1rem; text-align: center; opacity: .75; }
+@media (max-width: 42rem) {
+  .session-admin-workspace { padding: .65rem; }
+  .session-admin-heading > button, .session-admin-actions button, .session-admin-row-actions button, .session-admin-dialog footer button { flex: 1 1 100%; }
+  .session-admin-panel { padding: .75rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-admin-workspace *, .session-admin-workspace *::before, .session-admin-workspace *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}

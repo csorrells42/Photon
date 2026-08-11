@@ -1,0 +1,60 @@
+services:
+  gateway:
+    image: ${HERMES_IMAGE_REFERENCE:?Set HERMES_IMAGE_REFERENCE through the verified launcher or installer}
+    container_name: hermes
+    restart: unless-stopped
+    volumes:
+      - ./data:/opt/data
+      - type: bind
+        source: ${HERMES_HOST_WORKSPACE_PATH:?launcher must set HERMES_HOST_WORKSPACE_PATH}
+        target: /workspace
+        read_only: false
+        bind:
+          create_host_path: false
+    environment:
+      - HERMES_UID=10000
+      - HERMES_GID=10000
+      - HERMES_DASHBOARD=1
+      - HERMES_DASHBOARD_HOST=0.0.0.0
+      - HERMES_DASHBOARD_PORT=9119
+      - HERMES_WORKBENCH=1
+      - HERMES_WORKBENCH_AUTHENTICATED_MEM0=1
+      - HERMES_MEM0_MODEL_URL=http://host.docker.internal:12434/engines/v1
+      - HERMES_MEM0_QDRANT_URL=http://memory-vector:6333
+    depends_on:
+      memory-vector:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:9119:9119"
+    command: ["gateway", "run"]
+
+  memory-vector:
+    image: qdrant/qdrant@sha256:affb67e1d6f2f93d7d20b90d238a7d4b974d36351c162e73bda794e4b2e03483
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
+    environment:
+      - QDRANT__TELEMETRY_DISABLED=true
+      - QDRANT_INIT_FILE_PATH=/qdrant/storage/.qdrant-initialized
+      - QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/storage/snapshots
+    volumes:
+      - memory-vector-data:/qdrant/storage
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m,uid=1000,gid=1000
+    healthcheck:
+      test: ["CMD", "bash", "-ec", "exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; head -n1 <&3 | grep -q ' 200 '"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+
+volumes:
+  memory-vector-data:

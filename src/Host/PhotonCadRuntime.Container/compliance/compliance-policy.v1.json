@@ -1,0 +1,105 @@
+{
+  "schema": "photon.cad.compliance-policy/v1",
+  "receiptSchema": "photon.cad.compliance-receipt/v1",
+  "platform": "linux/amd64",
+  "failClosed": true,
+  "buildxVersion": "0.35.0-desktop.2",
+  "scanner": {
+    "uri": "pkg:docker/docker/buildkit-syft-scanner@stable-1",
+    "digest": "sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68"
+  },
+  "roles": [
+    {
+      "role": "geometry",
+      "tag": "photon-cad-geometry:0.1.0-b123dmcp-0.3.80-8fb7cefb",
+      "imageIndexDigest": "sha256:84d6aa3e847f18af68351c428a69729c7133562b3d36f18377c9edc5bb32bd29",
+      "platformManifestDigest": "sha256:9ab23be752567aea01629cf91e92486919fe2d4bc11990e7c5f3d0018c49df45",
+      "attestationManifestDigest": "sha256:cf3704782a7631466877f1303285257e37db8f20beaad56253d9c10d17259671",
+      "sbom": {
+        "predicateType": "https://spdx.dev/Document",
+        "digest": "sha256:56d3e5d0baf6d525693b8c3440ea05b3cdef6f166aa787bafa43051c894a1361",
+        "byteLength": 3885380,
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0"
+      },
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "digest": "sha256:6c813d8cabfca2bc24f5ebf40587dc20a9d35c91055f8c1ff1dc9abb94900c95",
+        "byteLength": 13018
+      },
+      "source": {
+        "repository": "https://github.com/pzfreo/build123d-mcp",
+        "revision": "8fb7cefb28daa7f9f68b7e653244256f09b22b1f",
+        "archiveSha256": "d307c94e1fc94d2c634736a34ffbabc037b9186351915cf16aa60e7db8dad97f"
+      },
+      "baseImage": {
+        "name": "python:3.12.11-slim-bookworm",
+        "digest": "sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49"
+      },
+      "requiredNotices": [
+        { "ecosystem": "pypi", "name": "build123d", "version": "0.11.0", "sha256": "7b7c0e58f119b8e17eba8faa015ab48dedd1131836d30c8a56fa6dbf56d22ce0", "byteLength": 625 },
+        { "ecosystem": "pypi", "name": "requests", "version": "2.34.2", "sha256": "f5110972dedad2b4e9d314518daf3b7d72d6e02e499acd802181de6f74571dcc", "byteLength": 38 }
+      ]
+    },
+    {
+      "role": "assembly",
+      "tag": "photon-cad-assembly:0.1.1-partcad-0.7.158-b77c2c08-p1066a9ff",
+      "imageIndexDigest": "sha256:306a432bf6ab69078d4da59ae9721b3a0cf7082e63805d2b1b0ab5dbce02bcfa",
+      "platformManifestDigest": "sha256:a96e0bdea0287c3369372c38a08d896994f945754c454f970e4090b31368232c",
+      "attestationManifestDigest": "sha256:78825eb84ac4b9ece6872680a0ec083b27384b8ca346f333a8a691952fa6ab25",
+      "sbom": {
+        "predicateType": "https://spdx.dev/Document",
+        "digest": "sha256:e9ade228bec278a5bf9ce5b2236fed2b4fe6936f6b0fe8302bcb3d7bdcc41172",
+        "byteLength": 3964082,
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0"
+      },
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "digest": "sha256:81f51b0b19529fb95d07291fadcabf2c6497b3e80a054964723446a48ef46f8a",
+        "byteLength": 18702
+      },
+      "source": {
+        "repository": "https://github.com/partcad/partcad",
+        "revision": "b77c2c08f4a63b97070fcaf9e26bc09f34f95037",
+        "archiveSha256": "ec4be69fe9b5a864ee599e9939e91524398b4cc5af59cae081a253c5f59f5560",
+        "runtimeAdaptation": {
+          "patch": "assembly/photon_partcad_offline_patch.py",
+          "patchSha256": "1066a9ff24d6565231c75c8fb64bab5076400b7f67fd76de0c8b64eb99ef6da8",
+          "target": "partcad/src/partcad/runtime_python_none.py",
+          "patchedTargetSha256": "c6249705d5d43f6cc1bac13b3933fc0af27e6803a7d97f38a8db211588768e43",
+          "modificationNoticeRequired": true
+        }
+      },
+      "baseImage": {
+        "name": "python:3.11.13-slim-bookworm",
+        "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"
+      },
+      "requiredNotices": [
+        { "ecosystem": "pypi", "name": "aiofiles", "version": "25.1.0", "sha256": "104c58d1d450bd6474c09d8b64bc0182733a60ac3d8c253e334cde8294520ff1", "byteLength": 55 },
+        { "ecosystem": "pypi", "name": "build123d", "version": "0.11.1", "sha256": "7b7c0e58f119b8e17eba8faa015ab48dedd1131836d30c8a56fa6dbf56d22ce0", "byteLength": 625 },
+        { "ecosystem": "pypi", "name": "propcache", "version": "0.5.2", "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838", "byteLength": 609 },
+        { "ecosystem": "pypi", "name": "requests", "version": "2.34.2", "sha256": "f5110972dedad2b4e9d314518daf3b7d72d6e02e499acd802181de6f74571dcc", "byteLength": 38 },
+        { "ecosystem": "pypi", "name": "setuptools", "version": "83.0.0", "sha256": "2dddf08818297a3b89d43d95ff659d8da85741108c9136dfa3a4d856c0623bd8", "byteLength": 493 },
+        { "ecosystem": "pypi", "name": "setuptools", "version": "83.0.0", "sha256": "09c9bcea95ca086f8bc5bed174e40bc835b297d40fb5f86bbbb570fe0a5581a7", "byteLength": 18737 },
+        { "ecosystem": "pypi", "name": "yarl", "version": "1.24.5", "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838", "byteLength": 609 }
+      ]
+    }
+  ],
+  "requiredArtifactKeys": [
+    "archive",
+    "imageIndex",
+    "imageManifest",
+    "attestationManifest",
+    "sbom",
+    "provenance",
+    "pythonInventory",
+    "debianInventory",
+    "sourceOffer",
+    "legalManifest"
+  ],
+  "allowedLegalFileKinds": ["license", "notice", "copyright", "modification-notice"],
+  "maximumJsonArtifactBytes": 67108864,
+  "maximumLegalArtifactBytes": 16777216,
+  "maximumRuntimeArchiveBytes": 8589934592
+}

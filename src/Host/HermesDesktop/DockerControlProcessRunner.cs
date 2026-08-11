@@ -1,0 +1,492 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace HermesDesktop;
+
+internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
+{
+    private const int MaximumCommandOutputCharacters = 256 * 1024;
+    private const int MaximumLogOutputCharacters = 64 * 1024;
+    private const long MaximumTrustedConfigurationBytes = 1024 * 1024;
+    private const string RuntimeProtocol = "docker-control/v1";
+    private readonly string _trustedRoot;
+    private readonly string _composePath;
+    private readonly string _dockerExecutable;
+
+    internal DockerControlProcessRunner(string trustedStackRoot)
+    {
+        if (string.IsNullOrWhiteSpace(trustedStackRoot)) throw new ArgumentException("A trusted stack root is required.", nameof(trustedStackRoot));
+        _trustedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(trustedStackRoot));
+        _composePath = Path.Combine(_trustedRoot, "docker-compose.yml");
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        _dockerExecutable = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
+    }
+
+    public async Task<DockerControlHostSnapshot> CaptureAsync(CancellationToken cancellationToken)
+    {
+        var observedAt = DateTimeOffset.UtcNow;
+        if (!IsTrustedFile(_composePath) || !IsTrustedExecutable(_dockerExecutable))
+            return UnavailableSnapshot(observedAt, File.Exists(_dockerExecutable) ? "unavailable" : "unavailable");
+
+        var engine = await RunAsync(DockerCliOperation.EngineVersion, null, 0, cancellationToken).ConfigureAwait(false);
+        if (engine.ExitCode != 0)
+            return UnavailableSnapshot(observedAt, "unavailable");
+
+        var engineVersion = SafeIdentity(engine.StandardOutput);
+        var configured = await ReadConfiguredServicesAsync(cancellationToken).ConfigureAwait(false);
+        var services = new List<DockerControlServiceEvidence>();
+        var volumes = new Dictionary<string, DockerControlVolumeEvidence>(StringComparer.Ordinal)
+        {
+            ["data"] = new("data", "unknown", true),
+            ["workspace"] = new("workspace", "unknown", true),
+        };
+
+        if (configured.Contains("gateway"))
+            services.Add(await ReadComposeServiceAsync(DockerControlService.Hermes, "gateway", ApprovedHermesDigest(), volumes, cancellationToken).ConfigureAwait(false));
+        else
+            services.Add(UnavailableService(DockerControlService.Hermes));
+
+        services.Add(SerenaEvidence());
+        if (configured.Contains("model-runner"))
+            services.Add(await ReadComposeServiceAsync(DockerControlService.ModelRunner, "model-runner", null, volumes, cancellationToken).ConfigureAwait(false));
+
+        var composeState = services.Any(service => service.Manageable && service.State == "degraded")
+            ? "degraded"
+            : services.Any(service => service.Manageable && service.State == "running")
+                ? "running"
+                : configured.Count > 0 ? "stopped" : "unavailable";
+        return new DockerControlHostSnapshot(
+            observedAt,
+            "running",
+            engineVersion,
+            composeState,
+            HashFile(_composePath),
+            services.FirstOrDefault(service => service.Id == DockerControlService.Hermes)?.Image?.OciRevision,
+            RuntimeProtocol,
+            services,
+            volumes.Values.OrderBy(volume => volume.Role, StringComparer.Ordinal).ToArray(),
+            null);
+    }
+
+    public async Task<DockerControlLogs> ReadLogsAsync(DockerControlService service, int maximumLines, CancellationToken cancellationToken)
+    {
+        if (maximumLines is < 1 or > 200) throw new DockerControlUnavailableException("invalid_log_limit", "The Docker log limit is invalid.");
+        if (service == DockerControlService.Serena)
+            throw new DockerControlUnavailableException("service_unavailable", "Serena is supervised separately and Docker logs are unavailable here.");
+        var composeService = ComposeService(service);
+        if (!await IsComposeServiceConfiguredAsync(composeService, cancellationToken).ConfigureAwait(false))
+            throw new DockerControlUnavailableException("service_unavailable", "The requested product service is not configured.");
+        var result = await RunAsync(DockerCliOperation.Logs, service, maximumLines, cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0) throw new DockerControlUnavailableException("logs_unavailable", "Bounded Docker logs are unavailable.");
+        var entries = SplitLines(result.StandardOutput)
+            .Take(maximumLines)
+            .Select(line => new DockerControlLogLine(null, "stdout", line))
+            .Concat(SplitLines(result.StandardError).Take(maximumLines).Select(line => new DockerControlLogLine(null, "stderr", line)))
+            .Take(maximumLines)
+            .ToArray();
+        return new DockerControlLogs(entries, result.Truncated || entries.Length >= maximumLines);
+    }
+
+    public async Task<DockerControlMutationOutcome> ExecuteAsync(DockerControlMutation mutation, CancellationToken cancellationToken)
+    {
+        if (mutation.Kind == DockerControlMutationKind.RestartService && mutation.Service is null)
+            throw new DockerControlUnavailableException("invalid_mutation", "The reviewed restart target is invalid.");
+        if (mutation.Targets.Count == 0 || mutation.Targets.Any(target => target == DockerControlService.Serena))
+            throw new DockerControlUnavailableException("service_unavailable", "A reviewed Docker target is unavailable.");
+        foreach (var target in mutation.Targets)
+        {
+            if (!await IsComposeServiceConfiguredAsync(ComposeService(target), cancellationToken).ConfigureAwait(false))
+                throw new DockerControlUnavailableException("service_unavailable", "A reviewed Docker target is no longer configured.");
+        }
+
+        var operation = mutation.Kind switch
+        {
+            DockerControlMutationKind.StartStack => DockerCliOperation.Start,
+            DockerControlMutationKind.StopStack => DockerCliOperation.Stop,
+            DockerControlMutationKind.RestartService => DockerCliOperation.Restart,
+            _ => throw new DockerControlUnavailableException("invalid_mutation", "The reviewed Docker operation is invalid."),
+        };
+        var result = await RunAsync(operation, mutation.Service, 0, cancellationToken, mutation.Targets).ConfigureAwait(false);
+        var succeeded = result.ExitCode == 0;
+        return new DockerControlMutationOutcome(
+            succeeded,
+            succeeded ? "The reviewed Docker operation completed." : "The reviewed Docker operation failed.");
+    }
+
+    private async Task<HashSet<string>> ReadConfiguredServicesAsync(CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(DockerCliOperation.ComposeServices, null, 0, cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0) return [];
+        return SplitLines(result.StandardOutput)
+            .Where(service => service is "gateway" or "model-runner")
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private async Task<bool> IsComposeServiceConfiguredAsync(string service, CancellationToken cancellationToken) =>
+        (await ReadConfiguredServicesAsync(cancellationToken).ConfigureAwait(false)).Contains(service);
+
+    private async Task<DockerControlServiceEvidence> ReadComposeServiceAsync(
+        DockerControlService id,
+        string composeService,
+        string? approvedDigest,
+        IDictionary<string, DockerControlVolumeEvidence> volumes,
+        CancellationToken cancellationToken)
+    {
+        var ps = await RunAsync(DockerCliOperation.ComposePs, id, 0, cancellationToken).ConfigureAwait(false);
+        var state = "stopped";
+        var health = "unknown";
+        if (ps.ExitCode == 0 && TryFirstJsonObject(ps.StandardOutput, out var psObject))
+        {
+            state = NormalizeState(GetString(psObject, "State"));
+            health = NormalizeHealth(GetString(psObject, "Health"));
+        }
+
+        var containerIdResult = await RunAsync(DockerCliOperation.ComposeContainerId, id, 0, cancellationToken).ConfigureAwait(false);
+        var containerId = containerIdResult.ExitCode == 0 ? SafeContainerId(containerIdResult.StandardOutput.Trim()) : null;
+        DockerControlImage? image = approvedDigest is null ? new(null, null, null, "unverified") : new(null, approvedDigest, null, "unverified");
+        IReadOnlyList<DockerControlPort> ports = [];
+        if (containerId is not null)
+        {
+            var inspect = await RunAsync(DockerCliOperation.ContainerInspect, id, 0, cancellationToken, containerId: containerId).ConfigureAwait(false);
+            if (inspect.ExitCode == 0 && TryFirstJsonObject(inspect.StandardOutput, out var container))
+            {
+                var imageId = NormalizeSha256(GetString(container, "Image"));
+                ports = ReadPorts(container);
+                ReadVolumes(container, volumes);
+                if (imageId is not null)
+                {
+                    var imageInspect = await RunAsync(DockerCliOperation.ImageInspect, id, 0, cancellationToken, imageId: imageId).ConfigureAwait(false);
+                    if (imageInspect.ExitCode == 0 && TryFirstJsonObject(imageInspect.StandardOutput, out var inspectedImage))
+                    {
+                        var revision = ReadImageRevision(inspectedImage);
+                        var verified = approvedDigest is not null && ReadRepoDigests(inspectedImage).Any(digest => digest.EndsWith(approvedDigest, StringComparison.OrdinalIgnoreCase));
+                        image = new(imageId, approvedDigest, revision, approvedDigest is null ? "unverified" : verified ? "verified" : "mismatch");
+                    }
+                }
+            }
+        }
+        return new DockerControlServiceEvidence(id, state, health, null, image, ports, true);
+    }
+
+    private DockerControlServiceEvidence SerenaEvidence()
+    {
+        var settingsPath = Path.Combine(_trustedRoot, "launcher.settings.json");
+        var configured = false;
+        try
+        {
+            if (IsTrustedFile(settingsPath))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllBytes(settingsPath));
+                configured = document.RootElement.TryGetProperty("SerenaExecutable", out var executable)
+                    && executable.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(executable.GetString());
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException) { }
+        return new DockerControlServiceEvidence(
+            DockerControlService.Serena,
+            configured ? "unknown" : "unavailable",
+            "unknown",
+            null,
+            null,
+            [],
+            false);
+    }
+
+    private string? ApprovedHermesDigest()
+    {
+        try
+        {
+            if (!IsTrustedFile(_composePath)) return null;
+            var digests = ApprovedDigestRegex().Matches(File.ReadAllText(_composePath))
+                .Select(match => match.Groups[1].Value.ToLowerInvariant())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return digests.Length == 1 ? $"sha256:{digests[0]}" : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    private async Task<DockerProcessResult> RunAsync(
+        DockerCliOperation operation,
+        DockerControlService? service,
+        int maximumLines,
+        CancellationToken cancellationToken,
+        IReadOnlyList<DockerControlService>? targets = null,
+        string? containerId = null,
+        string? imageId = null)
+    {
+        if (!IsTrustedExecutable(_dockerExecutable) || !IsTrustedFile(_composePath))
+            throw new DockerControlUnavailableException("docker_unavailable", "The fixed Docker runtime is unavailable.");
+        var start = new ProcessStartInfo
+        {
+            FileName = _dockerExecutable,
+            WorkingDirectory = _trustedRoot,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        AddArguments(start.ArgumentList, operation, service, maximumLines, targets, containerId, imageId);
+        using var process = new Process { StartInfo = start };
+        try
+        {
+            if (!process.Start()) throw new DockerControlUnavailableException("docker_unavailable", "The fixed Docker runtime could not start.");
+            var maximum = operation == DockerCliOperation.Logs ? MaximumLogOutputCharacters : MaximumCommandOutputCharacters;
+            var stdout = ReadBoundedAsync(process.StandardOutput, maximum, cancellationToken);
+            var stderr = ReadBoundedAsync(process.StandardError, maximum, cancellationToken);
+            try { await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                TryKill(process);
+                try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); } catch { }
+                throw;
+            }
+            var output = await stdout.ConfigureAwait(false);
+            var error = await stderr.ConfigureAwait(false);
+            return new DockerProcessResult(process.ExitCode, output.Text, error.Text, output.Truncated || error.Truncated);
+        }
+        catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            throw new DockerControlUnavailableException("docker_unavailable", "The fixed Docker runtime is unavailable.");
+        }
+    }
+
+    private void AddArguments(
+        Collection<string> arguments,
+        DockerCliOperation operation,
+        DockerControlService? service,
+        int maximumLines,
+        IReadOnlyList<DockerControlService>? targets,
+        string? containerId,
+        string? imageId)
+    {
+        if (operation == DockerCliOperation.EngineVersion)
+        {
+            arguments.Add("version"); arguments.Add("--format"); arguments.Add("{{.Server.Version}}"); return;
+        }
+        if (operation == DockerCliOperation.ContainerInspect)
+        {
+            if (SafeContainerId(containerId) is null) throw new DockerControlUnavailableException("invalid_identity", "Docker returned an invalid container identity.");
+            arguments.Add("inspect"); arguments.Add("--type"); arguments.Add("container"); arguments.Add(containerId!); return;
+        }
+        if (operation == DockerCliOperation.ImageInspect)
+        {
+            if (NormalizeSha256(imageId) is null) throw new DockerControlUnavailableException("invalid_identity", "Docker returned an invalid image identity.");
+            arguments.Add("image"); arguments.Add("inspect"); arguments.Add(imageId!); return;
+        }
+        arguments.Add("compose");
+        arguments.Add("--project-directory"); arguments.Add(_trustedRoot);
+        arguments.Add("--file"); arguments.Add(_composePath);
+        switch (operation)
+        {
+            case DockerCliOperation.ComposeServices:
+                arguments.Add("config"); arguments.Add("--services"); break;
+            case DockerCliOperation.ComposePs:
+                arguments.Add("ps"); arguments.Add("--all"); arguments.Add("--format"); arguments.Add("json"); arguments.Add(ComposeService(service)); break;
+            case DockerCliOperation.ComposeContainerId:
+                arguments.Add("ps"); arguments.Add("--quiet"); arguments.Add(ComposeService(service)); break;
+            case DockerCliOperation.Logs:
+                arguments.Add("logs"); arguments.Add("--no-color"); arguments.Add("--no-log-prefix"); arguments.Add("--tail"); arguments.Add(maximumLines.ToString(CultureInfo.InvariantCulture)); arguments.Add(ComposeService(service)); break;
+            case DockerCliOperation.Start:
+                arguments.Add("up"); arguments.Add("--detach"); arguments.Add("--no-build"); arguments.Add("--pull"); arguments.Add("never"); arguments.Add("--no-deps"); AddTargets(arguments, targets); break;
+            case DockerCliOperation.Stop:
+                arguments.Add("stop"); arguments.Add("--timeout"); arguments.Add("20"); AddTargets(arguments, targets); break;
+            case DockerCliOperation.Restart:
+                arguments.Add("restart"); arguments.Add("--timeout"); arguments.Add("20"); arguments.Add(ComposeService(service)); break;
+            default: throw new DockerControlUnavailableException("invalid_operation", "The fixed Docker operation is invalid.");
+        }
+    }
+
+    private static void AddTargets(Collection<string> arguments, IReadOnlyList<DockerControlService>? targets)
+    {
+        if (targets is null || targets.Count is 0 or > 2) throw new DockerControlUnavailableException("invalid_target", "The reviewed Docker target set is invalid.");
+        foreach (var target in targets.OrderBy(value => value)) arguments.Add(ComposeService(target));
+    }
+
+    private static string ComposeService(DockerControlService? service) => service switch
+    {
+        DockerControlService.Hermes => "gateway",
+        DockerControlService.ModelRunner => "model-runner",
+        _ => throw new DockerControlUnavailableException("service_unavailable", "The requested service is not managed by Docker Control Center."),
+    };
+
+    private bool IsTrustedFile(string path)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path);
+            if (!full.StartsWith(_trustedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || !File.Exists(full)) return false;
+            var info = new FileInfo(full);
+            return info.Length <= MaximumTrustedConfigurationBytes && !TraversesReparsePoint(full);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+    }
+
+    private static bool IsTrustedExecutable(string path)
+    {
+        try { return Path.IsPathFullyQualified(path) && File.Exists(path) && !TraversesReparsePoint(path); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+    }
+
+    private DockerControlHostSnapshot UnavailableSnapshot(DateTimeOffset observedAt, string engineState) => new(
+        observedAt, engineState, null, "unavailable", IsTrustedFile(_composePath) ? HashFile(_composePath) : null, null,
+        RuntimeProtocol,
+        [UnavailableService(DockerControlService.Hermes), SerenaEvidence()],
+        [new("data", "unknown", true), new("workspace", "unknown", true)],
+        null);
+
+    private static DockerControlServiceEvidence UnavailableService(DockerControlService service) =>
+        new(service, "unavailable", "unknown", null, null, [], false);
+
+    private static string NormalizeState(string? value) => value?.ToLowerInvariant() switch
+    {
+        "running" => "running",
+        "exited" or "dead" or "created" => "stopped",
+        "restarting" or "paused" or "removing" => "degraded",
+        _ => "unknown",
+    };
+
+    private static string NormalizeHealth(string? value) => value?.ToLowerInvariant() switch
+    {
+        "healthy" => "healthy",
+        "unhealthy" => "unhealthy",
+        "starting" => "starting",
+        "" or null => "not-configured",
+        _ => "unknown",
+    };
+
+    private static string? SafeIdentity(string value)
+    {
+        var normalized = value.Trim();
+        return normalized.Length is > 0 and <= 128 && normalized.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '+' or ':' or '/' or '-') ? normalized : null;
+    }
+
+    private static string? SafeContainerId(string? value) =>
+        value is not null && value.Length is >= 12 and <= 64 && value.All(Uri.IsHexDigit) ? value.ToLowerInvariant() : null;
+
+    private static string? NormalizeSha256(string? value) =>
+        value is not null && Sha256Regex().IsMatch(value) ? value.ToLowerInvariant() : null;
+
+    private static string HashFile(string path) => $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path)))}";
+
+    private static IReadOnlyList<string> SplitLines(string value) => value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool TryFirstJsonObject(string value, out JsonElement element)
+    {
+        element = default;
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            var candidate = document.RootElement.ValueKind == JsonValueKind.Array
+                ? document.RootElement.EnumerateArray().FirstOrDefault()
+                : document.RootElement;
+            if (candidate.ValueKind != JsonValueKind.Object) return false;
+            element = candidate.Clone();
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    private static string? GetString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
+
+    private static IReadOnlyList<DockerControlPort> ReadPorts(JsonElement container)
+    {
+        var result = new List<DockerControlPort>();
+        if (!container.TryGetProperty("NetworkSettings", out var network) || network.ValueKind != JsonValueKind.Object
+            || !network.TryGetProperty("Ports", out var ports) || ports.ValueKind != JsonValueKind.Object) return result;
+        foreach (var mapping in ports.EnumerateObject())
+        {
+            var split = mapping.Name.Split('/');
+            if (split.Length != 2 || !int.TryParse(split[0], NumberStyles.None, CultureInfo.InvariantCulture, out var containerPort)
+                || containerPort is < 1 or > 65535 || split[1] is not ("tcp" or "udp") || mapping.Value.ValueKind != JsonValueKind.Array) continue;
+            foreach (var item in mapping.Value.EnumerateArray())
+            {
+                var address = GetString(item, "HostIp");
+                var hostPortText = GetString(item, "HostPort");
+                if (address is not ("127.0.0.1" or "::1") || !int.TryParse(hostPortText, NumberStyles.None, CultureInfo.InvariantCulture, out var hostPort)
+                    || hostPort is < 1 or > 65535) continue;
+                result.Add(new(address, hostPort, containerPort, split[1]));
+            }
+        }
+        return result.Take(16).ToArray();
+    }
+
+    private static void ReadVolumes(JsonElement container, IDictionary<string, DockerControlVolumeEvidence> volumes)
+    {
+        if (!container.TryGetProperty("Mounts", out var mounts) || mounts.ValueKind != JsonValueKind.Array) return;
+        foreach (var mount in mounts.EnumerateArray())
+        {
+            var destination = GetString(mount, "Destination");
+            if (destination == "/opt/data") volumes["data"] = new("data", "mounted", true);
+            else if (destination == "/workspace") volumes["workspace"] = new("workspace", "mounted", true);
+        }
+    }
+
+    private static string? ReadImageRevision(JsonElement image)
+    {
+        if (!image.TryGetProperty("Config", out var config) || config.ValueKind != JsonValueKind.Object
+            || !config.TryGetProperty("Labels", out var labels) || labels.ValueKind != JsonValueKind.Object) return null;
+        return labels.TryGetProperty("org.opencontainers.image.revision", out var revision) && revision.ValueKind == JsonValueKind.String
+            ? SafeIdentity(revision.GetString() ?? string.Empty) : null;
+    }
+
+    private static IReadOnlyList<string> ReadRepoDigests(JsonElement image)
+    {
+        if (!image.TryGetProperty("RepoDigests", out var values) || values.ValueKind != JsonValueKind.Array) return [];
+        return values.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String).Select(item => item.GetString()!).Take(32).ToArray();
+    }
+
+    private static async Task<BoundedText> ReadBoundedAsync(StreamReader reader, int maximumCharacters, CancellationToken cancellationToken)
+    {
+        var builder = new StringBuilder(Math.Min(maximumCharacters, 8_192));
+        var buffer = new char[4_096];
+        var truncated = false;
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0) break;
+            var remaining = maximumCharacters - builder.Length;
+            if (remaining > 0) builder.Append(buffer, 0, Math.Min(remaining, read));
+            if (read > remaining) truncated = true;
+        }
+        return new(builder.ToString(), truncated);
+    }
+
+    private static void TryKill(Process process)
+    {
+        try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+    }
+
+    private static bool TraversesReparsePoint(string path)
+    {
+        var current = Path.GetFullPath(path);
+        while (!string.IsNullOrEmpty(current))
+        {
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase)) break;
+            current = parent;
+        }
+        return false;
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private enum DockerCliOperation { EngineVersion, ComposeServices, ComposePs, ComposeContainerId, ContainerInspect, ImageInspect, Logs, Start, Stop, Restart }
+    private sealed record DockerProcessResult(int ExitCode, string StandardOutput, string StandardError, bool Truncated);
+    private sealed record BoundedText(string Text, bool Truncated);
+
+    [GeneratedRegex("^sha256:[a-fA-F0-9]{64}$", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex Sha256Regex();
+
+    [GeneratedRegex("@sha256:([a-fA-F0-9]{64})", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex ApprovedDigestRegex();
+}

@@ -1,0 +1,32 @@
+{
+  "schemaId": "photon.model-runner.lock/v1",
+  "runtime": "docker-desktop-model-runner",
+  "containerEndpoint": "http://host.docker.internal:12434",
+  "openAiBasePath": "/engines/v1",
+  "gatewayContainer": "hermes",
+  "models": [
+    {
+      "role": "chat",
+      "pullReference": "ai/qwen3:4B-UD-Q4_K_XL",
+      "registryIdentity": "docker.io/ai/qwen3:4B-UD-Q4_K_XL",
+      "inventoryModelId": "docker.io/ai/qwen3:4B-UD-Q4_K_XL",
+      "inspectTags": [
+        "ai/qwen3:4B-UD-Q4_K_XL",
+        "docker.io/ai/qwen3:4B-UD-Q4_K_XL"
+      ],
+      "apiModelId": "ai/qwen3:4B-UD-Q4_K_XL"
+    },
+    {
+      "role": "embedding",
+      "pullReference": "ai/nomic-embed-text-v1.5",
+      "registryIdentity": "docker.io/ai/nomic-embed-text-v1.5:latest",
+      "inventoryModelId": "docker.io/ai/nomic-embed-text-v1.5:latest",
+      "inspectTags": [
+        "ai/nomic-embed-text-v1.5",
+        "ai/nomic-embed-text-v1.5:latest",
+        "docker.io/ai/nomic-embed-text-v1.5:latest"
+      ],
+      "apiModelId": "ai/nomic-embed-text-v1.5"
+    }
+  ]
+}

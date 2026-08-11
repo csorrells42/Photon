@@ -1,0 +1,37 @@
+{
+  "schema": "photon.cad.container-policy/v1",
+  "platform": "linux/amd64",
+  "workspaceMount": "/workspace",
+  "runtimeUser": "65532:65532",
+  "network": "none",
+  "readOnlyRoot": true,
+  "dropCapabilities": ["ALL"],
+  "securityOptions": ["no-new-privileges:true"],
+  "pidsLimit": 64,
+  "memoryBytes": 2147483648,
+  "nanoCpus": 2000000000,
+  "stopTimeoutSeconds": 10,
+  "tmpfs": [
+    "/session:rw,nosuid,nodev,noexec,size=268435456,mode=0700,uid=65532,gid=65532",
+    "/tmp:rw,nosuid,nodev,noexec,size=268435456,mode=0700,uid=65532,gid=65532"
+  ],
+  "forbiddenMounts": [
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "/root",
+    "/home",
+    "/mnt/c/Users"
+  ],
+  "environmentAllowlist": [
+    "PHOTON_CAD_SESSION_ID",
+    "PHOTON_CAD_PROJECT_ID"
+  ],
+  "geometry": {
+    "tag": "photon-cad-geometry:0.1.0-b123dmcp-0.3.80-8fb7cefb",
+    "entrypoint": ["/opt/photon/venv/bin/python", "/opt/photon/bin/photon_geometry_entrypoint.py"]
+  },
+  "assembly": {
+    "tag": "photon-cad-assembly:0.1.1-partcad-0.7.158-b77c2c08-p1066a9ff",
+    "entrypoint": ["/opt/photon/venv/bin/python", "/opt/photon/bin/photon_partcad_entrypoint.py"]
+  }
+}

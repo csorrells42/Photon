@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "targetRelativePath": "developer-services/roslyn",
+  "providerJsonFields": [
+    "packageVersion",
+    "executableSha256"
+  ],
+  "serverPackage": {
+    "component": "Microsoft.CodeAnalysis.LanguageServer.win-x64",
+    "packageVersion": "5.0.0-1.25277.114",
+    "sourceCommit": "ddf39a1b4690fbe23aea79c78da67004a5c31094",
+    "sourceUrl": "https://api.nuget.org/v3-flatcontainer/microsoft.codeanalysis.languageserver.win-x64/5.0.0-1.25277.114/microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg",
+    "archiveName": "microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg",
+    "archiveLength": 65767620,
+    "archiveSha256": "7c96c59532a81f710be95a48e6dd25c4e4d17875a37f5a7171a90e82f8ab57a6",
+    "nugetContentSha512": "jQzaheLXqwt+c4rKBAR8hLvjV4jZcy+f/70OU+hBX4MsRnMSahTrR/y3DXT+JCfrdxueTcvmihGEy/bCId5XRA==",
+    "archiveEntryCount": 521,
+    "payloadPrefix": "content/LanguageServer/win-x64/",
+    "payloadFileCount": 497,
+    "payloadBytes": 156757321,
+    "payloadInventorySha256": "230c323c898910bcfa01853cf4628cc6383f69b786da0e0d1877b7aee6c313cf",
+    "executableRelativePath": "Microsoft.CodeAnalysis.LanguageServer.exe",
+    "executableSha256": "a0880370c766535d3e53c3acf2d1a89ab1f46fa6c7aa84f05aeef51ae7e430ac",
+    "authorCertificateSha256": "566a31882be208be4422f7cfd66ed09f5d4524a5994f50ccc8b05ec0528c1353",
+    "repositoryCertificateSha256": "1f4b311d9acc115c8dc8018b5a49e00fce6da8e2855f9f014ca6f34570bc482d"
+  },
+  "sdkPackage": {
+    "component": "Microsoft.NETCoreSdk",
+    "version": "10.0.302",
+    "runtimeVersion": "10.0.10",
+    "rid": "win-x64",
+    "sourceUrl": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.302/dotnet-sdk-10.0.302-win-x64.zip",
+    "archiveName": "dotnet-sdk-10.0.302-win-x64.zip",
+    "archiveLength": 297545270,
+    "archiveSha512": "7d170ed75fa9af34c00646621d92011dbd71943952e2787cd15df9be78e6452b55dadef34d7eff77b802e6af4959e071a55855ac649afeac70901c3a2a258716",
+    "releaseMetadataUrl": "https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json"
+  }
+}

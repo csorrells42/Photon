@@ -1,0 +1,23 @@
+# Photon-owned runtime overlay for PartCAD 0.7.158 at
+# b77c2c08f4a63b97070fcaf9e26bc09f34f95037.
+#
+# The upstream Poetry `partcad` group omits requirements that the installed
+# partcad and partcad-utils distributions import unconditionally. Keep this
+# overlay hash-locked and validate the completed environment with `pip check`.
+
+sentry-sdk==2.66.0 \
+    --hash=sha256:096136c214c602be2b323524d30755dc5b30ec5a218a206207f33b12c05c6f11
+filelock==3.32.0 \
+    --hash=sha256:d396bea984af47333ef05e50eae7eff88c84256de6112aea0ec48a233c064fe3
+opentelemetry-api==1.44.0 \
+    --hash=sha256:94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef
+opentelemetry-distro==0.65b0 \
+    --hash=sha256:0e15bb1a54c638e6c361bc66bc43e9de9ead442e1ae06f8099a2c1d27b6ef845
+opentelemetry-instrumentation==0.65b0 \
+    --hash=sha256:ea967a72b9939b5fcfdad572753b4306c59dcb99e3f382d95dae04286805e137
+opentelemetry-sdk==1.44.0 \
+    --hash=sha256:df081c4c6bcfdb1211e3e86140376792643128a25f8d72d1d27675936e7e96ad
+opentelemetry-semantic-conventions==0.65b0 \
+    --hash=sha256:1cacde7b0ad306f84c5ef08c3dbe1bbaf20165bba6f8bff43b670e555a086bcb
+wrapt==2.2.2 \
+    --hash=sha256:a2d78c363f97d8bd718ee40432c66395685e9e98528ccaa423c3355d1715a26d

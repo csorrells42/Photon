@@ -1,0 +1,674 @@
+.hermes-extension-settings {
+  --hes-bg: #0a0f18;
+  --hes-panel: #111925;
+  --hes-panel-soft: #172231;
+  --hes-line: #2a394c;
+  --hes-text: #edf4ff;
+  --hes-muted: #a7b5c8;
+  --hes-accent: #65d7c1;
+  --hes-accent-ink: #04231e;
+  --hes-warning: #ffc76a;
+  --hes-error: #ff8f9a;
+  --hes-success: #83e1a2;
+  container-type: inline-size;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+  color: var(--hes-text);
+  background:
+    radial-gradient(circle at 85% 5%, rgb(66 159 145 / 18%), transparent 26rem),
+    var(--hes-bg);
+  font: 400 1rem/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.hermes-extension-settings *,
+.hermes-extension-settings *::before,
+.hermes-extension-settings *::after {
+  box-sizing: border-box;
+}
+
+.hermes-extension-settings h1,
+.hermes-extension-settings h2,
+.hermes-extension-settings h3,
+.hermes-extension-settings p {
+  margin-block: 0;
+}
+
+.hermes-extension-settings h1 {
+  font-size: clamp(1.45rem, 3vw, 2.2rem);
+  line-height: 1.15;
+}
+
+.hermes-extension-settings h2 {
+  font-size: clamp(1.2rem, 2.2vw, 1.55rem);
+}
+
+.hermes-extension-settings h3 {
+  font-size: 1.05rem;
+}
+
+.hermes-extension-settings button,
+.hermes-extension-settings input,
+.hermes-extension-settings select,
+.hermes-extension-settings textarea {
+  min-height: 2.75rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.55rem;
+  color: var(--hes-text);
+  background: #0d1520;
+  font: inherit;
+}
+
+.hermes-extension-settings button {
+  padding: 0.62rem 0.9rem;
+  cursor: pointer;
+}
+
+.hermes-extension-settings button:hover:not(:disabled) {
+  border-color: var(--hes-accent);
+  background: #17293a;
+}
+
+.hermes-extension-settings button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.hermes-extension-settings :focus-visible {
+  outline: 0.2rem solid #9deadc;
+  outline-offset: 0.15rem;
+}
+
+.hermes-extension-settings input,
+.hermes-extension-settings select,
+.hermes-extension-settings textarea {
+  width: 100%;
+  padding: 0.62rem 0.7rem;
+}
+
+.hermes-extension-settings textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.hermes-extension-settings label {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.hermes-extension-settings label > span,
+.hermes-extension-settings label > small {
+  color: var(--hes-muted);
+}
+
+.hermes-extension-settings label > span {
+  font-weight: 650;
+}
+
+.hermes-extension-settings label > small {
+  font-size: 0.82em;
+}
+
+.hes-primary {
+  border-color: transparent !important;
+  color: var(--hes-accent-ink) !important;
+  background: var(--hes-accent) !important;
+  font-weight: 750 !important;
+}
+
+.hes-hero,
+.hes-panel-heading,
+.hes-section-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.hes-hero {
+  margin: 0 auto 1rem;
+  max-width: 92rem;
+}
+
+.hes-hero small,
+.hes-panel-heading small,
+.hes-tool-card header small,
+.hes-review header small {
+  color: var(--hes-accent);
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
+
+.hes-hero p,
+.hes-panel-heading p,
+.hes-tool-card p,
+.hes-section-title p {
+  margin-top: 0.35rem;
+  color: var(--hes-muted);
+}
+
+.hes-security-banner,
+.hes-provenance-note,
+.hes-state,
+.hes-message {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 auto 0.75rem;
+  max-width: 92rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.65rem;
+  background: var(--hes-panel-soft);
+}
+
+.hes-security-banner strong,
+.hes-provenance-note strong {
+  color: var(--hes-accent);
+}
+
+.hes-state span,
+.hes-security-banner span,
+.hes-provenance-note span {
+  color: var(--hes-muted);
+}
+
+.hes-state.partial,
+.hes-inline-state.partial {
+  border-color: #846832;
+  color: var(--hes-warning);
+}
+
+.hes-state.unavailable,
+.hes-inline-state.unavailable {
+  color: var(--hes-muted);
+}
+
+.hes-state.error,
+.hes-message.error {
+  border-color: #7f3f49;
+  color: var(--hes-error);
+}
+
+.hes-message.success {
+  border-color: #39734d;
+  color: var(--hes-success);
+}
+
+.hes-message button {
+  min-width: 2.75rem;
+  margin-left: auto;
+  padding: 0.25rem;
+}
+
+.hes-notices {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0 auto 0.75rem;
+  max-width: 92rem;
+}
+
+.hes-notices p {
+  padding: 0.55rem 0.75rem;
+  border-left: 0.2rem solid var(--hes-line);
+  color: var(--hes-muted);
+  background: rgb(255 255 255 / 3%);
+}
+
+.hes-notices p.warning {
+  border-color: var(--hes-warning);
+}
+
+.hes-notices p.error {
+  border-color: var(--hes-error);
+}
+
+.hes-tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0 auto;
+  max-width: 92rem;
+  padding: 0.4rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: #0e1621;
+  overflow-x: auto;
+}
+
+.hes-tabs button {
+  flex: 0 0 auto;
+  border-color: transparent;
+  color: var(--hes-muted);
+  background: transparent;
+}
+
+.hes-tabs button[aria-selected="true"] {
+  color: var(--hes-text);
+  background: var(--hes-panel-soft);
+  box-shadow: inset 0 -0.15rem var(--hes-accent);
+}
+
+.hermes-extension-settings [role="tabpanel"] {
+  margin: 0 auto;
+  max-width: 92rem;
+}
+
+.hes-panel {
+  min-width: 0;
+  padding: clamp(0.8rem, 2vw, 1.25rem);
+  border: 1px solid var(--hes-line);
+  border-top: 0;
+  border-radius: 0 0 0.75rem 0.75rem;
+  background: var(--hes-panel);
+}
+
+.hes-panel-heading {
+  margin-bottom: 1rem;
+}
+
+.hes-provenance-note {
+  margin: 0 0 1rem;
+}
+
+.hes-provenance {
+  display: inline-flex;
+  width: fit-content;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.76em;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.hes-provenance.nous-approved {
+  color: #8fb7ff;
+}
+
+.hes-provenance.workbench-reviewed {
+  color: var(--hes-success);
+}
+
+.hes-provenance.external-unreviewed {
+  color: var(--hes-warning);
+}
+
+.hes-provenance.user-created {
+  color: #d8a6ff;
+}
+
+.hes-skill-layout,
+.hes-mcp-layout {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.34fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.hes-skill-list,
+.hes-mcp-list {
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+  max-height: 42rem;
+  overflow-y: auto;
+}
+
+.hes-skill-list button,
+.hes-mcp-list button {
+  display: grid;
+  gap: 0.32rem;
+  min-width: 0;
+  text-align: left;
+}
+
+.hes-skill-list button.selected,
+.hes-mcp-list button.selected {
+  border-color: var(--hes-accent);
+  background: #17293a;
+}
+
+.hes-skill-list small,
+.hes-mcp-list small {
+  color: var(--hes-muted);
+}
+
+.hes-skill-editor,
+.hes-mcp-editor {
+  display: grid;
+  align-content: start;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.hes-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 0.8rem;
+}
+
+.hes-content-editor {
+  min-height: 18rem !important;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace !important;
+  tab-size: 2;
+}
+
+.hes-text-preview,
+.hes-mcp-safe-metadata {
+  min-width: 0;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.65rem;
+  background: #0b121b;
+}
+
+.hes-text-preview header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border-bottom: 1px solid var(--hes-line);
+}
+
+.hes-text-preview header small {
+  color: var(--hes-muted);
+}
+
+.hes-text-preview pre {
+  max-height: 20rem;
+  margin: 0;
+  padding: 0.85rem;
+  color: #d7e4f5;
+  font: 0.9em/1.6 ui-monospace, "Cascadia Code", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.hes-clone-confirm,
+.hes-confirmations label,
+.hes-switch {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.hes-clone-confirm {
+  padding: 0.75rem;
+  border: 1px solid #846832;
+  border-radius: 0.6rem;
+  color: var(--hes-warning);
+  background: rgb(255 199 106 / 8%);
+}
+
+.hes-clone-confirm input,
+.hes-confirmations input,
+.hes-switch input {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  min-height: 1.25rem;
+  margin-top: 0.18rem;
+}
+
+.hes-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.hes-tool-grid,
+.hes-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 0.85rem;
+}
+
+.hes-tool-card,
+.hes-provider-card,
+.hes-model-section {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 0.9rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.7rem;
+  background: #0d1621;
+}
+
+.hes-inline-state {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.5rem;
+  color: var(--hes-muted);
+  background: rgb(255 255 255 / 3%);
+}
+
+.hes-inline-state.valid {
+  border-color: #39734d;
+  color: var(--hes-success);
+}
+
+.hes-inline-state.invalid {
+  border-color: #7f3f49;
+  color: var(--hes-error);
+}
+
+.hes-model-section + .hes-model-section {
+  margin-top: 0.9rem;
+}
+
+.hes-secret-policy {
+  padding: 0.7rem;
+  border-left: 0.2rem solid var(--hes-accent);
+  color: var(--hes-muted);
+  background: rgb(101 215 193 / 7%);
+}
+
+.hes-provider-card header {
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid var(--hes-line);
+}
+
+.hes-mcp-safe-metadata {
+  padding: 0.8rem;
+}
+
+.hes-mcp-safe-metadata dl {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.65rem 0 0;
+}
+
+.hes-mcp-safe-metadata dl > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.3fr) minmax(0, 1fr);
+  gap: 0.6rem;
+}
+
+.hes-mcp-safe-metadata dt {
+  color: var(--hes-muted);
+}
+
+.hes-mcp-safe-metadata dd {
+  margin: 0;
+}
+
+.hes-review-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(2 7 12 / 82%);
+}
+
+.hes-review {
+  width: min(58rem, 100%);
+  max-height: min(48rem, calc(100dvh - 2rem));
+  padding: 1rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.8rem;
+  background: var(--hes-panel);
+  box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 45%);
+  overflow-y: auto;
+}
+
+.hes-review > header,
+.hes-review > footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.hes-review > header button {
+  min-width: 2.75rem;
+  padding: 0.3rem;
+  font-size: 1.35rem;
+}
+
+.hes-before-after {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-block: 1rem;
+}
+
+.hes-before-after section {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.6rem;
+  background: #0b121b;
+}
+
+.hes-before-after pre {
+  max-height: 14rem;
+  margin: 0.55rem 0 0;
+  color: #d7e4f5;
+  font: 0.86em/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.hes-warning {
+  padding: 0.75rem;
+  border: 1px solid #846832;
+  border-radius: 0.6rem;
+  color: var(--hes-warning);
+}
+
+.hes-warning ul {
+  margin-block: 0.45rem 0;
+  padding-left: 1.4rem;
+}
+
+.hes-confirmations {
+  display: grid;
+  gap: 0.55rem;
+  margin-block: 1rem;
+}
+
+.hes-confirmations label {
+  padding: 0.6rem;
+  border: 1px solid var(--hes-line);
+  border-radius: 0.55rem;
+}
+
+.hes-confirmations .hes-expensive {
+  border-color: #846832;
+  color: var(--hes-warning);
+}
+
+.hes-review > footer {
+  justify-content: flex-end;
+}
+
+.hes-empty {
+  display: grid;
+  place-items: center;
+  gap: 0.4rem;
+  min-height: 16rem;
+  margin: 0 auto;
+  max-width: 92rem;
+  padding: 1rem;
+  border: 1px dashed var(--hes-line);
+  border-radius: 0.75rem;
+  color: var(--hes-muted);
+  text-align: center;
+}
+
+@container (max-width: 54rem) {
+  .hes-skill-layout,
+  .hes-mcp-layout,
+  .hes-before-after {
+    grid-template-columns: 1fr;
+  }
+
+  .hes-skill-list,
+  .hes-mcp-list {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    max-height: none;
+  }
+
+  .hes-security-banner,
+  .hes-provenance-note {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@container (max-width: 36rem) {
+  .hes-hero,
+  .hes-panel-heading,
+  .hes-section-title,
+  .hes-review > header,
+  .hes-review > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .hes-tabs {
+    border-radius: 0;
+  }
+
+  .hes-panel {
+    border-radius: 0;
+  }
+
+  .hes-actions,
+  .hes-review > footer {
+    display: grid;
+  }
+
+  .hes-mcp-safe-metadata dl > div {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hermes-extension-settings *,
+  .hermes-extension-settings *::before,
+  .hermes-extension-settings *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .hermes-extension-settings button,
+  .hermes-extension-settings input,
+  .hermes-extension-settings select,
+  .hermes-extension-settings textarea,
+  .hes-panel,
+  .hes-review {
+    border-color: CanvasText;
+  }
+}

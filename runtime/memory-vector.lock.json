@@ -1,0 +1,15 @@
+{
+  "schemaId": "photon-memory-vector-lock/v1",
+  "serviceName": "memory-vector",
+  "version": "1.18.3",
+  "image": "qdrant/qdrant@sha256:affb67e1d6f2f93d7d20b90d238a7d4b974d36351c162e73bda794e4b2e03483",
+  "indexDigest": "sha256:affb67e1d6f2f93d7d20b90d238a7d4b974d36351c162e73bda794e4b2e03483",
+  "platforms": {
+    "linux/amd64": "sha256:0676e6666a339b96e70a533089e25270dfca648195d905110f19d2239ed1878c",
+    "linux/arm64": "sha256:5ebe1c46e8176ce8b6ccf74b8b500e6a984ca0593ca589d9bd7496c60b9e8a68"
+  },
+  "endpoint": "http://memory-vector:6333",
+  "readyPath": "/readyz",
+  "storagePath": "/qdrant/storage",
+  "publishedPorts": []
+}

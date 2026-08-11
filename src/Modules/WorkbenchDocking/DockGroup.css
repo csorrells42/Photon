@@ -1,0 +1,47 @@
+.workbench-dock-group{position:relative;min-width:0;min-height:0;display:grid;overflow:hidden}
+.workbench-dock-group.dock-vertical,.workbench-dock-group.dock-horizontal{display:flex;overflow:auto;scrollbar-width:thin;scrollbar-color:rgba(126,105,203,.32) transparent}
+.workbench-dock-group.dock-vertical{flex-direction:column}
+.workbench-dock-group.dock-horizontal{flex-direction:row}
+.workbench-dock-group.dock-tabs{grid-template-rows:31px minmax(0,1fr)}
+.workbench-dock-panel{min-width:0;min-height:0;display:flex;overflow:hidden;flex-basis:0;flex-shrink:1}
+.dock-horizontal>.workbench-dock-panel{min-width:180px}
+.dock-vertical>.workbench-dock-panel{min-height:120px}
+.workbench-dock-panel>.agent-dock,.workbench-dock-panel>.codex-panel{width:100%;min-width:0;min-height:0}
+.dock-tabs>.workbench-dock-panel{grid-row:2;grid-column:1}
+.dock-tabs>.dock-panel-inactive{display:none}
+.workbench-dock-separator{position:relative;z-index:3;flex:0 0 7px;touch-action:none;outline:0;background:transparent}
+.workbench-dock-separator::before{content:"";position:absolute;border-radius:999px;background:var(--line);box-shadow:0 0 0 0 rgba(139,112,245,0);transition:background .14s ease,box-shadow .14s ease,transform .14s ease}
+.dock-horizontal>.workbench-dock-separator{min-height:0;cursor:col-resize}
+.dock-horizontal>.workbench-dock-separator::before{inset:0 3px}
+.dock-vertical>.workbench-dock-separator{min-width:0;cursor:row-resize}
+.dock-vertical>.workbench-dock-separator::before{inset:3px 0}
+.workbench-dock-separator:hover::before,.workbench-dock-separator:focus-visible::before,.workbench-dock-separator.active::before{background:#8b70f5;box-shadow:0 0 0 2px rgba(139,112,245,.16),0 0 14px rgba(112,86,225,.34)}
+.dock-horizontal>.workbench-dock-separator:hover::before,.dock-horizontal>.workbench-dock-separator:focus-visible::before,.dock-horizontal>.workbench-dock-separator.active::before{transform:scaleX(1.7)}
+.dock-vertical>.workbench-dock-separator:hover::before,.dock-vertical>.workbench-dock-separator:focus-visible::before,.dock-vertical>.workbench-dock-separator.active::before{transform:scaleY(1.7)}
+.workbench-dock-tabs{display:none;min-width:0;align-items:end;gap:2px;border-bottom:1px solid var(--line);background:#0b0e16;padding:0 5px}
+.dock-tabs>.workbench-dock-tabs{display:flex;grid-row:1;grid-column:1}
+.workbench-dock-tabs>button{height:30px;min-width:74px;border:0;border-bottom:2px solid transparent;background:transparent;padding:0 10px;color:#697487;font-size:9px}
+.workbench-dock-tabs>button:hover{background:rgba(255,255,255,.045);color:#b9c1cf}
+.workbench-dock-tabs>button.active{border-bottom-color:#8b70f5;background:rgba(125,94,229,.1);color:#ddd6ff}
+.workbench-dock-controls{display:flex;align-items:center;flex:0 0 auto!important}
+.workbench-dock-handle{width:25px;height:27px;display:grid;place-items:center;border-radius:5px;color:#697386;cursor:grab}
+.workbench-dock-handle:hover,.workbench-dock-handle:focus-visible{outline:0;background:rgba(255,255,255,.06);color:#d4d9e3}
+.workbench-dock-handle:active{cursor:grabbing}
+.workbench-dock-panel.dragging{opacity:.58}
+.workbench-dock-overlay{position:absolute;z-index:100;inset:0;display:grid;place-items:center;background:rgba(5,7,12,.16);pointer-events:none;backdrop-filter:blur(1px)}
+.workbench-dock-guide{width:132px;height:132px;display:grid;grid-template:repeat(3,42px)/repeat(3,42px);gap:3px;padding:3px;border:1px solid rgba(146,121,248,.38);border-radius:13px;background:rgba(12,15,24,.94);box-shadow:0 18px 60px rgba(0,0,0,.62),0 0 28px rgba(108,80,216,.14);pointer-events:auto}
+.workbench-dock-guide>button{display:grid;place-items:center;border:1px solid rgba(255,255,255,.07);border-radius:8px;background:#161b28;color:#8290a5}
+.workbench-dock-guide>button:hover,.workbench-dock-guide>button:focus-visible{outline:0;border-color:rgba(145,118,248,.65);background:linear-gradient(145deg,rgba(124,91,230,.38),rgba(50,159,135,.18));color:#f1eeff;box-shadow:0 0 18px rgba(115,86,225,.23)}
+.dock-zone-top{grid-area:1/2}.dock-zone-right{grid-area:2/3}.dock-zone-bottom{grid-area:3/2}.dock-zone-left{grid-area:2/1}.dock-zone-center{grid-area:2/2}
+.layout-code .workbench-dock-tabs,.layout-chat .workbench-dock-tabs{display:none}
+.layout-code .workbench-dock-group,.layout-chat .workbench-dock-group{display:flex}
+.layout-code .workbench-dock-separator,.layout-chat .workbench-dock-separator{display:none}
+.layout-code .workbench-dock-panel.panel-hermes,.layout-chat .workbench-dock-panel.panel-hermes{display:flex;flex:1 1 0!important}
+.layout-code .workbench-dock-panel.panel-codex,.layout-chat .workbench-dock-panel.panel-codex{display:none}
+.layout-split .agents-area.dock-vertical{display:flex;flex-direction:column}
+.layout-split .agents-area.dock-horizontal{display:flex;flex-direction:row}
+.layout-split .agents-area.dock-tabs{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:31px minmax(0,1fr)}
+.layout-split .workbench-dock-panel>.agent-dock{border-bottom:0}
+.codex-panel>header>.codex-title{min-width:0;display:flex;flex:1;flex-direction:column}
+.codex-panel>header>.workbench-dock-controls{min-width:auto;display:flex;flex:0 0 auto;flex-direction:row}
+.codex-panel>header>.workbench-dock-controls+.workbench-dock-controls{margin-left:0}

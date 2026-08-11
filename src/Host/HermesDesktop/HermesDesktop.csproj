@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>HermesDesktop</AssemblyName>
+    <RootNamespace>HermesDesktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\photon.ico</ApplicationIcon>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <DebugType>embedded</DebugType>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\photon-mark.png" />
+    <Compile Remove="PhotonWorkspace/**/*.cs" />
+    <Compile Remove="PhotonWorkspace.Smoke/**/*.cs" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+    <PackageReference Include="Porta.Pty" Version="1.0.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HermesDeveloperServices\HermesDeveloperServices.csproj" />
+    <ProjectReference Include="..\HermesDotNetDebugger\HermesDotNetDebugger.csproj" />
+    <ProjectReference Include="..\HermesRoslynLanguageServer\HermesRoslynLanguageServer.csproj" />
+    <ProjectReference Include="..\HermesGitServices\HermesGitServices.csproj" />
+    <ProjectReference Include="..\HermesUsageCollectors\HermesUsageCollectors.csproj" />
+    <ProjectReference Include="..\HermesCredentialBroker\HermesCredentialBroker.csproj" />
+    <ProjectReference Include="..\HermesCredentialBroker.Runtime\HermesCredentialBroker.Runtime.csproj" />
+    <ProjectReference Include="..\PhotonCadRuntime\PhotonCadRuntime.csproj" />
+    <ProjectReference Include="..\PhotonCadRuntime.IndustrialProvider\PhotonCadRuntime.IndustrialProvider.csproj" />
+    <ProjectReference Include="..\PhotonCadPreviews\PhotonCadPreviews.csproj" />
+    <ProjectReference Include="..\PhotonCadProjects.Codec\PhotonCadProjects.Codec.csproj" />
+    <ProjectReference Include="..\PhotonCadProjects.RuntimeSync\PhotonCadProjects.RuntimeSync.csproj" />
+    <ProjectReference Include="..\PhotonCadProjects.Windows\PhotonCadProjects.Windows.csproj" />
+    <ProjectReference Include="..\PhotonCadProjects.DesktopAdapter\PhotonCadProjects.DesktopAdapter.csproj" />
+  </ItemGroup>
+</Project>

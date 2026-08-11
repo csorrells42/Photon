@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "photon.cad.industrial.catalog/v1",
+  "title": "Photon CAD industrial catalog",
+  "type": "object",
+  "properties": {
+    "schema": { "const": "photon.cad.industrial.catalog/v1" },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "baseImageId": { "$ref": "#/$defs/digest" },
+        "build123dVersion": { "const": "0.11.0" },
+        "library": {
+          "type": "object",
+          "properties": {
+            "name": { "const": "bd-warehouse" },
+            "version": { "const": "0.2.0" },
+            "contentDigest": { "$ref": "#/$defs/digest" },
+            "packageId": { "type": "string", "pattern": "^bdw_[0-9a-f]{64}$" }
+          },
+          "required": ["name", "version", "contentDigest", "packageId"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["baseImageId", "build123dVersion", "library"],
+      "additionalProperties": false
+    },
+    "categories": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z-]{0,63}$" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "availability": { "enum": ["supported", "unsupported"] },
+          "reason": { "const": "not-installed-in-pinned-package" }
+        },
+        "required": ["id", "title", "availability"],
+        "additionalProperties": false
+      }
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^bdw_[0-9a-f]{48}$" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "category": { "type": "string", "pattern": "^[a-z][a-z-]{0,63}$" },
+          "availability": { "enum": ["supported", "unsupported"] },
+          "reason": { "const": "unsupported-constructor" },
+          "parameters": {
+            "type": "array",
+            "maxItems": 32,
+            "items": { "$ref": "#/$defs/parameter" }
+          }
+        },
+        "required": ["id", "title", "category", "availability", "parameters"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schema", "runtime", "categories", "items"],
+  "additionalProperties": false,
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "parameter": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "kind": { "enum": ["boolean", "choice", "integer", "number"] },
+        "required": { "type": "boolean" },
+        "nullable": { "type": "boolean" },
+        "default": { "type": ["string", "number", "integer", "boolean", "null"] },
+        "minimum": { "type": ["number", "integer"] },
+        "maximum": { "type": ["number", "integer"] },
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": { "type": ["string", "number", "integer", "boolean"] }
+        }
+      },
+      "required": ["id", "label", "kind", "required", "nullable"],
+      "additionalProperties": false
+    }
+  }
+}

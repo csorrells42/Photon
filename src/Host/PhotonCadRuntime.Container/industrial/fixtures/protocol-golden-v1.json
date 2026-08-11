@@ -1,0 +1,77 @@
+{
+  "schema": "photon.cad.industrial.golden/v1",
+  "baseImageId": "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703",
+  "packages": {
+    "build123d": "0.11.0",
+    "bd-warehouse": "0.2.0"
+  },
+  "catalog": {
+    "expectedCatalogDigest": "sha256:aae5554ce9e57133f508e3343663704d35c82e6a31e5201f6224a9b299ddf6b6",
+    "expectedPackageContentDigest": "sha256:2e1b8d0a41f0562071c3fdc5cbe803871e3c94fdf8927b0238550b6844aea5b9",
+    "requiredCategories": [
+      "bearings",
+      "fasteners",
+      "flanges",
+      "gears",
+      "o-rings",
+      "openbuilds",
+      "pipes",
+      "retaining-rings",
+      "shaft-keys",
+      "sprockets",
+      "threads"
+    ],
+    "unsupportedInPinnedPackage": [
+      "o-rings",
+      "retaining-rings",
+      "shaft-keys"
+    ],
+    "requiredSupportedTitles": [
+      "Spur Gear"
+    ],
+    "requiredSupportedCategory": "bearings"
+  },
+  "primitiveVectors": [
+    {
+      "name": "box-10x20x30",
+      "request": {
+        "schema": "photon.cad.industrial.request/v1",
+        "operation": "createPrimitive",
+        "primitive": {
+          "kind": "box",
+          "dimensions": {
+            "lengthMm": 10,
+            "widthMm": 20,
+            "heightMm": 30
+          }
+        }
+      },
+      "expectedVolumeMm3": 6000
+    },
+    {
+      "name": "cylinder-r5-h12",
+      "request": {
+        "schema": "photon.cad.industrial.request/v1",
+        "operation": "createPrimitive",
+        "primitive": {
+          "kind": "cylinder",
+          "dimensions": {
+            "radiusMm": 5,
+            "heightMm": 12
+          }
+        }
+      },
+      "expectedVolumeFormula": "pi*r*r*h"
+    }
+  ],
+  "preview": {
+    "entityIds": ["assembly-root", "assembly-child"],
+    "sourcePartIds": ["box-part", "cylinder-part"],
+    "canonicalProvenanceFields": ["sources", "occurrences", "tessellation"],
+    "occurrenceFields": ["entityId", "sourcePartId", "parentEntityId", "transform"],
+    "requiredNodeExtras": "photonEntityId",
+    "forbiddenDocumentMembers": ["animations", "images", "skins", "textures"],
+    "externalUrisAllowed": false,
+    "maximumBytes": 134217728
+  }
+}

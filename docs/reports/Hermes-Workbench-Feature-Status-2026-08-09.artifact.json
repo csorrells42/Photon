@@ -1,0 +1,223 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Hermes Workbench Feature Status",
+    "description": "Verified implementation status, remaining gaps, and recommended delivery sequence as of August 9, 2026.",
+    "generatedAt": "2026-08-09T05:05:01-05:00",
+    "cards": [
+      {
+        "id": "runtime_health",
+        "description": "Read-only diagnostics across bundle, host, Docker, Hermes, Serena, Vite, and runtime identity.",
+        "dataset": "verification",
+        "sourceId": "runtime_diagnostics",
+        "metrics": [
+          { "label": "Runtime checks passed", "field": "runtime_checks", "format": "integer" },
+          { "label": "Errors", "field": "runtime_errors", "format": "integer" },
+          { "label": "Warnings", "field": "runtime_warnings", "format": "integer" }
+        ]
+      },
+      {
+        "id": "frontend_quality",
+        "description": "Current React/TypeScript automated verification.",
+        "dataset": "verification",
+        "sourceId": "frontend_verification",
+        "metrics": [
+          { "label": "Tests passed", "field": "tests_passed", "format": "integer" },
+          { "label": "Test files passed", "field": "test_files", "format": "integer" }
+        ]
+      }
+    ],
+    "tables": [
+      {
+        "id": "feature_status",
+        "title": "Feature delivery status",
+        "dataset": "feature_status",
+        "sourceId": "parity_audit",
+        "columns": [
+          { "field": "area", "label": "Area", "type": "text" },
+          { "field": "status", "label": "Status", "type": "text" },
+          { "field": "remaining", "label": "Next proof or delivery slice", "type": "text" }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "coverage_stage",
+        "title": "Most product areas are implemented but still need live acceptance",
+        "subtitle": "Count of the eleven tracked feature areas by strongest evidence stage.",
+        "type": "bar",
+        "dataset": "coverage_stage",
+        "sourceId": "parity_audit",
+        "encodings": {
+          "x": { "field": "stage", "type": "ordinal", "label": "Evidence stage" },
+          "y": { "field": "areas", "type": "quantitative", "label": "Feature areas", "format": "integer" }
+        },
+        "yAxisTitle": "Feature areas",
+        "valueFormat": "integer",
+        "layout": "full"
+      }
+    ],
+    "sources": [
+      { "id": "runtime_diagnostics", "label": "Hermes Workbench runtime diagnostics", "path": "Test-Hermes.ps1" },
+      { "id": "frontend_verification", "label": "Frontend test and production build", "path": "src/package.json" },
+      { "id": "parity_audit", "label": "Hermes upstream function parity audit", "path": "docs/HERMES-FUNCTION-PARITY.md" },
+      { "id": "roadmap", "label": "Hermes Workbench roadmap", "path": "docs/ROADMAP.md" },
+      { "id": "usage_matrix", "label": "Usage Intelligence provider matrix", "path": "docs/USAGE-INTELLIGENCE-PROVIDERS.md" }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# Hermes Workbench Feature Status\n\n**Verified August 9, 2026**"
+      },
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "body": "## Executive Summary\n\nHermes Workbench has moved beyond a visual prototype: the containerized Hermes runtime, local Serena service, native C# WebView2 host, IDE shell, Monaco editor, ConPTY terminal, Hermes chat adapter, session management, model controls, Control Center, Codex panel foundation, Usage Intelligence shell, and portable lifecycle scripts are implemented. The live stack is healthy, with **9 of 9 diagnostics passing and no errors or warnings**; the frontend currently passes **83 tests across 20 files**, and its production build succeeds.\n\nThe product is not ready to call feature-complete yet. The immediate release gate is authenticated live validation of chat, sessions, tools, approvals, attachments, reconnect behavior, and the new in-Workbench login synchronization. The portable installer ZIP must then be rebuilt from the current source and extraction-verified. Usage Intelligence has a polished provider-neutral UI and native credential-vault boundary, but real provider collectors are intentionally not connected yet."
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "cardIds": ["runtime_health", "frontend_quality"]
+      },
+      {
+        "id": "findings",
+        "type": "markdown",
+        "sourceId": "parity_audit",
+        "body": "## Key Findings\n\n1. **The architecture is update-safe by design.** Workbench consumes versioned HTTP, WebSocket, and host protocols instead of copying upstream Hermes page internals. The upstream container remains separately updateable and rollback-capable.\n2. **The desktop application is real and deployed.** The thin C# host uses WebView2, trusted loopback navigation, native window controls, a shared-profile authentication window, Windows Credential Manager, ConPTY PowerShell, and an optional Codex app-server bridge.\n3. **The daily development experience is substantially implemented.** The adaptive IDE shell includes workspace browsing, lazy Monaco editing, terminal tabs, rich safe Markdown chat, tool timelines, approvals, prompts, models, attachments, sessions, Control Center, Serena health, and VS Code task automation.\n4. **Authentication needed one important desktop-specific correction.** Browser and WebView2 cookie stores are separate. Workbench now routes sign-in through its branded Account surface and publishes one authentication-state event so chat, sessions, and system data reconnect together. This source fix is automated-test and build verified; an interactive signed-in desktop turn remains the final proof.\n5. **The usage dashboard is a secure foundation, not live billing telemetry.** Credentials belong in the native Windows vault and React receives masked metadata only. OpenAI API, OpenRouter, Google Cloud, Gemini, and Anthropic collectors remain future provider-by-provider work; consumer ChatGPT and Claude subscription allowances do not currently have assumed supported reporting APIs."
+      },
+      {
+        "id": "feature_ledger",
+        "type": "markdown",
+        "sourceId": "parity_audit",
+        "body": "## Feature Ledger\n\n- **Runtime and services - live verified:** Docker, Hermes 0.20.0, Serena, Vite, and runtime identity are healthy.\n- **Native C# host - deployed:** WebView2, ConPTY, secure vault, window controls, and native auth host are present.\n- **Hermes chat - built, live proof pending:** streaming, reasoning, tools, approvals, prompts, models, attachments, rich Markdown, stop, and reconnect.\n- **Authentication - synchronization fix built, interactive proof pending:** branded Account login now drives chat, sessions, and system refresh.\n- **Sessions - adapter complete:** list, history, resume, rename, archive, and two-step delete.\n- **IDE workspace - usable foundation:** adaptive shell, read-only explorer, Monaco, terminal, and task automation.\n- **Serena - service healthy, route proof pending:** sanitized health/tool discovery exists; a real Hermes-to-Serena tool call remains.\n- **Codex panel - protocol foundation complete:** account, tasks, streaming turns, activity, approvals, input, interrupt, and usage signals are mapped.\n- **Usage Intelligence - UI and vault foundation:** real official provider collectors are not yet connected.\n- **Portable installer - scripts verified, ZIP refresh required:** current sources and desktop evidence must be repackaged and extraction-tested.\n- **Upstream administration - deliberately delegated:** broad configuration, credentials, MCP OAuth/catalog, skills, backups, plugins, cron, channels, and advanced model administration remain in upstream Hermes."
+      },
+      {
+        "id": "coverage_chart",
+        "type": "chart",
+        "chartId": "coverage_stage",
+        "layout": "full"
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "sourceId": "roadmap",
+        "body": "## Recommended Next Steps\n\n1. **Complete one authenticated desktop acceptance pass.** Sign in inside Workbench, send a real Hermes turn, resume a session, invoke a Serena-backed tool, exercise approval/prompt rendering, attach a small file, and confirm automatic reconnect after an intentional gateway drop.\n2. **Refresh the portable deliverable.** Update documentation evidence, rebuild `Hermes-Remote-Install.zip`, extract it into a disposable directory, verify every manifest hash and required script, and run bundle-only installation verification.\n3. **Close the highest-value parity gaps.** Prioritize queued prompts, edit/regenerate/retry, richer session search/branching, citations/media rendering, and read-only operational logs. Keep provider credentials, raw configuration, MCP OAuth, backups, and other high-churn administration delegated upstream until each receives a narrow reviewed contract.\n4. **Connect Usage Intelligence incrementally.** Start with one supported read-only organization API, likely OpenAI API usage/costs or OpenRouter credits, using opaque credential references and explicit freshness/quality labels. Do not scrape consumer dashboards.\n5. **Polish after proof.** Run keyboard, screen-reader, responsive-layout, long-transcript, and error-state UX passes only after the authenticated runtime path and portable install are repeatably green."
+      },
+      {
+        "id": "questions",
+        "type": "markdown",
+        "body": "## Further Questions\n\n- Which advanced composer slice creates the most value first: queued prompts, edit/regenerate, slash commands, or voice?\n- Should workspace mutation remain delegated to Hermes, or should Workbench eventually support explicitly confirmed edits with undo?\n- Which live Usage Intelligence collector should be the first production connector, based on the accounts and least-privilege credentials available?\n- Which upstream administrative pages deserve a native Workbench treatment, and which should remain deliberately delegated to reduce update risk?"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "body": "## Caveats and Evidence Boundaries\n\n- Runtime health and frontend automation are confirmed on this computer at the report timestamp. They do not prove behavior on a second Windows computer.\n- The current container reports Hermes **0.20.0** and is healthy, but compatibility must still be rechecked after every explicit upstream image update.\n- The authentication synchronization fix passed unit and production-build verification; the report does not label the signed-in desktop chat path live-verified until a real interactive turn succeeds.\n- Native credential storage is implemented, but no real Usage Intelligence provider key was created, read, or altered during this report.\n- The existing portable ZIP predates the latest login synchronization source change and desktop-host deployment evidence; it must be rebuilt before customer handoff."
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-09T05:05:01-05:00",
+    "status": "ready",
+    "datasets": {
+      "verification": [
+        {
+          "runtime_checks": 9,
+          "runtime_errors": 0,
+          "runtime_warnings": 0,
+          "tests_passed": 83,
+          "test_files": 20,
+          "hermes_version": "0.20.0"
+        }
+      ],
+      "feature_status": [
+        { "priority": 1, "area": "Runtime and services", "status": "Live verified", "evidence": "Docker engine, Hermes container/gateway, Serena, Workbench Vite host, and immutable image identity all pass diagnostics.", "remaining": "Repeat on a clean Windows machine." },
+        { "priority": 2, "area": "Native desktop host", "status": "Deployed", "evidence": "C# WebView2 host, native terminal, credential vault, window controls, and shared-profile auth host are built and deployed.", "remaining": "Signed-in acceptance; later code signing." },
+        { "priority": 3, "area": "Hermes chat", "status": "Built; proof pending", "evidence": "Ticketed WebSocket, streaming, reasoning, stop, tools, approvals, prompts, models, attachments, Markdown, and bounded reconnect are implemented.", "remaining": "Live turn, tool, attachment, interrupt, reconnect." },
+        { "priority": 4, "area": "Authentication", "status": "Fix built; proof pending", "evidence": "Branded Account login and shared auth-change synchronization replace the external legacy sign-in link.", "remaining": "Confirm login unlocks chat without restart." },
+        { "priority": 5, "area": "Sessions", "status": "Adapter complete", "evidence": "List, history, resume, rename, archive, delete, profile fallback, and visible errors are implemented.", "remaining": "Live write/resume; later advanced branching." },
+        { "priority": 6, "area": "IDE workspace", "status": "Usable foundation", "evidence": "Adaptive layouts, workspace tree, read-only bridge, lazy Monaco, minimap, syntax support, ConPTY terminal, and task menu are implemented.", "remaining": "Write, Git, search, debugging, accessibility." },
+        { "priority": 7, "area": "Serena", "status": "Healthy; route proof pending", "evidence": "Local Serena is running, launcher configures Hermes MCP, and Control Center exposes a sanitized read-only health/tool adapter.", "remaining": "Authenticated Hermes-to-Serena tool call." },
+        { "priority": 8, "area": "Codex panel", "status": "Protocol foundation", "evidence": "Account discovery, device login, tasks, streaming turns, activities, approvals, input requests, interrupt, rate-limit, and usage signals are mapped.", "remaining": "End-to-end UX acceptance and coordination." },
+        { "priority": 9, "area": "Usage Intelligence", "status": "UI and vault foundation", "evidence": "Provider-neutral dashboard, deterministic demo data, capability matrix, and native-only Windows credential vault are implemented.", "remaining": "Connect official collectors one provider at a time." },
+        { "priority": 10, "area": "Portable installer", "status": "ZIP refresh required", "evidence": "Safe install, launch, check, shutdown, update/rollback, manifest integrity, VS Code tasks, and offline smoke flows exist.", "remaining": "Rebuild, extract-verify, second-PC test." },
+        { "priority": 11, "area": "Upstream administration", "status": "Delegated", "evidence": "Provider credentials, broad config, MCP OAuth/catalog, skills hub, backups, plugins, cron, channels, and advanced models remain available in upstream Hermes.", "remaining": "Native slices only after contract review." }
+      ],
+      "coverage_stage": [
+        { "stage": "Live verified", "areas": 2 },
+        { "stage": "Acceptance pending", "areas": 8 },
+        { "stage": "Delegated", "areas": 1 }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "runtime_diagnostics",
+      "label": "Hermes Workbench runtime diagnostics",
+      "path": "Test-Hermes.ps1",
+      "query": {
+        "engine": "snapshot",
+        "sql": "SELECT 9 AS runtime_checks, 0 AS runtime_errors, 0 AS runtime_warnings, '0.20.0' AS hermes_version",
+        "description": "Snapshot of powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\Test-Hermes.ps1 executed on 2026-08-09; 9 checks passed with 0 errors and 0 warnings.",
+        "executed_at": "2026-08-09T05:02:00-05:00",
+        "tables_used": ["local runtime processes", "Docker container state", "Hermes public status endpoint"]
+      }
+    },
+    {
+      "id": "frontend_verification",
+      "label": "Frontend test and production build",
+      "path": "src/package.json",
+      "query": {
+        "engine": "snapshot",
+        "sql": "SELECT 83 AS tests_passed, 20 AS test_files, TRUE AS production_build_passed",
+        "description": "Snapshot of npm test -- --run and npm run build executed on 2026-08-09; 83 tests across 20 files passed and the build completed.",
+        "executed_at": "2026-08-09T05:00:24-05:00",
+        "tables_used": ["src test suite", "src production build"]
+      }
+    },
+    {
+      "id": "parity_audit",
+      "label": "Hermes upstream function parity audit",
+      "path": "docs/HERMES-FUNCTION-PARITY.md",
+      "query": {
+        "engine": "snapshot",
+        "sql": "SELECT priority, area, status, evidence, remaining FROM feature_status_snapshot ORDER BY priority",
+        "description": "Source-mapped parity classifications and verification boundaries for upstream Hermes and Workbench adapters.",
+        "executed_at": "2026-08-09T05:05:01-05:00",
+        "tables_used": ["Workbench source", "local upstream Hermes checkout"]
+      }
+    },
+    {
+      "id": "roadmap",
+      "label": "Hermes Workbench roadmap",
+      "path": "docs/ROADMAP.md",
+      "query": {
+        "engine": "snapshot",
+        "sql": "SELECT recommendation FROM roadmap_snapshot ORDER BY priority",
+        "description": "Current completed foundation and ordered implementation priorities.",
+        "executed_at": "2026-08-09T05:05:01-05:00",
+        "tables_used": ["project roadmap"]
+      }
+    },
+    {
+      "id": "usage_matrix",
+      "label": "Usage Intelligence provider matrix",
+      "path": "docs/USAGE-INTELLIGENCE-PROVIDERS.md",
+      "query": {
+        "engine": "snapshot",
+        "sql": "SELECT provider, classification, supported_surface FROM usage_provider_matrix_snapshot",
+        "description": "Official-interface research and security classifications for future usage collectors.",
+        "executed_at": "2026-08-09T05:05:01-05:00",
+        "tables_used": ["provider capability matrix"]
+      }
+    }
+  ],
+  "package_info": {
+    "root": "docs/reports",
+    "manifestPath": "Hermes-Workbench-Feature-Status-2026-08-09.artifact.json",
+    "snapshotPath": "Hermes-Workbench-Feature-Status-2026-08-09.artifact.json"
+  }
+}

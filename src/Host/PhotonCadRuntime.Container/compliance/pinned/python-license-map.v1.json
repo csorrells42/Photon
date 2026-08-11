@@ -1,0 +1,17 @@
+{
+  "schema": "photon.cad.python-license-map/v1",
+  "entries": [
+    { "role": "geometry", "name": "cadquery-ocp-novtk", "version": "7.9.3.1", "resolutionStatus": "unresolved", "licenseExpression": null, "reason": "Installed metadata has no license declaration and no embedded legal file." },
+    { "role": "geometry", "name": "cadquery-ocp-proxy", "version": "7.9.3.1", "resolutionStatus": "unresolved", "licenseExpression": null, "reason": "Installed metadata has no license declaration and no embedded legal file." },
+    { "role": "geometry", "name": "matplotlib-inline", "version": "0.2.1", "resolutionStatus": "pending-verification", "licenseExpression": null, "reason": "A legal file exists but installed metadata does not declare an SPDX license." },
+    { "role": "geometry", "name": "ocpsvg", "version": "0.6.0", "resolutionStatus": "pending-verification", "licenseExpression": null, "reason": "A legal file exists but installed metadata does not declare an SPDX license." },
+    { "role": "geometry", "name": "resvg-py", "version": "0.3.1", "resolutionStatus": "pending-verification", "licenseExpression": null, "reason": "A legal file exists but installed metadata does not declare an SPDX license." },
+    { "role": "assembly", "name": "cadquery-ocp-novtk", "version": "7.9.3.1.1", "resolutionStatus": "pending-upstream-mapping", "licenseExpression": "Apache-2.0", "reason": "Wheel metadata declares Apache-2.0 but the split wheel has no legal file; exact cadquery_ocp coverage is unproven." },
+    { "role": "assembly", "name": "cadquery-ocp-proxy", "version": "7.9.3.1.1", "resolutionStatus": "pending-upstream-mapping", "licenseExpression": "Apache-2.0", "reason": "Wheel metadata declares Apache-2.0 but the split wheel has no legal file; exact cadquery_ocp coverage is unproven." },
+    { "role": "assembly", "name": "ocpsvg", "version": "0.6.0", "resolutionStatus": "pending-verification", "licenseExpression": null, "reason": "A legal file exists but installed metadata does not declare an SPDX license." },
+    { "role": "assembly", "name": "opentelemetry-distro", "version": "0.65b0", "resolutionStatus": "pending-upstream-mapping", "licenseExpression": "Apache-2.0", "reason": "License is declared but the installed wheel has no legal file." },
+    { "role": "assembly", "name": "partcad-service-json-rpc", "version": "0.7.158", "resolutionStatus": "pending-upstream-mapping", "licenseExpression": "Apache-2.0", "reason": "Classifier is present but the installed wheel has no legal file." },
+    { "role": "assembly", "name": "partcad-utils", "version": "0.7.158", "resolutionStatus": "pending-upstream-mapping", "licenseExpression": "Apache-2.0", "reason": "Classifier is present but the installed wheel has no legal file." },
+    { "role": "assembly", "name": "tqdm", "version": "4.69.0", "resolutionStatus": "pending-upstream-mapping", "licenseExpression": "MPL-2.0 AND MIT", "reason": "License metadata is present but the installed wheel has no legal file." }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "schemaId": "photon.cad.offline-assets.lock/v1",
+  "distribution": "local-engineering-only",
+  "receiptSha256": "73774bd9e932624775f281c46377267945f0934b6ae6c9d6d83e13d0702b3687",
+  "policySha256": "1e09f5a3d43eea127ffa8072620a308b91c8028c44be735907d88be22e2465a2",
+  "files": [
+    {
+      "name": "bundle-receipt.json",
+      "length": 3047,
+      "sha256": "73774bd9e932624775f281c46377267945f0934b6ae6c9d6d83e13d0702b3687"
+    },
+    {
+      "name": "LOCAL-ENGINEERING-ONLY.md",
+      "length": 577,
+      "sha256": "dcb4b32f4cec203835e2ea16c82788235a8f1505e05e2c22e193680703fa0939"
+    },
+    {
+      "name": "photon-cad-geometry.tar",
+      "length": 466348032,
+      "sha256": "c09e75b12ec594a0bade4d9b4821c1f528d7e537b040c3a3f1a7562872801efa"
+    },
+    {
+      "name": "photon-cad-assembly.tar",
+      "length": 526439936,
+      "sha256": "ce0fadf9783c58c1d6f34fa02c6e09a215681b85d7e47990abbb8ad1078c0bce"
+    },
+    {
+      "name": "runtime-policy.json",
+      "length": 1146,
+      "sha256": "1e09f5a3d43eea127ffa8072620a308b91c8028c44be735907d88be22e2465a2"
+    }
+  ],
+  "images": [
+    {
+      "role": "geometry",
+      "tag": "photon-cad-geometry:0.1.0-b123dmcp-0.3.80-8fb7cefb",
+      "imageId": "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703",
+      "archive": "photon-cad-geometry.tar",
+      "archiveSha256": "c09e75b12ec594a0bade4d9b4821c1f528d7e537b040c3a3f1a7562872801efa",
+      "archiveByteLength": 466348032
+    },
+    {
+      "role": "assembly",
+      "tag": "photon-cad-assembly:0.1.1-partcad-0.7.158-b77c2c08-p1066a9ff",
+      "imageId": "sha256:8b7fe2eb30f044aaa4e6251f46029f5a1fb221c49b0f79c95d4df70249c0c58b",
+      "archive": "photon-cad-assembly.tar",
+      "archiveSha256": "ce0fadf9783c58c1d6f34fa02c6e09a215681b85d7e47990abbb8ad1078c0bce",
+      "archiveByteLength": 526439936
+    }
+  ]
+}

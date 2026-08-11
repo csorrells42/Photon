@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>HermesDesktop.Smoke</AssemblyName>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HermesDesktop\HermesDesktop.csproj" />
+    <ProjectReference Include="..\HermesDotNetDebugger\HermesDotNetDebugger.csproj" />
+    <ProjectReference Include="..\HermesRoslynLanguageServer\HermesRoslynLanguageServer.csproj" />
+    <ProjectReference Include="..\HermesCredentialBroker\HermesCredentialBroker.csproj" />
+    <ProjectReference Include="..\PhotonCadRuntime\PhotonCadRuntime.csproj" />
+  </ItemGroup>
+</Project>
