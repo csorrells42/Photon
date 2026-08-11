@@ -43,14 +43,21 @@ class TestSessionInfoReasoningEffort:
     def test_disabled_reports_none(self) -> None:
         info = _session_info(_agent({"enabled": False}))
         assert info["reasoning_effort"] == "none"
+        assert info["reasoning_configured"] is True
 
     def test_enabled_reports_effort(self) -> None:
         info = _session_info(_agent({"enabled": True, "effort": "high"}))
         assert info["reasoning_effort"] == "high"
 
+    def test_enabled_without_effort_reports_toggle_token(self) -> None:
+        info = _session_info(_agent({"enabled": True}))
+        assert info["reasoning_effort"] == "enabled"
+        assert info["reasoning_configured"] is True
+
     def test_unset_reports_empty(self) -> None:
         info = _session_info(_agent(None))
         assert info["reasoning_effort"] == ""
+        assert info["reasoning_configured"] is False
 
 
 class TestConfigSetReasoningSessionScope:
@@ -85,6 +92,69 @@ class TestConfigSetReasoningSessionScope:
         resp = self._dispatch({"key": "reasoning", "value": "bogus"})
         assert "error" in resp
 
+    def test_desktop_validation_accepts_only_cached_exact_option(self) -> None:
+        agent = _agent(None)
+        session = {
+            "session_key": "k1",
+            "agent": agent,
+            "reasoning_control": {
+                "model": "glm-5",
+                "provider": "zai",
+                "source": "compatibility",
+                "options": ["none", "enabled"],
+            },
+        }
+        with patch.dict(server._sessions, {"s1": session}, clear=False), patch.object(
+            server, "_persist_live_session_runtime"
+        ), patch.object(server, "_emit"):
+            accepted = self._dispatch({
+                "key": "reasoning",
+                "session_id": "s1",
+                "value": "enabled",
+                "validate_model_control": True,
+            })
+            rejected = self._dispatch({
+                "key": "reasoning",
+                "session_id": "s1",
+                "value": "high",
+                "validate_model_control": True,
+            })
+
+        assert accepted["result"]["value"] == "enabled"
+        assert agent.reasoning_config == {"enabled": True}
+        assert rejected["error"]["code"] == 4002
+
+    def test_desktop_validation_fails_closed_without_cached_descriptor(self) -> None:
+        session = {"session_key": "k1", "agent": _agent(None)}
+        with patch.dict(server._sessions, {"s1": session}, clear=False):
+            response = self._dispatch({
+                "key": "reasoning",
+                "session_id": "s1",
+                "value": "high",
+                "validate_model_control": True,
+            })
+        assert response["error"]["code"] == 4002
+
+    def test_desktop_validation_rejects_a_stale_model_binding(self) -> None:
+        session = {
+            "session_key": "k1",
+            "agent": _agent(None),
+            "reasoning_control": {
+                "model": "different-model",
+                "provider": "zai",
+                "source": "compatibility",
+                "options": ["high"],
+            },
+        }
+        with patch.dict(server._sessions, {"s1": session}, clear=False):
+            response = self._dispatch({
+                "key": "reasoning",
+                "session_id": "s1",
+                "value": "high",
+                "validate_model_control": True,
+            })
+        assert response["error"]["code"] == 4002
+
 
 class TestLoadReasoningConfigYamlBoolean:
     """YAML `reasoning_effort: false` means disabled, not default."""
@@ -95,9 +165,33 @@ class TestLoadReasoningConfigYamlBoolean:
         ):
             assert server._load_reasoning_config() == {"enabled": False}
 
+
+class TestConfigGetReasoningProvenance:
+    def _dispatch(self, params: dict) -> dict:
+        return server._methods["config.get"]("rid-get", params)
+
+    def test_unset_profile_is_model_default_not_fabricated_medium(self) -> None:
+        with patch.object(server, "_load_cfg", return_value={"agent": {}}):
+            response = self._dispatch({"key": "reasoning"})
+        assert response["result"] == {
+            "value": "",
+            "configured": False,
+            "source": "model-default",
+            "display": "show",
+        }
+
+    def test_session_toggle_is_reported_as_enabled(self) -> None:
+        session = {"create_reasoning_override": {"enabled": True}}
+        with patch.dict(server._sessions, {"s1": session}, clear=False), patch.object(
+            server, "_load_cfg", return_value={"agent": {}}
+        ):
+            response = self._dispatch({"key": "reasoning", "session_id": "s1"})
+        assert response["result"]["value"] == "enabled"
+        assert response["result"]["configured"] is True
+        assert response["result"]["source"] == "session"
+
     def test_string_false_disables(self) -> None:
         with patch.object(
             server, "_load_cfg", return_value={"agent": {"reasoning_effort": "false"}}
         ):
             assert server._load_reasoning_config() == {"enabled": False}
-

@@ -209,6 +209,41 @@ class TestRunTurn:
         # turn_id propagated for downstream session-DB linkage
         assert r.turn_id == "turn-fake-001"
 
+    @pytest.mark.parametrize(
+        "reasoning_config,expected_effort",
+        [
+            (None, None),
+            ({}, None),
+            ({"enabled": True}, None),
+            ({"enabled": True, "effort": "high"}, "high"),
+            ({"enabled": True, "effort": " ULTRA "}, "ultra"),
+            ({"enabled": False, "effort": "high"}, "none"),
+            ({"enabled": True, "effort": "unsupported"}, None),
+        ],
+    )
+    def test_turn_start_forwards_only_bounded_session_effort(
+        self, reasoning_config, expected_effort
+    ):
+        client = FakeClient()
+        client.queue_notification(
+            "turn/completed",
+            threadId="t",
+            turn={"id": "tu1", "status": "completed", "error": None},
+        )
+        session = make_session(client)
+
+        session.run_turn(
+            "hi",
+            reasoning_config=reasoning_config,
+            turn_timeout=2.0,
+        )
+
+        _, params = next(request for request in client.requests if request[0] == "turn/start")
+        if expected_effort is None:
+            assert "effort" not in params
+        else:
+            assert params["effort"] == expected_effort
+
 
 
     def test_foreign_completion_in_server_request_drain_is_ignored(self):
@@ -895,4 +930,3 @@ class TestClassifyOAuthFailure:
         assert _classify_oauth_failure() is None
         assert _classify_oauth_failure("") is None
         assert _classify_oauth_failure("", None) is None  # type: ignore[arg-type]
-

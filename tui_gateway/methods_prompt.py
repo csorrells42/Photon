@@ -945,6 +945,13 @@ def _(rid, params: dict) -> dict:
     return _respond(rid, params, "text", allow_expired=True)
 
 
+@method("developer.native.respond")
+def _(rid, params: dict) -> dict:
+    # A native build can finish after the agent-side wait expires. Late typed
+    # results are harmless and must not surface a raw JSON-RPC error.
+    return _respond(rid, params, "text", allow_expired=True)
+
+
 @method("sudo.respond")
 def _(rid, params: dict) -> dict:
     return _respond(rid, params, "password", allow_expired=True)

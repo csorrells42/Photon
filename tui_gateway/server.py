@@ -3311,6 +3311,7 @@ def _block(event: str, sid: str, payload: dict, timeout: float | None = 300) -> 
         "terminal.read.request",
         "preview.read.request",
         "window.read.request",
+        "developer.native.request",
     }:
         _emit(
             f"{event.removesuffix('.request')}.expire",
@@ -4677,6 +4678,11 @@ def _apply_model_switch(
                 f"Model switch to {result.new_model} failed ({exc}); "
                 f"staying on {getattr(agent, 'model', current_model)}."
             ) from exc
+        if not one_turn:
+            # A model-scoped value must never bleed into the next model. The
+            # new agent has already resolved its own profile/model default.
+            session.pop("create_reasoning_override", None)
+            session.pop("reasoning_control", None)
         _restart_slash_worker(sid, session)
         _persist_live_session_runtime(session)
         _persist_live_session_system_prompt(session)
@@ -4703,6 +4709,8 @@ def _apply_model_switch(
     # agent in place; the override dict makes that choice survive a rebuild
     # without touching shared process state.
     if pin_session_override and isinstance(session, dict) and not one_turn:
+        session.pop("create_reasoning_override", None)
+        session.pop("reasoning_control", None)
         session["model_override"] = {
             "model": result.new_model,
             "provider": result.target_provider,
@@ -5221,7 +5229,7 @@ def _session_info(agent, session: dict | None = None) -> dict:
             # pick and re-creating every later chat at the default effort.
             reasoning_effort = "none"
         else:
-            reasoning_effort = str(reasoning_config.get("effort", "") or "")
+            reasoning_effort = str(reasoning_config.get("effort", "") or "enabled")
     service_tier = getattr(agent, "service_tier", None) or mirror.get("service_tier") or ""
     # Effective approval-bypass state — the same three sources that
     # check_all_command_guards() ORs together: persistent config
@@ -5254,6 +5262,8 @@ def _session_info(agent, session: dict | None = None) -> dict:
         "provider": pending_provider
         or mirror.get("provider", getattr(agent, "provider", "")),
         "reasoning_effort": reasoning_effort,
+        "reasoning_configured": isinstance(reasoning_config, dict),
+        "model_switch_pending": bool(pending_switch),
         "service_tier": service_tier,
         "fast": service_tier == "priority",
         "yolo": yolo,
@@ -5889,6 +5899,21 @@ def _agent_cbs(sid: str) -> dict:
             sid,
             {},
             timeout=30,
+        ),
+        # windows_developer tool (desktop GUI): forward a bounded typed request
+        # to the native DeveloperServices host. This is the truthful Windows
+        # and WPF path when the agent's own terminal happens to be Linux.
+        "windows_developer_callback": lambda action, project_path=None, program_path=None, arguments=None, configuration="Debug": _block(
+            "developer.native.request",
+            sid,
+            {
+                "action": action,
+                **({"project_path": project_path} if project_path else {}),
+                **({"program_path": program_path} if program_path else {}),
+                **({"arguments": arguments} if arguments else {}),
+                "configuration": configuration,
+            },
+            timeout=300,
         ),
     }
 
@@ -11218,6 +11243,39 @@ def _(rid, params: dict) -> dict:
             parsed = parse_reasoning_effort(arg)
             if parsed is None:
                 return _err(rid, 4002, f"unknown reasoning value: {value}")
+            if session is not None and params.get("validate_model_control") is True:
+                control = session.get("reasoning_control")
+                options = control.get("options") if isinstance(control, dict) else None
+                control_source = control.get("source") if isinstance(control, dict) else None
+                model_override = session.get("model_override")
+                agent = session.get("agent")
+                current_model = str(
+                    (model_override.get("model") if isinstance(model_override, dict) else "")
+                    or getattr(agent, "model", "")
+                    or ""
+                ).strip()
+                current_provider = str(
+                    (model_override.get("provider") if isinstance(model_override, dict) else "")
+                    or getattr(agent, "provider", "")
+                    or ""
+                ).strip()
+                control_model = str(control.get("model") if isinstance(control, dict) else "").strip()
+                control_provider = str(control.get("provider") if isinstance(control, dict) else "").strip()
+                provider_matches = control_provider == current_provider or (
+                    current_provider == "custom" and control_provider.startswith("custom:")
+                )
+                if (
+                    control_source not in {"server", "compatibility"}
+                    or not isinstance(options, list)
+                    or arg not in options
+                    or control_model != current_model
+                    or not provider_matches
+                ):
+                    return _err(
+                        rid,
+                        4002,
+                        "reasoning control is unavailable for the selected model",
+                    )
             if global_scope or session is None:
                 _write_config_key("agent.reasoning_effort", arg)
                 if session is not None:

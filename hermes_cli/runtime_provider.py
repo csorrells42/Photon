@@ -739,11 +739,21 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
                         "name": entry.get("name", ep_name),
                         "base_url": base_url.strip(),
                         "api_key": resolved_api_key,
-                        "model": entry.get("default_model", ""),
+                        "model": entry.get("model") or entry.get("default_model", ""),
                     }
                     extra_body = entry.get("extra_body")
                     if isinstance(extra_body, dict):
                         result["extra_body"] = dict(extra_body)
+                    # Named runtime profiles are host-owned request policy for
+                    # this exact provider/model. Preserve their bounded maps
+                    # through resolution; the request projector later emits
+                    # only the explicitly active profile fields.
+                    runtime_profiles = entry.get("runtime_profiles")
+                    if isinstance(runtime_profiles, dict):
+                        result["runtime_profiles"] = dict(runtime_profiles)
+                    active_runtime_profiles = entry.get("active_runtime_profiles")
+                    if isinstance(active_runtime_profiles, dict):
+                        result["active_runtime_profiles"] = dict(active_runtime_profiles)
                     _lift_extra_headers(entry, result)
                     # The v11→v12 migration writes the API mode under the new
                     # ``transport`` field, but hand-edited configs may still
@@ -1040,10 +1050,21 @@ def _normalize_base_url_for_match(value) -> str:
 
 
 def _custom_provider_request_overrides(custom_provider: Dict[str, Any]) -> Dict[str, Any]:
+    from hermes_cli.runtime_profiles import RuntimeProfileError, selected_profile_request_overrides
+
     extra_body = custom_provider.get("extra_body")
-    if not isinstance(extra_body, dict) or not extra_body:
-        return {}
-    return {"extra_body": dict(extra_body)}
+    result: Dict[str, Any] = {}
+    if isinstance(extra_body, dict) and extra_body:
+        result["extra_body"] = dict(extra_body)
+    try:
+        selected = selected_profile_request_overrides(custom_provider)
+    except RuntimeProfileError:
+        selected = {}
+    selected_extra = selected.pop("extra_body", None)
+    result.update(selected)
+    if isinstance(selected_extra, dict) and selected_extra:
+        result["extra_body"] = {**dict(result.get("extra_body") or {}), **selected_extra}
+    return result
 
 
 def _resolve_named_custom_runtime(

@@ -372,6 +372,59 @@ def _(rid, params: dict) -> dict:
             include_unconfigured=bool(params.get("include_unconfigured")),
             refresh=bool(params.get("refresh")),
         )
+        selected_model = str(
+            params.get("reasoning_model") or payload.get("model") or ctx.current_model or ""
+        ).strip()
+        selected_provider = str(
+            params.get("reasoning_provider") or payload.get("provider") or ctx.current_provider or ""
+        ).strip()
+        supports_reasoning = None
+        selection_in_catalog = False
+        for row in payload.get("providers") or []:
+            if not isinstance(row, dict) or str(row.get("slug") or "").strip() != selected_provider:
+                continue
+            selection_in_catalog = selected_model in (row.get("models") or [])
+            capabilities = row.get("capabilities")
+            capability = capabilities.get(selected_model) if isinstance(capabilities, dict) else None
+            if isinstance(capability, dict) and isinstance(capability.get("reasoning"), bool):
+                supports_reasoning = capability["reasoning"]
+            break
+
+        current_provider = str(ctx.current_provider or "").strip()
+        same_endpoint = selected_provider == current_provider
+        from hermes_cli.reasoning_controls import reasoning_control_for_model
+
+        reasoning_control = reasoning_control_for_model(
+            selected_provider,
+            selected_model,
+            base_url=(
+                str(ctx.current_base_url or getattr(agent, "base_url", "") or "").strip()
+                if same_endpoint else ""
+            ),
+            api_key=(
+                str(getattr(agent, "api_key", "") or "") or None
+                if same_endpoint else None
+            ),
+            supports_reasoning=supports_reasoning,
+            selection_verified=(
+                selection_in_catalog
+                or (
+                    selected_model == str(payload.get("model") or "").strip()
+                    and selected_provider == str(payload.get("provider") or "").strip()
+                )
+            ),
+        )
+        payload["reasoning_control"] = reasoning_control
+        if (
+            session is not None
+            and selected_model == str(payload.get("model") or "").strip()
+            and selected_provider == str(payload.get("provider") or "").strip()
+        ):
+            # Cache only the bounded, secret-free descriptor that was actually
+            # returned for the session's current pair. Merely inspecting a
+            # different model must never authorize a value against the live
+            # agent. A later desktop save can validate without re-probing.
+            session["reasoning_control"] = dict(reasoning_control)
         return _ok(rid, payload)
     except Exception as e:
         return _err(rid, 5033, str(e))

@@ -109,7 +109,13 @@ def test_apply_model_switch_does_not_leak_process_env():
         "HERMES_INFERENCE_PROVIDER",
     )
 
-    sess_b = {"agent": _FakeAgent(), "session_key": "k-B", "model_override": None}
+    sess_b = {
+        "agent": _FakeAgent(),
+        "session_key": "k-B",
+        "model_override": None,
+        "create_reasoning_override": {"enabled": True, "effort": "high"},
+        "reasoning_control": {"model": "minimax/m3", "options": ["high"]},
+    }
     sess_a = {"agent": _FakeAgent(), "session_key": "k-A", "model_override": None}
 
     with (
@@ -137,6 +143,9 @@ def test_apply_model_switch_does_not_leak_process_env():
     assert sess_b["model_override"]["provider"] == "zai"
     # The switched agent mutated in place.
     assert sess_b["agent"].model == "zai/glm-5.1"
+    # Model-bound composer state cannot survive onto a different provider/model.
+    assert "create_reasoning_override" not in sess_b
+    assert "reasoning_control" not in sess_b
     # Sibling session is completely untouched.
     assert sess_a["model_override"] is None
     assert sess_a["agent"].model == "minimax/m3"

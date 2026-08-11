@@ -185,6 +185,12 @@ matrix = ["mautrix[encryption]==0.21.0", "aiosqlite==0.22.1", "asyncpg==0.31.0",
 wecom = ["defusedxml==0.7.1"]
 cli = ["simple-term-menu==1.6.6"]
 tts-premium = ["elevenlabs==1.59.0"]
+kokoro-tts = [
+  # Fully local, high-quality speech output. Model weights are pinned and
+  # independently digest-verified by tools.tts_tool before first use.
+  "kokoro-onnx==0.5.0",
+  "soundfile==0.13.1",
+]
 voice = [
   # Local STT pulls in wheel-only transitive deps (ctranslate2, onnxruntime).
   "faster-whisper==1.2.1",

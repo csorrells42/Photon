@@ -101,6 +101,74 @@ class TestFetchOpenRouterModels:
         # Image-only model advertised supported_parameters WITHOUT tools → must be dropped.
         assert "google/gemini-3-pro-image-preview" not in ids
 
+    def test_retains_exact_reasoning_metadata_for_selected_model(self, monkeypatch):
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return (
+                    b'{"data":[{"id":"anthropic/claude-opus-4.7",'
+                    b'"canonical_slug":"anthropic/claude-opus-4.7-20260801",'
+                    b'"supported_parameters":["tools","reasoning"],'
+                    b'"reasoning":{"supported_efforts":["low","high","max"],'
+                    b'"default_effort":"high","default_enabled":true,'
+                    b'"supports_max_tokens":false,"mandatory":true}}]}'
+                )
+
+        monkeypatch.setattr(
+            _models_mod,
+            "OPENROUTER_MODELS",
+            [("anthropic/claude-opus-4.7", "")],
+        )
+        monkeypatch.setattr(_models_mod, "_openrouter_catalog_cache", None)
+        monkeypatch.setattr(_models_mod, "_openrouter_reasoning_cache", None)
+        with (
+            patch("hermes_cli.model_catalog.get_curated_openrouter_models", return_value=[]),
+            patch("hermes_cli.models._urlopen_model_catalog_request", return_value=_Resp()),
+        ):
+            fetch_openrouter_models(force_refresh=True)
+
+        expected = {
+            "supported": True,
+            "metadata_complete": True,
+            "supported_efforts": ["low", "high", "max"],
+            "default_effort": "high",
+            "default_enabled": True,
+            "supports_max_tokens": False,
+            "mandatory": True,
+        }
+        assert _models_mod.openrouter_model_reasoning_metadata(
+            "anthropic/claude-opus-4.7"
+        ) == expected
+        assert _models_mod.openrouter_model_reasoning_metadata(
+            "anthropic/claude-opus-4.7-20260801"
+        ) == expected
+
+
+def test_lmstudio_reasoning_metadata_preserves_default_and_absence():
+    raw = [{
+        "key": "gpt-oss-20b",
+        "capabilities": {"reasoning": {"allowed_options": ["off", "low", "high"], "default": "low"}},
+    }]
+    with patch("hermes_cli.models._lmstudio_fetch_raw_models", return_value=raw):
+        assert _models_mod.lmstudio_model_reasoning_metadata(
+            "gpt-oss-20b", "http://127.0.0.1:1234/v1"
+        ) == {
+            "supported": True,
+            "allowed_options": ["off", "low", "high"],
+            "default": "low",
+        }
+
+    without_reasoning = [{"key": "plain-model", "capabilities": {}}]
+    with patch("hermes_cli.models._lmstudio_fetch_raw_models", return_value=without_reasoning):
+        assert _models_mod.lmstudio_model_reasoning_metadata(
+            "plain-model", "http://127.0.0.1:1234/v1"
+        ) == {"supported": False}
+
 
 
 class TestOpenRouterToolSupportHelper:

@@ -4147,7 +4147,7 @@ class TestValidateProviderCredential:
 
     def test_named_custom_endpoint_probe_is_async(self, monkeypatch):
         """Custom endpoint validation must not block the dashboard event loop."""
-        captured = {}
+        captured = {"urls": []}
 
         class _Resp:
             status_code = 200
@@ -4167,7 +4167,7 @@ class TestValidateProviderCredential:
                 return False
 
             async def get(self, url, *args, headers=None, **kwargs):
-                captured["url"] = url
+                captured["urls"].append(url)
                 captured["headers"] = headers
                 return _Resp()
 
@@ -4188,9 +4188,14 @@ class TestValidateProviderCredential:
             "reachable": True,
             "message": "",
             "models": ["local-model"],
+            "runtime_kind": "openai-compatible",
+            "model_details": [],
         }
         assert captured == {
-            "url": "http://localhost:8000/v1/models",
+            "urls": [
+                "http://localhost:8000/v1/models",
+                "http://localhost:8000/api/v1/models",
+            ],
             "headers": {
                 "Accept": "application/json",
                 "Authorization": "Bearer local-secret",

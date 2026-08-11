@@ -17,6 +17,17 @@ from hermes_constants import VALID_REASONING_EFFORTS
 _LM_RANK = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4}
 
 
+def test_unset_reasoning_uses_server_default():
+    assert resolve_lmstudio_effort(None, ["off", "on"]) is None
+    assert resolve_lmstudio_effort({}, ["off", "on"]) is None
+
+
+def test_explicit_toggle_is_bounded_by_server_options():
+    assert resolve_lmstudio_effort({"enabled": True}, ["off", "on"]) == "medium"
+    assert resolve_lmstudio_effort({"enabled": True}, ["off", "low", "high"]) is None
+    assert resolve_lmstudio_effort({"enabled": True}, None) is None
+
+
 
 
 def test_effort_ladder_is_monotonic():

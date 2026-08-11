@@ -954,7 +954,8 @@ def parse_reasoning_effort(effort) -> dict | None:
     YAML boolean False — users write ``reasoning_effort: false``/``off``/``no``
     in config.yaml and YAML hands us a bool, which must mean disabled, not
     "fall back to the default and keep thinking").
-    Returns {"enabled": True, "effort": <level>} for valid effort levels.
+    Returns {"enabled": True} for the internal ``"enabled"`` toggle token and
+    {"enabled": True, "effort": <level>} for valid effort levels.
     """
     if effort is False:
         return {"enabled": False}
@@ -966,6 +967,8 @@ def parse_reasoning_effort(effort) -> dict | None:
     effort = effort.strip().lower()
     if effort in {"none", "false", "disabled"}:
         return {"enabled": False}
+    if effort == "enabled":
+        return {"enabled": True}
     if effort in VALID_REASONING_EFFORTS:
         return {"enabled": True, "effort": effort}
     return None

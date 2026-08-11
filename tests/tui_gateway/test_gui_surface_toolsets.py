@@ -24,6 +24,7 @@ GUI_TOOLS = {
     "read_preview",
     "read_terminal",
     "read_window_below",
+    "windows_developer",
     "react_to_message",
 }
 

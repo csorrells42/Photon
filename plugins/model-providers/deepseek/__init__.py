@@ -10,7 +10,7 @@ replays history this lands on the notorious HTTP 400
 This profile overrides :meth:`build_api_kwargs_extras` to mirror the Kimi /
 Moonshot wire shape that DeepSeek's OpenAI-compat endpoint expects:
 
-    {"reasoning_effort": "<low|medium|high|max>",
+    {"reasoning_effort": "<high|max>",
      "extra_body": {"thinking": {"type": "enabled" | "disabled"}}}
 
 Non-thinking models (``deepseek-v3-*`` variants) are left as no-ops so we
@@ -71,7 +71,10 @@ class DeepSeekProfile(ProviderProfile):
         if not enabled:
             return extra_body, top_level
 
-        # Effort mapping. Pass low/medium/high through; stronger levels → max.
+        # DeepSeek V4 exposes exactly high/max. Compatibility values low and
+        # medium are aliases for high; xhigh is an alias for max. Canonicalize
+        # them here so the wire payload never pretends those aliases are
+        # distinct model capabilities.
         # When no effort is set we omit reasoning_effort so DeepSeek applies
         # its server default (currently high).
         if isinstance(reasoning_config, dict):
@@ -79,7 +82,7 @@ class DeepSeekProfile(ProviderProfile):
             if effort in {"xhigh", "max", "ultra"}:
                 top_level["reasoning_effort"] = "max"
             elif effort in {"low", "medium", "high"}:
-                top_level["reasoning_effort"] = effort
+                top_level["reasoning_effort"] = "high"
 
         return extra_body, top_level
 

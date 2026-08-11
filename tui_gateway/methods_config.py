@@ -217,34 +217,55 @@ def _(rid, params: dict) -> dict:
         cfg = _load_cfg()
         session = _sessions.get(params.get("session_id", ""))
         reasoning_config = None
+        configured = False
+        source = "model-default"
         if session is not None:
             if isinstance(session.get("create_reasoning_override"), dict):
                 reasoning_config = session.get("create_reasoning_override")
+                configured = True
+                source = "session"
             else:
                 agent = session.get("agent")
                 agent_reasoning = getattr(agent, "reasoning_config", None)
                 if isinstance(agent_reasoning, dict):
                     reasoning_config = agent_reasoning
+                    configured = True
+                    source = "session"
 
         if isinstance(reasoning_config, dict):
             if reasoning_config.get("enabled") is False:
                 effort = "none"
             else:
-                effort = str(reasoning_config.get("effort") or "medium")
+                effort = str(reasoning_config.get("effort") or "enabled")
         else:
             raw_effort = (cfg.get("agent") or {}).get("reasoning_effort", "")
             if raw_effort is False:
                 # YAML `reasoning_effort: false`/`off`/`no` — thinking
                 # disabled, not "unset, show the medium default".
                 effort = "none"
+                configured = True
+                source = "profile"
             else:
-                effort = str(raw_effort or "medium")
+                effort = str(raw_effort or "").strip().lower()
+                if effort:
+                    from hermes_constants import parse_reasoning_effort
+
+                    configured = parse_reasoning_effort(effort) is not None
+                    source = "profile" if configured else "model-default"
         display = (
             "show"
             if bool((cfg.get("display") or {}).get("show_reasoning", True))
             else "hide"
         )
-        return _ok(rid, {"value": effort, "display": display})
+        return _ok(
+            rid,
+            {
+                "value": effort,
+                "configured": configured,
+                "source": source,
+                "display": display,
+            },
+        )
     if key == "fast":
         # Prefer the session's live/pinned value — `config.set fast` is
         # session-scoped, so the global key may not reflect this chat. A

@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 _BREAKER_THRESHOLD = 5
 _BREAKER_COOLDOWN_SECS = 120
 _PREFETCH_WAIT_SECS = 3
+_INITIALIZE_RETRY_SECS = 5
 
 _CLIENT_ERROR_TYPES = ("MemoryNotFoundError", "ValidationError")
 
@@ -237,6 +238,10 @@ class Mem0MemoryProvider(MemoryProvider):
         self._sync_lock = threading.Lock()
         self._logical_lock = threading.RLock()
         self._prefetch_lock = threading.Lock()
+        self._initialize_lock = threading.Lock()
+        self._session_id = ""
+        self._initialize_kwargs: Dict[str, Any] = {}
+        self._next_initialize_retry_at = 0.0
         self._atexit_registered = False
 
     @property
@@ -362,6 +367,12 @@ class Mem0MemoryProvider(MemoryProvider):
             )
 
     def initialize(self, session_id: str, **kwargs) -> None:
+        self._session_id = str(session_id or "")
+        self._initialize_kwargs = {
+            key: kwargs[key]
+            for key in ("principal_id", "principal_generation", "user_id", "platform")
+            if key in kwargs
+        }
         self._config = _load_config()
         self._mode = self._config.get("mode", "platform")
         self._api_key = self._config.get("api_key", "")
@@ -413,9 +424,32 @@ class Mem0MemoryProvider(MemoryProvider):
         )
         self._channel = kwargs.get("platform") or "cli"
         self._backend = self._create_backend()
+        if self._backend is not None:
+            self._next_initialize_retry_at = 0.0
         if self._backend and not self._atexit_registered:
             atexit.register(self._shutdown_backend)
             self._atexit_registered = True
+
+    def _retry_backend_initialization(self) -> None:
+        """Retry a transient initialization failure without pinning a session dead."""
+        if self._backend is not None or not self._session_id:
+            return
+        now = time.monotonic()
+        if now < self._next_initialize_retry_at:
+            return
+        with self._initialize_lock:
+            if self._backend is not None:
+                return
+            now = time.monotonic()
+            if now < self._next_initialize_retry_at:
+                return
+            self._next_initialize_retry_at = now + _INITIALIZE_RETRY_SECS
+            try:
+                self.initialize(self._session_id, **self._initialize_kwargs)
+            except Exception as exc:
+                logger.warning("Mem0 backend reinitialization failed: %s", exc)
+                self._init_error = str(exc)
+                self._backend = None
 
     def _read_filters(self) -> Dict[str, Any]:
         # Scoped to user_id only — by design — so recall surfaces memories
@@ -472,7 +506,10 @@ class Mem0MemoryProvider(MemoryProvider):
             "results surface; one search is rarely enough. Keep searching until "
             "you have every fact the question needs before you answer.\n"
             "Tools: mem0_search to find memories, mem0_add to store facts, "
-            f"{mutation_tools}{rerank_note}"
+            f"{mutation_tools}{rerank_note}\n"
+            "Those are the only memory tools; there is no mem0_read tool. "
+            "When asked whether memory is working now, use the current result of mem0_search. "
+            "Never treat a recalled claim about a past outage as live provider health."
         )
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
@@ -858,6 +895,8 @@ class Mem0MemoryProvider(MemoryProvider):
         return len(requested)
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
+        if self._backend is None:
+            self._retry_backend_initialization()
         if self._backend is None:
             err = getattr(self, "_init_error", "unknown error")
             hint = ""

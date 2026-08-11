@@ -95,6 +95,24 @@ class TestOpenCodeGoGLM52Reasoning:
     """GLM-5.2 uses its native high/max reasoning_effort knob on OpenCode Go."""
 
 
+    @pytest.mark.parametrize(
+        "reasoning_config",
+        [
+            {"enabled": False},
+            {"enabled": True, "effort": "none"},
+        ],
+    )
+    def test_explicit_off_emits_model_native_disabled_marker(
+        self, opencode_go_profile, reasoning_config
+    ):
+        extra_body, top_level = opencode_go_profile.build_api_kwargs_extras(
+            reasoning_config=reasoning_config,
+            model="glm-5.2",
+        )
+        assert extra_body == {"thinking": {"type": "disabled"}}
+        assert top_level == {}
+
+
     @pytest.mark.parametrize("model", ["glm-5-2", "glm-5p2"])
     def test_alias_spellings_recognized(self, opencode_go_profile, model):
         extra_body, top_level = opencode_go_profile.build_api_kwargs_extras(
@@ -145,6 +163,20 @@ class TestOpenCodeGoFullKwargsIntegration:
         )
         assert "extra_body" not in kwargs
         assert kwargs["reasoning_effort"] == "high"
+
+    def test_glm_5_2_off_reaches_extra_body_without_effort(self, opencode_go_profile):
+        from agent.transports.chat_completions import ChatCompletionsTransport
+
+        kwargs = ChatCompletionsTransport().build_kwargs(
+            model="glm-5.2",
+            messages=[{"role": "user", "content": "ping"}],
+            tools=None,
+            provider_profile=opencode_go_profile,
+            reasoning_config={"enabled": False},
+            base_url="https://opencode.ai/zen/go/v1",
+        )
+        assert kwargs["extra_body"]["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in kwargs
 
     def test_deepseek_thinking_reaches_extra_body_and_top_level(
         self, opencode_go_profile

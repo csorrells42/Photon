@@ -64,14 +64,16 @@ class OpenCodeGoProfile(ProviderProfile):
         if _is_glm_5_2_model(model):
             # GLM-5.2 on OpenCode Go uses its native OpenAI-compatible
             # reasoning_effort knob, which has exactly two enabled levels:
-            # high and max. Map Hermes' richer scale onto those; leave the
-            # server default alone when reasoning is disabled or unset.
+            # high and max. Its binary thinking control is separate, so an
+            # explicit Off must send the model-native disabled marker instead
+            # of omitting everything and falling back to thinking-on.
             if not isinstance(reasoning_config, dict):
                 return extra_body, top_level
-            if reasoning_config.get("enabled") is False:
-                return extra_body, top_level
             effort = (reasoning_config.get("effort") or "").strip().lower()
-            if not effort or effort == "none":
+            if reasoning_config.get("enabled") is False or effort == "none":
+                extra_body["thinking"] = {"type": "disabled"}
+                return extra_body, top_level
+            if not effort:
                 return extra_body, top_level
             top_level["reasoning_effort"] = "max" if effort in {"xhigh", "max", "ultra"} else "high"
             return extra_body, top_level

@@ -2285,6 +2285,7 @@ class TestAgentRuntimePostHookOwnershipSync:
         ("read_terminal", {}),
         ("read_preview", {}),
         ("read_window_below", {}),
+        ("windows_developer", {"action": "describe"}),
         ("delegate_task", {"goal": "Check the child path"}),
     )
 
@@ -2330,6 +2331,10 @@ class TestAgentRuntimePostHookOwnershipSync:
         )
         monkeypatch.setattr(
             "tools.read_window_tool.read_window_below_tool",
+            lambda **kwargs: '{"ok":true}',
+        )
+        monkeypatch.setattr(
+            "tools.windows_developer_tool.windows_developer_tool",
             lambda **kwargs: '{"ok":true}',
         )
         monkeypatch.setattr(agent, "_get_session_db_for_recall", lambda: None)

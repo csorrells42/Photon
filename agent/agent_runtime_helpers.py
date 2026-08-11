@@ -99,7 +99,7 @@ def _ra():
 
 
 AGENT_RUNTIME_POST_HOOK_TOOL_NAMES = frozenset(
-    {"todo", "session_search", "memory", "clarify", "read_terminal", "read_preview", "read_window_below", "delegate_task"}
+    {"todo", "session_search", "memory", "clarify", "read_terminal", "read_preview", "read_window_below", "windows_developer", "delegate_task"}
 )
 
 
@@ -3006,6 +3006,20 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
             return _finish_agent_tool(
                 _read_window_below_tool(
                     callback=getattr(agent, "read_window_below_callback", None),
+                ),
+                next_args,
+            )
+    elif function_name == "windows_developer":
+        def _execute(next_args: dict) -> Any:
+            from tools.windows_developer_tool import windows_developer_tool as _windows_developer_tool
+            return _finish_agent_tool(
+                _windows_developer_tool(
+                    action=next_args.get("action", ""),
+                    project_path=next_args.get("project_path"),
+                    program_path=next_args.get("program_path"),
+                    arguments=next_args.get("arguments"),
+                    configuration=next_args.get("configuration", "Debug"),
+                    callback=getattr(agent, "windows_developer_callback", None),
                 ),
                 next_args,
             )

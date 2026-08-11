@@ -86,6 +86,36 @@ class TestRunConversationCodexPath:
         assert result["codex_thread_id"] == "thread-stub-1"
         assert result["codex_turn_id"] == "turn-stub-1"
 
+    def test_current_session_reasoning_config_is_forwarded_on_every_turn(
+        self, monkeypatch
+    ):
+        observed: list[dict | None] = []
+
+        def fake_run_turn(self, user_input: str, **kwargs):
+            config = kwargs.get("reasoning_config")
+            observed.append(dict(config) if isinstance(config, dict) else None)
+            return TurnResult(
+                final_text="done",
+                projected_messages=[{"role": "assistant", "content": "done"}],
+                turn_id="turn-reasoning-1",
+                thread_id="thread-reasoning-1",
+            )
+
+        monkeypatch.setattr(CodexAppServerSession, "run_turn", fake_run_turn)
+        agent = _make_codex_agent(
+            reasoning_config={"enabled": True, "effort": "high"}
+        )
+
+        with patch.object(agent, "_spawn_background_review", return_value=None):
+            agent.run_conversation("first")
+            agent.reasoning_config = {"enabled": False}
+            agent.run_conversation("second")
+
+        assert observed == [
+            {"enabled": True, "effort": "high"},
+            {"enabled": False},
+        ]
+
     def test_codex_app_server_token_usage_updates_session_accounting(self, monkeypatch):
         def fake_run_turn(self, user_input: str, **kwargs):
             return TurnResult(

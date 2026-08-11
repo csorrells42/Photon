@@ -274,6 +274,20 @@ def _supports_adaptive_thinking(model: str) -> bool:
     return not any(v in m for v in _LEGACY_MANUAL_THINKING_CLAUDE_SUBSTRINGS)
 
 
+def _supports_requested_thinking(model: str) -> bool:
+    """Whether this model accepts an explicit Anthropic thinking block.
+
+    Haiku models historically did not expose extended thinking, but Haiku 4.5
+    does and is already classified above as a legacy manual-thinking model.
+    Keep older Haiku releases excluded without suppressing Haiku 4.5's real
+    budget-based control.
+    """
+    normalized = (model or "").lower()
+    if "haiku" not in normalized:
+        return True
+    return any(token in normalized for token in ("haiku-4-5", "haiku-4.5"))
+
+
 def _supports_xhigh_effort(model: str) -> bool:
     """Return True for models that accept the 'xhigh' adaptive effort level.
 
@@ -2976,7 +2990,8 @@ def build_anthropic_kwargs(
     # Claude 4.6+ models use adaptive thinking + output_config.effort.
     # Older models use manual thinking with budget_tokens.
     # MiniMax Anthropic-compat endpoints support thinking (manual mode only,
-    # not adaptive).  Haiku does NOT support extended thinking — skip entirely.
+    # not adaptive). Haiku 4.5 supports manual thinking; older Haiku models
+    # remain excluded by _supports_requested_thinking().
     #
     # Kimi / Moonshot models also use adaptive thinking: their
     # Anthropic-compatible endpoints (api.moonshot.cn/anthropic,
@@ -2991,7 +3006,7 @@ def build_anthropic_kwargs(
     # request "summarized" so the reasoning blocks stay populated — matching
     # 4.6 behavior and preserving the activity-feed UX during long tool runs.
     if reasoning_config and isinstance(reasoning_config, dict):
-        if reasoning_config.get("enabled") is not False and "haiku" not in model.lower():
+        if reasoning_config.get("enabled") is not False and _supports_requested_thinking(model):
             effort = str(reasoning_config.get("effort", "medium")).lower()
             budget = THINKING_BUDGET.get(effort, 8000)
             if _supports_adaptive_thinking(model):

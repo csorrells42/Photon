@@ -130,7 +130,7 @@ class OpenRouterProfile(ProviderProfile):
         session_id: str | None = None,
         **context: Any,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """OpenRouter passes the full reasoning_config dict as extra_body.reasoning.
+        """Map Hermes reasoning selections onto OpenRouter's current contract.
 
         For xAI Grok models routed through OpenRouter, attach the
         ``x-grok-conv-id`` header so that xAI's prompt cache stays pinned to
@@ -141,43 +141,20 @@ class OpenRouterProfile(ProviderProfile):
         extra_headers: dict[str, Any] = {}
         if supports_reasoning:
             # Reasoning-mandatory Anthropic models (Claude 4.6+ / fable /
-            # future named models) use *adaptive* thinking: the model decides
-            # how much to think, and OpenRouter ignores ``reasoning.effort`` for
-            # them entirely. Sending any ``reasoning`` field is therefore both
-            # pointless and actively harmful:
-            #   - ``{enabled: false}`` → OpenRouter emits Anthropic's manual
-            #     ``thinking: {type: "disabled"}``, which these models 400 on.
-            #   - any enabled form, on a tool-continuation turn whose prior
-            #     assistant tool_call carries no thinking block (chat_completions
-            #     never replays signed thinking blocks), ALSO makes OpenRouter
-            #     emit ``thinking: {type: "disabled"}`` → the same 400 on every
-            #     turn after the first tool call.
-            # The only reliable behavior is to omit ``reasoning`` and let the
-            # model default to adaptive. See hermes-agent#42991 (disable case)
-            # and the tool-replay follow-up.
-            #
-            # ``reasoning.effort`` being ignored does NOT mean these models have
-            # no effort lever — OpenRouter honors the requested effort on the
-            # top-level ``verbosity`` field instead (it maps to Anthropic's
-            # ``output_config.effort``; ``reasoning.effort`` is accepted but
-            # ignored — confirmed by OpenRouter's Claude migration docs and a
-            # live token-spend probe in hermes-agent#43432). Route the existing
-            # ``reasoning_config["effort"]`` (sourced from
-            # ``agent.reasoning_effort``) onto ``verbosity`` so the knob the user
-            # already sets keeps working for these models. We still send NO
-            # ``reasoning`` field, preserving the #42991 400 fix.
+            # future named models) reject ``enabled: false``. Their current
+            # OpenRouter effort control is nested ``reasoning.effort``; send
+            # only that field and never synthesize an enabled/disabled flag.
+            # Unset or disabled means omission, preserving adaptive mode.
             if _anthropic_reasoning_is_mandatory(model):
                 cfg = reasoning_config or {}
                 effort = cfg.get("effort")
                 # Only emit when effort is actually requested and reasoning
-                # isn't explicitly disabled. Otherwise omit ``verbosity`` so the
-                # model keeps its own adaptive default (``high``).
+                # isn't explicitly disabled. Otherwise keep the model's own
+                # adaptive default.
                 if cfg.get("enabled", True) is not False and effort and effort != "none":
-                    top_level["verbosity"] = effort
+                    extra_body["reasoning"] = {"effort": effort}
             elif reasoning_config is not None:
                 extra_body["reasoning"] = dict(reasoning_config)
-            else:
-                extra_body["reasoning"] = {"enabled": True, "effort": "medium"}
 
         # Same resolution as build_extra_body: xAI's prompt cache is pinned per
         # backend server via this header, and aux calls pass no session_id, so

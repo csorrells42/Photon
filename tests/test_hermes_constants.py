@@ -322,6 +322,9 @@ class TestParseReasoningEffort:
         """Empty / whitespace-only input falls back to caller default (None)."""
         assert parse_reasoning_effort(value) is None
 
+    def test_enabled_is_a_toggle_without_an_invented_effort(self):
+        assert parse_reasoning_effort("enabled") == {"enabled": True}
+
 
 
 

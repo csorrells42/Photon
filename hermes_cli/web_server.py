@@ -1322,6 +1322,8 @@ from hermes_cli.web_models import (  # noqa: F401
     MemoryProviderConfigUpdate,
     MemoryProviderSetupRequest,
     CustomEndpointUpdate,
+    RuntimeProfileUpdate,
+    RuntimeProfileActivation,
     MessagingPlatformUpdate,
     TelegramOnboardingStart,
     TelegramOnboardingApply,
@@ -4551,8 +4553,12 @@ async def get_elevenlabs_voices(profile: Optional[str] = None):
     return {"available": True, "voices": voices}
 
 
-@app.post("/api/audio/speak")
-async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+async def _speak_text_response(
+    payload: TTSSpeakRequest,
+    profile: Optional[str] = None,
+    *,
+    provider_override: Optional[str] = None,
+):
     """Synthesize speech and return audio as base64 data URL.
 
     Used by the desktop voice-conversation mode to play back assistant
@@ -4563,6 +4569,8 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
     text = (payload.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text is required")
+    if provider_override == "kokoro" and len(text) > 8_000:
+        raise HTTPException(status_code=413, detail="Local speech text is too long")
 
     try:
         from tools.tts_tool import text_to_speech_tool
@@ -4573,6 +4581,8 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
             # resolution, so the task-local override inside this worker
             # thread is sufficient (same reasoning as the MCP probe scope).
             with _config_profile_scope(profile):
+                if provider_override:
+                    return text_to_speech_tool(text, provider=provider_override)
                 return text_to_speech_tool(text)
 
         loop = asyncio.get_running_loop()
@@ -4627,6 +4637,18 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
         "mime_type": mime_type,
         "provider": result.get("provider"),
     }
+
+
+@app.post("/api/audio/speak")
+async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+    """Synthesize with the operator-configured speech provider."""
+    return await _speak_text_response(payload, profile)
+
+
+@app.post("/api/audio/speak-local")
+async def speak_text_local(payload: TTSSpeakRequest, profile: Optional[str] = None):
+    """Synthesize with the pinned on-device Kokoro provider only."""
+    return await _speak_text_response(payload, profile, provider_override="kokoro")
 
 
 def _split_text_for_speak_stream(text: str, cap: int) -> list:
@@ -7280,6 +7302,8 @@ def _config_api_key_is_env_ref(endpoint_id: str) -> bool:
 
 
 def _custom_endpoint_response(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    from hermes_cli.runtime_profiles import profile_response
+
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model"), dict) else {}
     current_provider = str(model_cfg.get("provider", "") or "")
     current_model = str(model_cfg.get("default", model_cfg.get("name", "")) or "")
@@ -7310,6 +7334,8 @@ def _custom_endpoint_response(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "api_key_preview": api_key_preview,
                 "is_current": endpoint_id == current_provider,
                 "source": "providers",
+                "profiles": profile_response(raw_entry),
+                "external_overrides_present": bool(raw_entry.get("extra_body") or raw_entry.get("request_overrides")),
             })
 
     if current_provider.lower() == "custom" and current_base_url and not any(e["id"] == "custom" for e in endpoints):
@@ -7326,6 +7352,8 @@ def _custom_endpoint_response(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "api_key_preview": api_key_preview,
             "is_current": True,
             "source": "direct-config",
+            "profiles": [],
+            "external_overrides_present": bool(model_cfg.get("extra_body") or model_cfg.get("request_overrides")),
         })
 
     return {
@@ -7539,6 +7567,79 @@ def delete_custom_endpoint(endpoint_id: str):
         raise HTTPException(status_code=500, detail="Failed to delete custom endpoint")
 
 
+def _runtime_profile_entry(cfg: Dict[str, Any], endpoint_id: str) -> Tuple[str, Dict[str, Any]]:
+    provider_key = _custom_endpoint_id(endpoint_id)
+    providers = cfg.get("providers")
+    entry = providers.get(provider_key) if isinstance(providers, dict) else None
+    if not isinstance(entry, dict):
+        raise HTTPException(status_code=404, detail="custom endpoint not found")
+    return provider_key, entry
+
+
+@app.post("/api/providers/custom-endpoints/{endpoint_id}/profiles")
+def upsert_runtime_profile(endpoint_id: str, body: RuntimeProfileUpdate):
+    """Create or update one explicit omission-based per-model profile."""
+    from hermes_cli.runtime_profiles import RuntimeProfileError, upsert_profile
+    try:
+        cfg = load_config()
+        _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
+        profile_id = upsert_profile(entry, body)
+        save_config(cfg)
+        response = _custom_endpoint_response(cfg)
+        response.update({"ok": True, "profile_id": profile_id})
+        return response
+    except RuntimeProfileError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("POST runtime profile failed")
+        raise HTTPException(status_code=500, detail="Failed to save runtime profile")
+
+
+@app.post("/api/providers/custom-endpoints/{endpoint_id}/profiles/activate")
+def activate_runtime_profile(endpoint_id: str, body: RuntimeProfileActivation):
+    """Select a named profile or restore server-default omission for one model."""
+    from hermes_cli.runtime_profiles import RuntimeProfileError, activate_profile
+    try:
+        cfg = load_config()
+        _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
+        activate_profile(entry, body.model, body.profile_id)
+        save_config(cfg)
+        response = _custom_endpoint_response(cfg)
+        response["ok"] = True
+        return response
+    except RuntimeProfileError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("POST runtime profile activation failed")
+        raise HTTPException(status_code=500, detail="Failed to activate runtime profile")
+
+
+@app.delete("/api/providers/custom-endpoints/{endpoint_id}/profiles/{profile_id}")
+def delete_runtime_profile(endpoint_id: str, profile_id: str):
+    from hermes_cli.runtime_profiles import RuntimeProfileError, delete_profile
+    try:
+        cfg = load_config()
+        _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
+        delete_profile(entry, profile_id)
+        save_config(cfg)
+        response = _custom_endpoint_response(cfg)
+        response["ok"] = True
+        return response
+    except KeyError:
+        raise HTTPException(status_code=404, detail="runtime profile not found")
+    except RuntimeProfileError as exception:
+        raise HTTPException(status_code=400, detail=str(exception))
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("DELETE runtime profile failed")
+        raise HTTPException(status_code=500, detail="Failed to delete runtime profile")
+
+
 @app.post("/api/providers/custom-endpoints/validate")
 async def validate_custom_endpoint(body: CustomEndpointUpdate):
     """Probe a custom endpoint by calling its OpenAI-compatible /models URL."""
@@ -7564,7 +7665,37 @@ async def validate_custom_endpoint(body: CustomEndpointUpdate):
     if not resp.is_success:
         return {"ok": False, "reachable": True, "message": f"Endpoint returned HTTP {resp.status_code}.", "models": []}
 
-    return {"ok": True, "reachable": True, "message": "", "models": _parse_model_ids(resp)}
+    models = _parse_model_ids(resp)
+    result = {
+        "ok": True,
+        "reachable": True,
+        "message": "",
+        "models": models,
+        "runtime_kind": "openai-compatible",
+        "model_details": [],
+    }
+
+    # LM Studio's native model list is same-origin and reports the exact
+    # loaded configuration. It is optional: failure leaves the portable
+    # OpenAI-compatible result intact and does not invent defaults.
+    from hermes_cli.runtime_discovery import native_models_url, normalize_lm_studio_models
+
+    native_url = native_models_url(base_url)
+    if not native_url:
+        return result
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4.0)) as client:
+            native_response = await client.get(native_url, headers=headers)
+        native_payload = native_response.json() if native_response.is_success else None
+        native_models = normalize_lm_studio_models(native_payload)
+    except Exception:
+        native_models = []
+    if native_models:
+        result["runtime_kind"] = "lm-studio"
+        result["model_details"] = native_models
+        native_ids = [str(item["id"]) for item in native_models]
+        result["models"] = list(dict.fromkeys([*models, *native_ids]))
+    return result
 
 
 @app.post("/api/providers/validate")

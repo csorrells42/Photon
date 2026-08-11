@@ -940,6 +940,30 @@ class TestBuildAnthropicKwargs:
         assert kwargs["max_tokens"] >= 16000 + 4096
         assert "output_config" not in kwargs
 
+    def test_haiku_4_5_supports_manual_thinking(self):
+        kwargs = build_anthropic_kwargs(
+            model="claude-haiku-4-5-20251001",
+            messages=[{"role": "user", "content": "think hard"}],
+            tools=None,
+            max_tokens=4096,
+            reasoning_config={"enabled": True, "effort": "high"},
+        )
+        assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": 16000}
+        assert kwargs["temperature"] == 1
+        assert kwargs["max_tokens"] >= 16000 + 4096
+        assert "output_config" not in kwargs
+
+    def test_older_haiku_still_omits_thinking(self):
+        kwargs = build_anthropic_kwargs(
+            model="claude-3-5-haiku-latest",
+            messages=[{"role": "user", "content": "think hard"}],
+            tools=None,
+            max_tokens=4096,
+            reasoning_config={"enabled": True, "effort": "high"},
+        )
+        assert "thinking" not in kwargs
+        assert "output_config" not in kwargs
+
     def test_reasoning_config_maps_to_adaptive_thinking_for_4_6_models(self):
         kwargs = build_anthropic_kwargs(
             model="claude-opus-4-6",

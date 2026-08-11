@@ -105,6 +105,7 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
 ]
 
 _openrouter_catalog_cache: list[tuple[str, str]] | None = None
+_openrouter_reasoning_cache: dict[str, dict[str, Any]] | None = None
 
 
 # Fallback Vercel AI Gateway snapshot used when the live catalog is unavailable.
@@ -1507,9 +1508,13 @@ def fetch_openrouter_models(
     force_refresh: bool = False,
 ) -> list[tuple[str, str]]:
     """Return the curated OpenRouter picker list, refreshed from the live catalog when possible."""
-    global _openrouter_catalog_cache
+    global _openrouter_catalog_cache, _openrouter_reasoning_cache
 
-    if _openrouter_catalog_cache is not None and not force_refresh:
+    if (
+        _openrouter_catalog_cache is not None
+        and _openrouter_reasoning_cache is not None
+        and not force_refresh
+    ):
         return list(_openrouter_catalog_cache)
 
     # Prefer the remotely-hosted catalog manifest; fall back to the in-repo
@@ -1539,6 +1544,7 @@ def fetch_openrouter_models(
         return list(_openrouter_catalog_cache or fallback)
 
     live_by_id: dict[str, dict[str, Any]] = {}
+    reasoning_by_id: dict[str, dict[str, Any]] = {}
     for item in live_items:
         if not isinstance(item, dict):
             continue
@@ -1546,6 +1552,34 @@ def fetch_openrouter_models(
         if not mid:
             continue
         live_by_id[mid] = item
+        supported_parameters = item.get("supported_parameters")
+        raw_reasoning = item.get("reasoning")
+        metadata: dict[str, Any] = {
+            "supported": (
+                ("reasoning" in supported_parameters)
+                if isinstance(supported_parameters, list)
+                else False
+            ) or isinstance(raw_reasoning, dict),
+            "metadata_complete": isinstance(raw_reasoning, dict),
+        }
+        if isinstance(raw_reasoning, dict):
+            if "supported_efforts" in raw_reasoning:
+                efforts = raw_reasoning.get("supported_efforts")
+                metadata["supported_efforts"] = (
+                    [str(value).strip().lower() for value in efforts if isinstance(value, str)]
+                    if isinstance(efforts, list)
+                    else None if efforts is None else []
+                )
+            default_effort = raw_reasoning.get("default_effort")
+            if isinstance(default_effort, str) and default_effort.strip():
+                metadata["default_effort"] = default_effort.strip().lower()
+            for key in ("default_enabled", "supports_max_tokens", "mandatory"):
+                if isinstance(raw_reasoning.get(key), bool):
+                    metadata[key] = raw_reasoning[key]
+        reasoning_by_id[mid] = metadata
+        canonical = str(item.get("canonical_slug") or "").strip()
+        if canonical:
+            reasoning_by_id.setdefault(canonical, metadata)
 
     curated: list[tuple[str, str]] = []
     silent_default = get_preferred_silent_default_model("openrouter")
@@ -1567,13 +1601,42 @@ def fetch_openrouter_models(
         curated.append((preferred_id, desc))
 
     if not curated:
+        _openrouter_reasoning_cache = reasoning_by_id
         return list(_openrouter_catalog_cache or fallback)
 
     first_id, first_desc = curated[0]
     if not first_desc:
         curated[0] = (first_id, "recommended")
     _openrouter_catalog_cache = curated
+    _openrouter_reasoning_cache = reasoning_by_id
     return list(curated)
+
+
+def openrouter_model_reasoning_metadata(
+    model: str,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, Any] | None:
+    """Return bounded reasoning metadata from OpenRouter's official model catalog.
+
+    ``None`` means the catalog could not verify the requested model.  A returned
+    mapping with ``supported=False`` is definitive: the live catalog knew the
+    model and did not advertise the reasoning parameter.  No credentials are
+    needed or accepted by this public-catalog lookup.
+    """
+    global _openrouter_reasoning_cache
+
+    target = str(model or "").strip()
+    if not target:
+        return None
+    if _openrouter_reasoning_cache is None or force_refresh:
+        fetch_openrouter_models(force_refresh=force_refresh)
+    if _openrouter_reasoning_cache is None:
+        return None
+    value = _openrouter_reasoning_cache.get(target)
+    if value is None and target.startswith("openrouter/"):
+        value = _openrouter_reasoning_cache.get(target.split("/", 1)[1])
+    return dict(value) if isinstance(value, dict) else None
 
 
 def model_ids(*, force_refresh: bool = False) -> list[str]:
@@ -3850,24 +3913,25 @@ def ensure_lmstudio_model_loaded(
     return _result(refreshed_context, load_attempted=True)
 
 
-def lmstudio_model_reasoning_options(
+def lmstudio_model_reasoning_metadata(
     model: str,
     base_url: Optional[str],
     api_key: Optional[str] = None,
     timeout: float = 5.0,
-) -> list[str]:
-    """Return the reasoning ``allowed_options`` LM Studio publishes for ``model``.
+) -> dict[str, Any] | None:
+    """Return exact reasoning metadata LM Studio publishes for ``model``.
 
     Pulls ``capabilities.reasoning.allowed_options`` from ``/api/v1/models``.
-    Returns ``[]`` when the model is unknown, the endpoint is unreachable,
-    or the model does not declare a reasoning capability.
+    ``None`` means the endpoint/model could not be verified.  A returned
+    mapping with ``supported=False`` means LM Studio found the model and it
+    definitively does not declare a reasoning capability.
     """
     try:
         raw_models = _lmstudio_fetch_raw_models(api_key=api_key, base_url=base_url, timeout=timeout)
     except Exception:
         raw_models = None
     if not raw_models:
-        return []
+        return None
 
     for raw in raw_models:
         if not isinstance(raw, dict):
@@ -3876,11 +3940,39 @@ def lmstudio_model_reasoning_options(
             continue
         caps = raw.get("capabilities")
         reasoning = caps.get("reasoning") if isinstance(caps, dict) else None
+        if not isinstance(reasoning, dict):
+            return {"supported": False}
         opts = reasoning.get("allowed_options") if isinstance(reasoning, dict) else None
-        if isinstance(opts, list):
-            return [str(o).strip().lower() for o in opts if isinstance(o, str)]
-        return []
-    return []
+        metadata: dict[str, Any] = {
+            "supported": isinstance(opts, list) and bool(opts),
+            "allowed_options": (
+                [str(o).strip().lower() for o in opts if isinstance(o, str)]
+                if isinstance(opts, list)
+                else []
+            ),
+        }
+        default = reasoning.get("default")
+        if isinstance(default, str) and default.strip():
+            metadata["default"] = default.strip().lower()
+        return metadata
+    return None
+
+
+def lmstudio_model_reasoning_options(
+    model: str,
+    base_url: Optional[str],
+    api_key: Optional[str] = None,
+    timeout: float = 5.0,
+) -> list[str]:
+    """Compatibility wrapper returning LM Studio's exact allowed options."""
+    metadata = lmstudio_model_reasoning_metadata(
+        model,
+        base_url,
+        api_key=api_key,
+        timeout=timeout,
+    )
+    options = metadata.get("allowed_options") if isinstance(metadata, dict) else None
+    return list(options) if isinstance(options, list) else []
 
 
 def ollama_model_supports_thinking(

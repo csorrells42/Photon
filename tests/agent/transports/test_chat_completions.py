@@ -200,6 +200,16 @@ class TestChatCompletionsBuildKwargs:
         )
         assert kw["extra_body"]["reasoning"] == {"enabled": True, "effort": "medium"}
 
+    def test_generic_reasoning_preserves_explicit_disable(self, transport):
+        msgs = [{"role": "user", "content": "Hi"}]
+        kw = transport.build_kwargs(
+            model="reasoning-model",
+            messages=msgs,
+            supports_reasoning=True,
+            reasoning_config={"enabled": False},
+        )
+        assert kw["extra_body"]["reasoning"] == {"enabled": False}
+
     def test_nous_omits_disabled_reasoning(self, transport):
         from providers import get_provider_profile
         profile = get_provider_profile("nous")
@@ -251,6 +261,51 @@ class TestChatCompletionsBuildKwargs:
             "include_thoughts": True,
             "thinking_level": "high",
         }
+
+    def test_gemini_25_flash_off_uses_zero_budget_on_native_api(self, transport):
+        from providers import get_provider_profile
+
+        kw = transport.build_kwargs(
+            model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hi"}],
+            provider_profile=get_provider_profile("gemini"),
+            provider_name="gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            reasoning_config={"enabled": False},
+        )
+        assert kw["extra_body"]["thinking_config"] == {
+            "includeThoughts": False,
+            "thinkingBudget": 0,
+        }
+
+    def test_gemini_25_flash_off_uses_zero_budget_on_openai_compat_api(self, transport):
+        kw = transport.build_kwargs(
+            model="gemini-2.5-flash-lite",
+            messages=[{"role": "user", "content": "Hi"}],
+            provider_name="gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            reasoning_config={"enabled": True, "effort": "none"},
+        )
+        assert kw["extra_body"]["extra_body"]["google"]["thinking_config"] == {
+            "include_thoughts": False,
+            "thinking_budget": 0,
+        }
+
+    @pytest.mark.parametrize(
+        "model",
+        ["gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview"],
+    )
+    def test_gemini_models_without_true_off_do_not_emit_display_only_disable(
+        self, transport, model
+    ):
+        kw = transport.build_kwargs(
+            model=model,
+            messages=[{"role": "user", "content": "Hi"}],
+            provider_name="gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            reasoning_config={"enabled": False},
+        )
+        assert "extra_body" not in kw
 
 
 
@@ -387,6 +442,38 @@ class TestChatCompletionsLmStudioReasoning:
             lmstudio_reasoning_options=["off", "low", "medium", "high"],
         )
         assert kw["reasoning_effort"] == "high"
+
+    def test_unset_reasoning_omits_effort(self, transport):
+        kw = transport.build_kwargs(
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
+            is_lmstudio=True,
+            supports_reasoning=True,
+            reasoning_config=None,
+            lmstudio_reasoning_options=["off", "on"],
+        )
+        assert "reasoning_effort" not in kw
+
+    def test_internal_enabled_toggle_requires_advertised_on(self, transport):
+        allowed = transport.build_kwargs(
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
+            is_lmstudio=True,
+            supports_reasoning=True,
+            reasoning_config={"enabled": True},
+            lmstudio_reasoning_options=["off", "on"],
+        )
+        assert allowed["reasoning_effort"] == "medium"
+
+        unverified = transport.build_kwargs(
+            model="gpt-oss",
+            messages=[{"role": "user", "content": "Hi"}],
+            is_lmstudio=True,
+            supports_reasoning=True,
+            reasoning_config={"enabled": True},
+            lmstudio_reasoning_options=None,
+        )
+        assert "reasoning_effort" not in unverified
 
 
 

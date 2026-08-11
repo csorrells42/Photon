@@ -46,12 +46,12 @@ class TestDeepSeekThinkingWireShape:
 
 
     @pytest.mark.parametrize("effort", ["low", "medium", "high"])
-    def test_standard_efforts_pass_through(self, deepseek_profile, effort):
+    def test_compatibility_efforts_canonicalize_to_high(self, deepseek_profile, effort):
         _, top_level = deepseek_profile.build_api_kwargs_extras(
             reasoning_config={"enabled": True, "effort": effort},
             model="deepseek-v4-pro",
         )
-        assert top_level == {"reasoning_effort": effort}
+        assert top_level == {"reasoning_effort": "high"}
 
     @pytest.mark.parametrize("effort", ["xhigh", "max", "MAX", "  Max  "])
     def test_xhigh_and_max_normalize_to_max(self, deepseek_profile, effort):
@@ -198,4 +198,3 @@ class TestDeepSeekAuxModel:
     def test_consumer_api_returns_deepseek_v4_flash(self):
         from agent.auxiliary_client import _get_aux_model_for_provider
         assert _get_aux_model_for_provider("deepseek") == "deepseek-v4-flash"
-

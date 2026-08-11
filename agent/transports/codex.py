@@ -29,6 +29,7 @@ def _cache_scope_from_session_id(session_id: Optional[str]) -> str:
 
 from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall
+from utils import base_url_host_matches
 
 
 def _bounded_prompt_cache_key(value: Any) -> Optional[str]:
@@ -294,6 +295,8 @@ class ResponsesApiTransport(ProviderTransport):
                 reasoning_enabled = False
             elif reasoning_config.get("effort"):
                 reasoning_effort = reasoning_config["effort"]
+                if str(reasoning_effort).strip().lower() == "none":
+                    reasoning_enabled = False
 
         _effort_clamp = {"minimal": "low"}
         if "gpt-5.6" in (model or "").lower():
@@ -417,6 +420,23 @@ class ResponsesApiTransport(ProviderTransport):
             # `reasoning` key at all and let the model reason on its own.
             if grok_supports_reasoning_effort(model):
                 kwargs["reasoning"] = {"effort": reasoning_effort}
+        elif (
+            not reasoning_enabled
+            and "gpt-5.6" in (model or "").lower()
+            and not is_github_responses
+            and not is_xai_responses
+            and (
+                is_codex_backend
+                or str(params.get("provider") or "").strip().lower()
+                in {"openai", "openai-api", "openai-codex"}
+                or base_url_host_matches(params.get("base_url"), "api.openai.com")
+            )
+        ):
+            # GPT-5.6 has a real Responses API off value. Omitting the
+            # reasoning object leaves the model at its server default instead
+            # of honoring an explicit user choice to disable reasoning.
+            kwargs["reasoning"] = {"effort": "none"}
+            kwargs["include"] = []
         elif reasoning_enabled:
             if is_github_responses:
                 github_reasoning = params.get("github_reasoning_extra")

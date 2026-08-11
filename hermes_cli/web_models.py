@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 # --- from web_server.py (originally lines 1273-1372) ---
@@ -60,6 +60,19 @@ class CustomEndpointUpdate(BaseModel):
     discover_models: bool = True
     make_default: bool = False
     models: Optional[List[str]] = None
+
+
+class RuntimeProfileUpdate(BaseModel):
+    id: str
+    name: str
+    model: str
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+    make_active: bool = False
+
+
+class RuntimeProfileActivation(BaseModel):
+    model: str
+    profile_id: Optional[str] = None
 
 
 class MessagingPlatformUpdate(BaseModel):

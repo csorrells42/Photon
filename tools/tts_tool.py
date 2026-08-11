@@ -13,6 +13,7 @@ Built-in TTS providers:
 - NeuTTS (local, free, no API key): On-device TTS via neutts
 - KittenTTS (local, free, no API key): On-device 25MB model
 - Piper (local, free, no API key): OHF-Voice/piper1-gpl neural VITS, 44 languages
+- Kokoro ONNX (local, free, no API key): On-device 82M natural voice model
 
 Custom command providers:
 - Users can declare any number of named providers with ``type: command``
@@ -37,6 +38,7 @@ Usage:
 import asyncio
 import base64
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -55,9 +57,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Any, Iterator, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
+from urllib.request import Request, urlopen
 
 from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_constants import display_hermes_home
+from hermes_constants import display_hermes_home, get_hermes_home
 
 logger = logging.getLogger(__name__)
 def get_env_value(name, default=None):
@@ -202,6 +205,21 @@ def _import_piper():
     return PiperVoice
 
 
+def _import_kokoro():
+    """Lazy import the fully local Kokoro ONNX renderer."""
+    try:
+        from tools.lazy_deps import ensure
+        ensure("tts.kokoro", prompt=False)
+    except ImportError:
+        pass
+    except Exception:
+        # Preserve the established provider-import contract: dispatch reports
+        # an unavailable package without taking down the core Hermes process.
+        pass
+    from kokoro_onnx import Kokoro
+    return Kokoro
+
+
 # ===========================================================================
 # Defaults
 # ===========================================================================
@@ -219,6 +237,8 @@ MANAGED_OPENAI_TTS_MODELS = frozenset({"gpt-4o-mini-tts"})
 DEFAULT_KITTENTTS_MODEL = "KittenML/kitten-tts-nano-0.8-int8"  # 25MB
 DEFAULT_KITTENTTS_VOICE = "Jasper"
 DEFAULT_PIPER_VOICE = "en_US-lessac-medium"  # balanced size/quality
+DEFAULT_KOKORO_VOICE = "af_heart"
+DEFAULT_KOKORO_SPEED = 0.98
 DEFAULT_OPENAI_VOICE = "alloy"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MINIMAX_MODEL = "speech-02-hd"
@@ -282,6 +302,7 @@ PROVIDER_MAX_TEXT_LENGTH: Dict[str, int] = {
     "neutts": 2000,       # local model, quality falls off on long text
     "kittentts": 2000,    # local 25MB model
     "piper": 5000,        # local VITS model, phoneme-based; practical cap
+    "kokoro": 2000,       # best quality in bounded 100-200 token segments
 }
 
 # ElevenLabs caps vary by model_id. https://elevenlabs.io/docs/overview/models
@@ -778,6 +799,7 @@ BUILTIN_TTS_PROVIDERS = frozenset({
     "neutts",
     "kittentts",
     "piper",
+    "kokoro",
     "deepinfra",
 })
 
@@ -3061,6 +3083,164 @@ def _generate_piper_tts(text: str, output_path: str, tts_config: Dict[str, Any])
 
 
 # ===========================================================================
+# Provider: Kokoro ONNX (local, natural voice)
+# ===========================================================================
+
+KOKORO_MODEL_ASSETS = (
+    (
+        "kokoro-v1.0.onnx",
+        325_532_387,
+        "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+        "model-files-v1.0/kokoro-v1.0.onnx",
+    ),
+    (
+        "voices-v1.0.bin",
+        28_214_398,
+        "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+        "model-files-v1.0/voices-v1.0.bin",
+    ),
+)
+_kokoro_model_cache: Dict[str, Any] = {}
+_kokoro_asset_lock = threading.Lock()
+_kokoro_verified_assets: Optional[Tuple[str, str]] = None
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_verified_kokoro_asset(
+    directory: Path,
+    name: str,
+    expected_size: int,
+    expected_sha256: str,
+    url: str,
+) -> Path:
+    """Return one immutable, digest-verified Kokoro release asset."""
+    target = directory / name
+    if target.is_symlink():
+        raise RuntimeError(f"Kokoro asset must not be a symbolic link: {name}")
+    if target.exists():
+        if not target.is_file():
+            raise RuntimeError(f"Kokoro asset is not a regular file: {name}")
+        if target.stat().st_size != expected_size:
+            raise RuntimeError(f"Kokoro asset length mismatch: {name}")
+        if _sha256_path(target) != expected_sha256:
+            raise RuntimeError(f"Kokoro asset digest mismatch: {name}")
+        return target
+
+    directory.mkdir(parents=True, exist_ok=True)
+    temporary = directory / f".{name}.{uuid.uuid4().hex}.download"
+    request = Request(url, headers={"User-Agent": "Hermes-Workbench-Kokoro/1"})
+    total = 0
+    digest = hashlib.sha256()
+    try:
+        with urlopen(request, timeout=60) as response, temporary.open("xb") as output:
+            declared = response.headers.get("Content-Length")
+            if declared and int(declared) != expected_size:
+                raise RuntimeError(f"Kokoro download length declaration mismatch: {name}")
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > expected_size:
+                    raise RuntimeError(f"Kokoro download exceeded expected length: {name}")
+                digest.update(chunk)
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        if total != expected_size:
+            raise RuntimeError(f"Kokoro download length mismatch: {name}")
+        if digest.hexdigest() != expected_sha256:
+            raise RuntimeError(f"Kokoro download digest mismatch: {name}")
+        os.replace(temporary, target)
+        return target
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _ensure_kokoro_assets() -> Tuple[str, str]:
+    """Resolve the pinned model and voice bank under the active profile."""
+    global _kokoro_verified_assets
+    if _kokoro_verified_assets is not None:
+        return _kokoro_verified_assets
+    with _kokoro_asset_lock:
+        if _kokoro_verified_assets is not None:
+            return _kokoro_verified_assets
+        directory = get_hermes_home() / "natural-voice"
+        paths = tuple(
+            str(_download_verified_kokoro_asset(directory, *asset))
+            for asset in KOKORO_MODEL_ASSETS
+        )
+        _kokoro_verified_assets = (paths[0], paths[1])
+        return _kokoro_verified_assets
+
+
+def _generate_kokoro_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
+    """Render speech locally with the pinned Kokoro ONNX model."""
+    Kokoro = _import_kokoro()
+    config = tts_config.get("kokoro", {})
+    if not isinstance(config, dict):
+        config = {}
+    voice_name = str(config.get("voice") or DEFAULT_KOKORO_VOICE).strip()
+    raw_speed = config.get("speed", tts_config.get("speed", DEFAULT_KOKORO_SPEED))
+    try:
+        speed = float(raw_speed)
+    except (TypeError, ValueError):
+        speed = DEFAULT_KOKORO_SPEED
+    if not 0.75 <= speed <= 1.25:
+        speed = DEFAULT_KOKORO_SPEED
+
+    model_path, voices_path = _ensure_kokoro_assets()
+    cache_key = f"{model_path}::{voices_path}"
+
+    def _load_model():
+        logger.info("[Kokoro] Loading pinned local natural-voice model")
+        model = Kokoro(model_path, voices_path)
+        logger.info("[Kokoro] Local natural-voice model loaded")
+        return model
+
+    model = _tts_cache_get_or_load(_kokoro_model_cache, cache_key, _load_model)
+    available_voices = frozenset(str(item) for item in model.get_voices())
+    if voice_name not in available_voices:
+        raise ValueError(f"Unknown Kokoro voice: {voice_name}")
+
+    samples, sample_rate = model.create(
+        text,
+        voice=voice_name,
+        speed=speed,
+        lang="en-us",
+    )
+    import soundfile as sf
+
+    wav_path = output_path if output_path.endswith(".wav") else output_path.rsplit(".", 1)[0] + ".wav"
+    sf.write(wav_path, samples, sample_rate)
+    if wav_path != output_path:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("Kokoro needs ffmpeg for non-WAV output")
+        subprocess.run(
+            [ffmpeg, "-i", wav_path, "-y", "-loglevel", "error", output_path],
+            check=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            creationflags=windows_hide_flags(),
+        )
+        os.remove(wav_path)
+    return output_path
+
+
+# ===========================================================================
 # Provider: KittenTTS (local, lightweight)
 # ===========================================================================
 
@@ -3237,6 +3417,8 @@ def _text_to_speech_single(
             file_path = out_dir / f"tts_{timestamp}.{fmt}"
         # Use .ogg for Telegram with providers that support native Opus output,
         # otherwise fall back to .mp3 (Edge TTS will attempt ffmpeg conversion later).
+        elif provider == "kokoro":
+            file_path = out_dir / f"tts_{timestamp}.wav"
         elif want_opus and provider in {"openai", "elevenlabs", "mistral", "gemini"}:
             file_path = out_dir / f"tts_{timestamp}.ogg"
         else:
@@ -3363,6 +3545,17 @@ def _text_to_speech_single(
                 }, ensure_ascii=False)
             logger.info("Generating speech with Piper (local)...")
             _generate_piper_tts(text, file_str, tts_config)
+
+        elif provider == "kokoro":
+            try:
+                _import_kokoro()
+            except ImportError:
+                return json.dumps({
+                    "success": False,
+                    "error": "Kokoro local voice is unavailable. Re-run setup with lazy installs enabled.",
+                }, ensure_ascii=False)
+            logger.info("Generating speech with Kokoro ONNX (local)...")
+            _generate_kokoro_tts(text, file_str, tts_config)
 
         else:
             # Default: Edge TTS (free), with NeuTTS as local fallback

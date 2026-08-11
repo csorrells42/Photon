@@ -274,6 +274,7 @@ TOOLSETS = {
             "read_terminal", "close_terminal",
             "open_preview", "read_preview",
             "read_window_below",
+            "windows_developer",
             "focus_pane", "react_to_message",
         ],
         "includes": []

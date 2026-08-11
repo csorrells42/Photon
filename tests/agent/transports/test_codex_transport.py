@@ -39,6 +39,30 @@ class TestCodexTransportBasic:
 
 class TestCodexBuildKwargs:
 
+    def test_gpt_5_6_direct_openai_disabled_sends_explicit_none(self, transport):
+        kw = transport.build_kwargs(
+            model="gpt-5.6",
+            messages=[{"role": "user", "content": "Hi"}],
+            tools=[],
+            provider="openai-api",
+            base_url="https://api.openai.com/v1",
+            reasoning_config={"enabled": False},
+        )
+        assert kw["reasoning"] == {"effort": "none"}
+        assert kw["include"] == []
+
+    def test_pre_5_6_disabled_keeps_omission_semantics(self, transport):
+        kw = transport.build_kwargs(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Hi"}],
+            tools=[],
+            provider="openai-api",
+            base_url="https://api.openai.com/v1",
+            reasoning_config={"enabled": False},
+        )
+        assert "reasoning" not in kw
+        assert kw["include"] == []
+
 
 
 

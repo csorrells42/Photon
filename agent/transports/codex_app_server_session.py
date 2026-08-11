@@ -92,6 +92,32 @@ class TurnResult:
 _TURN_ABORTED_MARKERS = ("<turn_aborted>", "<turn_aborted/>")
 
 
+# ``TurnStartParams.effort`` is a first-class field in the Codex app-server
+# protocol. Keep the accepted wire vocabulary explicit: malformed config must
+# never invent a default or leak an arbitrary value into the JSON-RPC request.
+_CODEX_TURN_EFFORTS = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+)
+
+
+def _codex_turn_effort(reasoning_config: Any) -> Optional[str]:
+    """Resolve one bounded Codex ``turn/start.effort`` value.
+
+    ``None`` means the user did not make a supported selection, so Codex keeps
+    its own model/session default. Explicit disabled maps to the protocol's
+    ``none`` value; no enabled default is synthesized.
+    """
+    if not isinstance(reasoning_config, dict):
+        return None
+    if reasoning_config.get("enabled") is False:
+        return "none"
+    effort = reasoning_config.get("effort")
+    if not isinstance(effort, str):
+        return None
+    normalized = effort.strip().lower()
+    return normalized if normalized in _CODEX_TURN_EFFORTS else None
+
+
 def _notification_scope_ids(
     note: dict,
 ) -> tuple[Optional[str], Optional[str]]:
@@ -471,6 +497,7 @@ class CodexAppServerSession:
         self,
         user_input: Any,
         *,
+        reasoning_config: Optional[dict[str, Any]] = None,
         turn_timeout: float = 600.0,
         notification_poll_timeout: float = 0.25,
         post_tool_quiet_timeout: float = 90.0,
@@ -518,13 +545,17 @@ class CodexAppServerSession:
 
         # Send turn/start with the user input. Text-only for now (codex
         # supports rich content but Hermes' text path is the common case).
+        turn_params: dict[str, Any] = {
+            "threadId": self._thread_id,
+            "input": [{"type": "text", "text": user_input_text}],
+        }
+        turn_effort = _codex_turn_effort(reasoning_config)
+        if turn_effort is not None:
+            turn_params["effort"] = turn_effort
         try:
             ts = self._client.request(
                 "turn/start",
-                {
-                    "threadId": self._thread_id,
-                    "input": [{"type": "text", "text": user_input_text}],
-                },
+                turn_params,
                 timeout=10,
             )
         except CodexAppServerError as exc:

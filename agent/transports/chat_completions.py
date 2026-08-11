@@ -107,14 +107,19 @@ def _build_gemini_thinking_config(model: str, reasoning_config: dict | None) -> 
     if not normalized_model.startswith("gemini"):
         return None
 
-    if reasoning_config.get("enabled") is False:
-        # Gemini can hide thought parts even when internal thinking still
-        # happens; omit thinkingLevel to avoid model-specific validation quirks.
-        return {"includeThoughts": False}
+    effort = str(reasoning_config.get("effort") or "").strip().lower()
+    if reasoning_config.get("enabled") is False or effort == "none":
+        # Gemini 2.5 Flash / Flash-Lite have a real off switch: zero thinking
+        # budget. ``includeThoughts=False`` alone only hides returned thought
+        # parts while the model can keep spending thinking tokens. Gemini 2.5
+        # Pro and Gemini 3 cannot be fully disabled, so omit rather than
+        # misrepresenting a display-only setting as Off; their capability
+        # resolver must not advertise an Off choice.
+        if normalized_model.startswith("gemini-2.5-flash"):
+            return {"includeThoughts": False, "thinkingBudget": 0}
+        return None
 
-    effort = str(reasoning_config.get("effort", "medium") or "medium").strip().lower()
-    if effort == "none":
-        return {"includeThoughts": False}
+    effort = effort or "medium"
 
     thinking_config: Dict[str, Any] = {"includeThoughts": True}
 
@@ -553,11 +558,14 @@ class ChatCompletionsTransport(ProviderTransport):
                 gh_reasoning = params.get("github_reasoning_extra")
                 if gh_reasoning is not None:
                     extra_body["reasoning"] = gh_reasoning
+            elif isinstance(reasoning_config, dict):
+                # Preserve the caller's semantic selection, especially an
+                # explicit disable. Rebuilding every config as enabled=True
+                # silently turned reasoning back on for compatible endpoints
+                # that honor reasoning.enabled.
+                extra_body["reasoning"] = dict(reasoning_config)
             else:
-                _effort = "medium"
-                if reasoning_config and isinstance(reasoning_config, dict):
-                    _effort = reasoning_config.get("effort", "medium") or "medium"
-                extra_body["reasoning"] = {"enabled": True, "effort": _effort}
+                extra_body["reasoning"] = {"enabled": True, "effort": "medium"}
 
         if provider_name == "gemini":
             raw_thinking_config = _build_gemini_thinking_config(model, reasoning_config)

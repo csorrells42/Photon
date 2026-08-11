@@ -80,6 +80,30 @@ class TestMem0V3Tools:
         result = json.loads(provider.handle_tool_call("mem0_conclude", {}))
         assert "error" in result
 
+    def test_transient_initialization_failure_retries_on_tool_call(self, monkeypatch):
+        monkeypatch.setattr(mem0_plugin, "_load_config", lambda: {
+            "mode": "oss",
+            "oss": {"vector_store": {"provider": "qdrant"}},
+        })
+        provider = Mem0MemoryProvider()
+        backend = FakeBackend(search_results=[{"id": "mem-1", "memory": "recovered"}])
+        attempts = []
+
+        def create_backend():
+            attempts.append(len(attempts) + 1)
+            if len(attempts) == 1:
+                provider._init_error = "temporary identity-file permission failure"
+                return None
+            return backend
+
+        provider._create_backend = create_backend  # type: ignore[method-assign]
+        provider.initialize("test-session", user_id="u123", platform="desktop")
+
+        result = json.loads(provider.handle_tool_call("mem0_search", {"query": "status"}))
+
+        assert attempts == [1, 2]
+        assert result["results"][0]["memory"] == "recovered"
+
 
 class TestMem0UpdateDelete:
 
@@ -259,6 +283,8 @@ class TestMem0V3Config:
         assert "mem0_list" not in block
         assert "mem0_profile" not in block
         assert "mem0_conclude" not in block
+        assert "there is no mem0_read tool" in block
+        assert "past outage" in block
 
 
 class TestMem0ModeSwitch:
@@ -407,5 +433,4 @@ class TestSelfHostedConfig:
     def test_load_config_reads_mem0_host_env(self, monkeypatch):
         monkeypatch.setenv("MEM0_HOST", "http://localhost:8888")
         assert mem0_plugin._load_config()["host"] == "http://localhost:8888"
-
 

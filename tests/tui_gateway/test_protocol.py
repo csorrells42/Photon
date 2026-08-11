@@ -235,7 +235,7 @@ def test_block_and_respond(capture):
 
 @pytest.mark.parametrize(
     "event",
-    ["secret.request", "sudo.request", "clarify.request", "terminal.read.request"],
+    ["secret.request", "sudo.request", "clarify.request", "terminal.read.request", "developer.native.request"],
 )
 def test_sensitive_prompt_timeout_emits_expiry(capture, event):
     server, buf = capture
@@ -257,6 +257,7 @@ def test_sensitive_prompt_timeout_emits_expiry(capture, event):
         ("sudo.respond", "password"),
         ("clarify.respond", "answer"),
         ("terminal.read.respond", "text"),
+        ("developer.native.respond", "text"),
     ],
 )
 def test_late_prompt_response_is_idempotent(server, method, value_key):
@@ -739,4 +740,3 @@ def test_unregister_live_transport_stops_delivery(capture):
     assert a.frames == []
     # No live transports left → fell back to stdio.
     assert json.loads(buf.getvalue())["params"]["type"] == "skin.changed"
-

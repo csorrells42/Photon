@@ -38,23 +38,42 @@ def resolve_lmstudio_effort(
 ) -> Optional[str]:
     """Return the ``reasoning_effort`` string to send to LM Studio, or ``None``.
 
-    ``None`` means "omit the field": the user picked a level the model can't
-    honor, so let LM Studio fall back to the model's declared default rather
-    than silently substituting a different effort. When ``allowed_options`` is
-    falsy (probe failed), skip clamping and send the resolved effort anyway.
+    ``None`` means "omit the field": either no override was requested or the
+    user picked a level the model can't honor. In both cases LM Studio's
+    declared default remains authoritative rather than being replaced with a
+    synthetic medium effort.
+
+    A toggle-style explicit ``enabled=True`` has no external effort string of
+    its own. Internally it maps to LM Studio's ``on``/``medium`` wire value, but
+    only when the model actually advertised that option.
     """
-    effort = "medium"
-    if reasoning_config and isinstance(reasoning_config, dict):
-        if reasoning_config.get("enabled") is False:
-            effort = "none"
+    if not isinstance(reasoning_config, dict) or not reasoning_config:
+        return None
+
+    explicit_toggle_on = False
+    if reasoning_config.get("enabled") is False:
+        effort = "none"
+    else:
+        raw = str(reasoning_config.get("effort") or "").strip().lower()
+        raw = _LM_EFFORT_ALIASES.get(raw, raw)
+        raw = _LM_EFFORT_CLAMP.get(raw, raw)
+        if raw in _LM_VALID_EFFORTS:
+            effort = raw
+        elif reasoning_config.get("enabled") is True and not raw:
+            explicit_toggle_on = True
+            effort = "medium"
         else:
-            raw = (reasoning_config.get("effort") or "").strip().lower()
-            raw = _LM_EFFORT_ALIASES.get(raw, raw)
-            raw = _LM_EFFORT_CLAMP.get(raw, raw)
-            if raw in _LM_VALID_EFFORTS:
-                effort = raw
+            return None
+
     if allowed_options:
-        allowed = {_LM_EFFORT_ALIASES.get(opt, opt) for opt in allowed_options}
+        allowed = {
+            _LM_EFFORT_ALIASES.get(str(opt).strip().lower(), str(opt).strip().lower())
+            for opt in allowed_options
+        }
         if effort not in allowed:
             return None
+    elif explicit_toggle_on:
+        # ``enabled`` is an internal toggle choice, not permission to guess an
+        # effort against a server whose capability probe did not succeed.
+        return None
     return effort
