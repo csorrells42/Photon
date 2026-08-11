@@ -290,4 +290,20 @@ def build_profile_secret_scope(hermes_home: Path) -> Dict[str, str]:
             continue
         secrets[key] = value
 
+    # The desktop reverse channel is intentionally an overlay on only the
+    # built-in `default` profile. Named/custom profiles never inherit this
+    # Windows user's bindings. No active authenticated channel returns an
+    # empty mapping, preserving standalone Hermes and its legacy sources.
+    try:
+        from hermes_cli.profiles import get_profile_dir
+        if home.resolve() == get_profile_dir("default").resolve():
+            from hermes_cli.workbench_credentials import resolve_profile_secret_scope
+            native = resolve_profile_secret_scope("default")
+            for key, value in native.items():
+                if not _is_global_env(key):
+                    secrets[key] = value
+    except (OSError, ValueError):
+        # An unresolvable profile path is not eligible for native credentials.
+        pass
+
     return secrets

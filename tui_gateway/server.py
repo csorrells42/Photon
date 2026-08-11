@@ -2352,7 +2352,13 @@ def _start_agent_build(sid: str, session: dict) -> None:
 
 def _sess_nowait(params, rid):
     s = _sessions.get(params.get("session_id") or "")
-    return (s, None) if s else (None, _err(rid, 4001, "session not found"))
+    if not s:
+        return None, _err(rid, 4001, "session not found")
+    if _authenticated_memory_mode():
+        principal = _current_memory_principal()
+        if principal is None or _session_principal(s) != principal:
+            return None, _err(rid, 4001, "session not found")
+    return s, None
 
 
 def _sess(params, rid):
@@ -2686,6 +2692,69 @@ def _session_source(session: dict | None) -> str:
     return _resolve_session_platform()
 
 
+def _authenticated_memory_mode() -> bool:
+    try:
+        from hermes_cli.dashboard_auth.live_principals import authenticated_memory_mode_enabled
+
+        return authenticated_memory_mode_enabled()
+    except Exception:
+        return os.environ.get("HERMES_WORKBENCH_AUTHENTICATED_MEM0") == "1"
+
+
+def _current_memory_principal() -> tuple[str, int] | None:
+    """Resolve principal authority from this connection, never process-wide.
+
+    The environment fallback is accepted only inside a profile-scoped spawned
+    dashboard gateway.  The multi-user in-process dashboard always uses the
+    request-bound WebSocket transport attributes.
+    """
+    transport = current_transport()
+    key = str(getattr(transport, "principal_key", "") or "")
+    generation = int(getattr(transport, "principal_generation", 0) or 0)
+    if not key and os.environ.get("HERMES_TUI_DASHBOARD") == "1":
+        key = os.environ.get("HERMES_DASHBOARD_PRINCIPAL_KEY", "")
+        try:
+            generation = int(os.environ.get("HERMES_DASHBOARD_PRINCIPAL_GENERATION", "0"))
+        except ValueError:
+            generation = 0
+    if not key or not generation:
+        return None
+    try:
+        from hermes_cli.dashboard_auth.live_principals import lease_is_live
+
+        return (key, generation) if lease_is_live(key, generation) else None
+    except Exception:
+        return None
+
+
+def _session_principal(session: dict | None) -> tuple[str, int] | None:
+    if not session:
+        return None
+    key = str(session.get("memory_principal_id") or "")
+    generation = int(session.get("memory_principal_generation") or 0)
+    if not key or not generation:
+        return None
+    if _authenticated_memory_mode():
+        try:
+            from hermes_cli.dashboard_auth.live_principals import lease_is_live
+
+            if not lease_is_live(key, generation):
+                return None
+        except Exception:
+            return None
+    return key, generation
+
+
+def _principal_may_access_session(
+    found: dict | None, principal: tuple[str, int] | None
+) -> bool:
+    if not _authenticated_memory_mode():
+        return True
+    if not found or principal is None:
+        return False
+    return str(found.get("user_id") or "") == principal[0]
+
+
 def _register_session_cwd(session: dict | None) -> None:
     if not session:
         return
@@ -2813,6 +2882,7 @@ def _ensure_session_db_row(session: dict) -> None:
             # into one list can't rely on which file a row came from alone. NULL
             # means the launch/default profile (matches run_agent's convention).
             profile_name=Path(profile_home).name if profile_home else None,
+            user_id=(session.get("memory_principal_id") or None),
         )
     except Exception as exc:
         # Disk-full is not a soft failure: if we swallow it here, prompt.submit
@@ -6568,6 +6638,11 @@ def _make_agent(
                 raise RuntimeError("Auth fallback resolved without a model")
             model = resolution.selected_model
     _pr = _load_provider_routing()
+    principal = _session_principal(_sessions.get(sid)) or _current_memory_principal()
+    if _authenticated_memory_mode() and principal is None:
+        raise PermissionError("Login is required before memory-enabled agent startup")
+    principal_id = principal[0] if principal else None
+    principal_generation = principal[1] if principal else None
     return AIAgent(
         model=model,
         max_iterations=_cfg_max_turns(cfg, 500),
@@ -6605,6 +6680,12 @@ def _make_agent(
         provider_require_parameters=_pr.get("require_parameters", False),
         provider_data_collection=_pr.get("data_collection"),
         platform=_resolve_agent_platform(platform_override),
+        user_id=principal_id,
+        user_id_alt=(
+            f"workbench-principal-generation:{principal_generation}"
+            if principal_generation
+            else None
+        ),
         session_id=session_id or key,
         session_db=session_db if session_db is not None else _get_db(),
         ephemeral_system_prompt=system_prompt or None,
@@ -6629,6 +6710,7 @@ def _init_session(
     profile_home: str | None = None,
 ):
     now = time.time()
+    principal = _current_memory_principal()
     with _sessions_lock:
         _sessions[sid] = {
             "agent": agent,
@@ -6661,6 +6743,8 @@ def _init_session(
             # Pin async event emissions to whichever transport created the
             # session (stdio for Ink, JSON-RPC WS for the dashboard sidebar).
             "transport": current_transport() or _stdio_transport,
+            "memory_principal_id": principal[0] if principal else None,
+            "memory_principal_generation": principal[1] if principal else None,
         }
     _init_owns_db = False
     if session_db is not None:
@@ -7843,6 +7927,7 @@ def _deferred_session_record(
     """A live-session record whose AIAgent is built later (lazy watch / cold
     resume) — _init_session's shape minus the agent."""
     now = time.time()
+    principal = _current_memory_principal()
     return {
         "agent": None,
         "agent_error": None,
@@ -7876,6 +7961,8 @@ def _deferred_session_record(
         "tool_progress_mode": _load_tool_progress_mode(),
         "tool_started_at": {},
         "transport": current_transport() or _stdio_transport,
+        "memory_principal_id": principal[0] if principal else None,
+        "memory_principal_generation": principal[1] if principal else None,
     }
 
 

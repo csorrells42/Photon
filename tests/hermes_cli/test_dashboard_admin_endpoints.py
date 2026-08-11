@@ -44,7 +44,233 @@ class TestMcpEndpoints:
             },
         )
         srv = self.client.get("/api/mcp/servers").json()["servers"][0]
-        assert srv["env"]["API_KEY"] != "sk-secret-1234567890"
+        assert srv["env"] == {}
+
+    def test_legacy_stdio_config_is_metadata_only_and_not_editable(self):
+        secret = "not-a-real-key-value"
+        created = self.client.post(
+            "/api/mcp/servers",
+            json={
+                "name": "editable-stdio",
+                "command": "npx",
+                "args": ["-y", "example-mcp"],
+                "env": {"API_KEY": secret},
+            },
+        )
+        assert created.status_code == 200
+        snapshot = self.client.get("/api/mcp/servers").json()["servers"][0]
+        assert snapshot["editable"] is False
+        assert snapshot["revision"].startswith("mcp-rev:")
+        assert secret not in str(snapshot)
+        assert snapshot["command"] == ""
+        assert snapshot["args"] == []
+        assert snapshot["tools"] == []
+        assert snapshot["env"] == {}
+
+        reviewed = self.client.post(
+            "/api/mcp/servers/editable-stdio/review",
+            json={
+                "revision": snapshot["revision"],
+                "edit": {
+                    "transport": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "example-mcp", "--quiet"],
+                    "environment_variable_names": ["API_KEY"],
+                    "auth": None,
+                    "enabled": True,
+                },
+            },
+        )
+        assert reviewed.status_code == 400
+        assert reviewed.json()["detail"] == "unavailable"
+        assert secret not in reviewed.text
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://user:password@example.test/mcp",
+            "https://example.test/mcp?api_key=inline-secret",
+            "https://example.test/mcp#token=inline-secret",
+        ],
+    )
+    def test_safe_editor_redacts_and_refuses_credential_bearing_urls(self, url):
+        from hermes_cli.config import load_config, save_config
+
+        config = load_config()
+        config["mcp_servers"] = {"unsafe-http": {"url": url}}
+        save_config(config)
+        snapshot = self.client.get("/api/mcp/servers").json()["servers"][0]
+        assert snapshot["editable"] is False
+        assert snapshot["url"] == ""
+        assert "inline-secret" not in str(snapshot)
+
+        response = self.client.post(
+            "/api/mcp/servers/unsafe-http/review",
+            json={
+                "revision": snapshot["revision"],
+                "edit": {
+                    "transport": "http",
+                    "url": "https://example.test/mcp",
+                    "command": "",
+                    "args": [],
+                    "environment_variable_names": [],
+                    "auth": None,
+                    "enabled": True,
+                },
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "unavailable"
+
+    def test_safe_editor_cannot_add_secret_slots_or_header_auth(self):
+        assert self.client.post(
+            "/api/mcp/servers",
+            json={"name": "plain", "command": "npx", "args": ["-y", "example-mcp"]},
+        ).status_code == 200
+        snapshot = self.client.get("/api/mcp/servers").json()["servers"][0]
+        response = self.client.post(
+            "/api/mcp/servers/plain/review",
+            json={
+                "revision": snapshot["revision"],
+                "edit": {
+                    "transport": "stdio",
+                    "url": "",
+                    "command": "npx",
+                    "args": ["-y", "example-mcp"],
+                    "environment_variable_names": ["NEW_SECRET"],
+                    "auth": None,
+                    "enabled": True,
+                },
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "unavailable"
+
+    def test_safe_editor_hides_credential_assignments_urls_and_nested_tools(self):
+        from hermes_cli.config import load_config, save_config
+
+        secret = "synthetic-secret-value"
+        config = load_config()
+        config["mcp_servers"] = {
+            "unsafe-args": {
+                "command": "npx",
+                "args": [
+                    f"OPENAI_API_KEY={secret}",
+                    f"--endpoint=https://example.test/mcp?token={secret}",
+                ],
+            },
+            "unsafe-tools": {
+                "command": "npx",
+                "args": ["-y", "example-mcp"],
+                "tools": {"settings": {"api_key": secret}},
+            },
+            "positional-secret": {
+                "command": "vendor-mcp",
+                "args": ["activate", secret],
+            },
+            "path-secret": {"url": f"https://example.test/license/{secret}"},
+            "tool-name-secret": {
+                "command": "vendor-mcp",
+                "tools": [secret],
+            },
+        }
+        save_config(config)
+
+        response = self.client.get("/api/mcp/servers")
+        assert response.status_code == 200
+        assert secret not in response.text
+        servers = {server["name"]: server for server in response.json()["servers"]}
+        assert servers["unsafe-args"]["args"] == []
+        assert servers["unsafe-args"]["editable"] is False
+        assert servers["unsafe-tools"]["tools"] == []
+        assert servers["unsafe-tools"]["editable"] is False
+        assert servers["positional-secret"]["args"] == []
+        assert servers["path-secret"]["url"] == ""
+        assert servers["tool-name-secret"]["tools"] == []
+
+    @pytest.mark.parametrize(
+        "server_config",
+        [
+            {"command": {"opaque": "synthetic-secret-marker"}},
+            {"command": "npx", "env": ["OPENAI_API_KEY=synthetic-secret-marker"]},
+            {"url": "https://example.test/mcp", "auth": {"token": "synthetic-secret-marker"}},
+        ],
+    )
+    def test_safe_editor_refuses_malformed_secret_bearing_shapes(self, server_config):
+        from hermes_cli.config import load_config, save_config
+
+        config = load_config()
+        config["mcp_servers"] = {"malformed": server_config}
+        save_config(config)
+        response = self.client.get("/api/mcp/servers")
+        assert response.status_code == 200
+        assert "synthetic-secret-marker" not in response.text
+        snapshot = response.json()["servers"][0]
+        assert snapshot["editable"] is False
+        assert snapshot["command"] == ""
+        assert snapshot["env"] == {}
+        assert snapshot["auth"] is None
+
+    def test_safe_editor_cannot_remove_an_existing_secret_slot(self):
+        secret = "not-a-real-key-value"
+        assert self.client.post(
+            "/api/mcp/servers",
+            json={
+                "name": "two-slots",
+                "command": "npx",
+                "args": ["-y", "example-mcp"],
+                "env": {"API_KEY": secret, "OTHER_KEY": f"{secret}-other"},
+            },
+        ).status_code == 200
+        snapshot = self.client.get("/api/mcp/servers").json()["servers"][0]
+        response = self.client.post(
+            "/api/mcp/servers/two-slots/review",
+            json={
+                "revision": snapshot["revision"],
+                "edit": {
+                    "transport": "stdio",
+                    "url": "",
+                    "command": "npx",
+                    "args": ["-y", "example-mcp"],
+                    "environment_variable_names": ["API_KEY"],
+                    "auth": None,
+                    "enabled": True,
+                },
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "unavailable"
+
+    @pytest.mark.parametrize(
+        "argument",
+        [
+            "OPENAI_API_KEY=synthetic-value",
+            "--endpoint=https://example.test/mcp?token=synthetic-value",
+        ],
+    )
+    def test_safe_editor_rejects_credential_bearing_arguments(self, argument):
+        assert self.client.post(
+            "/api/mcp/servers",
+            json={"name": "plain", "command": "npx", "args": ["-y", "example-mcp"]},
+        ).status_code == 200
+        snapshot = self.client.get("/api/mcp/servers").json()["servers"][0]
+        response = self.client.post(
+            "/api/mcp/servers/plain/review",
+            json={
+                "revision": snapshot["revision"],
+                "edit": {
+                    "transport": "stdio",
+                    "url": "",
+                    "command": "npx",
+                    "args": [argument],
+                    "environment_variable_names": [],
+                    "auth": None,
+                    "enabled": True,
+                },
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "unavailable"
 
     def test_http_bearer_auth_separates_secret_from_config(
         self, _isolate_hermes_home
@@ -63,7 +289,9 @@ class TestMcpEndpoints:
         )
 
         assert response.status_code == 200
-        assert response.json()["auth"] == "header"
+        assert response.json()["auth"] is None
+        assert response.json()["url"] == ""
+        assert response.json()["editable"] is False
         assert "bearer_token" not in response.json()
 
         hermes_home = get_hermes_home()
@@ -84,7 +312,9 @@ class TestMcpEndpoints:
         )
 
         assert response.status_code == 200
-        assert response.json()["auth"] == "oauth"
+        assert response.json()["auth"] is None
+        assert response.json()["url"] == ""
+        assert response.json()["editable"] is False
 
         from hermes_cli.mcp_config import _get_mcp_servers
 

@@ -25,6 +25,7 @@ Design:
 
 import json
 import logging
+import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -1070,6 +1071,18 @@ def memory_tool(
 
     Returns JSON string with results.
     """
+    try:
+        from hermes_cli.dashboard_auth.live_principals import authenticated_memory_mode_enabled
+
+        if authenticated_memory_mode_enabled():
+            return tool_error(
+                "The profile-wide MEMORY.md/USER.md store is unavailable in "
+                "authenticated Workbench mode; use the authenticated Mem0 tools.",
+                success=False,
+            )
+    except Exception:
+        if os.environ.get("HERMES_WORKBENCH_AUTHENTICATED_MEM0") == "1":
+            return tool_error("Authenticated memory authority is unavailable.", success=False)
     if store is None:
         return tool_error("Memory is not available. It may be disabled in config or this environment.", success=False)
 
@@ -1132,7 +1145,12 @@ def memory_tool(
 
 def check_memory_requirements() -> bool:
     """Memory tool has no external requirements -- always available."""
-    return True
+    try:
+        from hermes_cli.dashboard_auth.live_principals import authenticated_memory_mode_enabled
+
+        return not authenticated_memory_mode_enabled()
+    except Exception:
+        return os.environ.get("HERMES_WORKBENCH_AUTHENTICATED_MEM0") != "1"
 
 
 def apply_memory_pending(payload: Dict[str, Any], store: "MemoryStore") -> Dict[str, Any]:
@@ -1141,6 +1159,8 @@ def apply_memory_pending(payload: Dict[str, Any], store: "MemoryStore") -> Dict[
 
     Returns the store's result dict.
     """
+    if not check_memory_requirements():
+        return {"success": False, "error": "Authenticated Workbench memory is fail closed."}
     action = payload.get("action")
     target = payload.get("target", "memory")
     content = payload.get("content") or ""
@@ -1242,7 +1262,5 @@ registry.register(
     check_fn=check_memory_requirements,
     emoji="🧠",
 )
-
-
 
 

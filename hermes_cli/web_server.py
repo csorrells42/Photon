@@ -12236,25 +12236,30 @@ def _redact_mcp_env(env: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def _mcp_server_summary(name: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _mcp_server_summary(
+    name: str, cfg: Dict[str, Any], profile: Optional[str] = None
+) -> Dict[str, Any]:
+    from hermes_cli.mcp_editor import renderer_safe_server
+
+    renderer = renderer_safe_server(profile, name, cfg)
     transport = "http" if cfg.get("url") else ("stdio" if cfg.get("command") else "unknown")
-    auth = cfg.get("auth")
-    headers = cfg.get("headers") or {}
-    if not auth and isinstance(headers, dict) and any(
-        str(key).lower() == "authorization" for key in headers
-    ):
-        auth = "header"
     return {
         "name": name,
         "transport": transport,
-        "url": cfg.get("url"),
-        "command": cfg.get("command"),
-        "args": list(cfg.get("args") or []),
-        "env": _redact_mcp_env(cfg.get("env") or {}),
-        "auth": auth,
+        "url": renderer["url"],
+        "command": renderer["command"],
+        "args": renderer["args"],
+        # Names are configuration; values are credentials. Do not return even
+        # a redacted/preview fragment because it remains secret-derived data.
+        "env": renderer["env"],
+        "auth": renderer["auth"],
         "enabled": cfg.get("enabled", True) is not False,
-        # Tool selection: list of enabled tool names, or None = all.
-        "tools": cfg.get("tools"),
+        # Tool selection: only bounded string names cross the renderer boundary.
+        # Nested/raw values may contain credentials and make the row non-editable.
+        "tools": renderer["tools"],
+        "revision": renderer["revision"],
+        "editable": renderer["editable"],
+        "editor_block_reason": renderer["editor_block_reason"],
     }
 
 
@@ -14865,7 +14870,9 @@ def _ws_auth_mode() -> str:
     return "loopback"
 
 
-def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
+def _ws_auth_identity(
+    ws: "WebSocket",
+) -> tuple[Optional[str], str, Optional[Dict[str, Any]]]:
     """Validate WS-upgrade auth; return ``(reason, credential)``.
 
     ``reason`` is None when the credential is accepted, else a short
@@ -14914,8 +14921,8 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
         internal = ws.query_params.get("internal", "")
         if internal:
             try:
-                consume_internal_credential(internal)
-                return None, "internal"
+                info = consume_internal_credential(internal)
+                return None, "internal", info
             except TicketInvalid as exc:
                 audit_log(
                     AuditEvent.WS_TICKET_REJECTED,
@@ -14923,15 +14930,15 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                     ip=(ws.client.host if ws.client else ""),
                     path=ws.url.path,
                 )
-                return "internal_invalid", "internal"
+                return "internal_invalid", "internal", None
 
         ticket = ws.query_params.get("ticket", "")
         if not ticket:
-            return "no_credential", "none"
+            return "no_credential", "none", None
 
         try:
-            consume_ticket(ticket)
-            return None, "ticket"
+            info = consume_ticket(ticket)
+            return None, "ticket", info
         except TicketInvalid as exc:
             audit_log(
                 AuditEvent.WS_TICKET_REJECTED,
@@ -14939,19 +14946,24 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                 ip=(ws.client.host if ws.client else ""),
                 path=ws.url.path,
             )
-            return "ticket_invalid", "ticket"
+            return "ticket_invalid", "ticket", None
 
     token = ws.query_params.get("token", "")
     if not token:
-        return "no_credential", "none"
+        return "no_credential", "none", None
     if hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
-        return None, "token"
-    return "token_mismatch", "token"
+        return None, "token", None
+    return "token_mismatch", "token", None
+
+
+def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
+    reason, credential, _identity = _ws_auth_identity(ws)
+    return reason, credential
 
 
 def _ws_auth_ok(ws: "WebSocket") -> bool:
     """True when the WS-upgrade credential is accepted. See _ws_auth_reason."""
-    return _ws_auth_reason(ws)[0] is None
+    return _ws_auth_identity(ws)[0] is None
 
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)
 # and /api/events (dashboard → browser sidebar).  Keyed by an opaque channel id
@@ -14966,6 +14978,7 @@ def _resolve_chat_argv(
     sidecar_url: Optional[str] = None,
     profile: Optional[str] = None,
     active_session_file: Optional[str] = None,
+    principal_info: Optional[Dict[str, Any]] = None,
 ) -> tuple[list[str], Optional[str], Optional[dict]]:
     """Resolve the argv + cwd + env for the chat PTY.
 
@@ -15003,6 +15016,11 @@ def _resolve_chat_argv(
     so a profile-scoped chat must spawn its own gateway subprocess.
     """
     from hermes_cli.main import PROJECT_ROOT, _apply_tui_python_env, _make_tui_argv
+    if (
+        os.environ.get("HERMES_WORKBENCH_AUTHENTICATED_MEM0") == "1"
+        and not (principal_info and principal_info.get("principal_key"))
+    ):
+        raise HTTPException(status_code=401, detail="Login is required")
 
     profile_dir: Optional[Path] = None
     requested = (profile or "").strip()
@@ -15042,6 +15060,12 @@ def _resolve_chat_argv(
     # setdefault so an explicit operator value still wins.
     env.setdefault("COLORTERM", "truecolor")
     env["HERMES_TUI_DASHBOARD"] = "1"
+    if principal_info and principal_info.get("principal_key"):
+        env["HERMES_DASHBOARD_PRINCIPAL_KEY"] = str(principal_info["principal_key"])
+        env["HERMES_DASHBOARD_PRINCIPAL_GENERATION"] = str(
+            int(principal_info.get("principal_generation") or 0)
+        )
+        env["HERMES_WORKBENCH_AUTHENTICATED_MEM0"] = "1"
 
     if profile_dir is not None:
         env["HERMES_HOME"] = str(profile_dir)
@@ -15070,7 +15094,7 @@ def _resolve_chat_argv(
     # attach URL, gatewayClient spawns its own `tui_gateway.entry`, which
     # inherits the profile HERMES_HOME set above.
     if profile_dir is None:
-        if gateway_ws_url := _build_gateway_ws_url():
+        if gateway_ws_url := _build_gateway_ws_url(principal_info=principal_info):
             env["HERMES_TUI_GATEWAY_URL"] = gateway_ws_url
 
     return list(argv), str(cwd) if cwd else None, env
@@ -15114,7 +15138,9 @@ def _resolve_client_ws_host() -> Optional[str]:
     return host
 
 
-def _build_gateway_ws_url() -> Optional[str]:
+def _build_gateway_ws_url(
+    *, principal_info: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
     """ws:// URL the PTY child should attach to for JSON-RPC gateway traffic.
 
     Loopback / ``--insecure``: ``?token=<_SESSION_TOKEN>``.
@@ -15140,7 +15166,17 @@ def _build_gateway_ws_url() -> Optional[str]:
     if getattr(app.state, "auth_required", False):
         from hermes_cli.dashboard_auth.ws_tickets import internal_ws_credential
 
-        qs = urllib.parse.urlencode({"internal": internal_ws_credential()})
+        credential = (
+            internal_ws_credential(
+                user_id=str(principal_info.get("user_id") or ""),
+                provider=str(principal_info.get("provider") or ""),
+                principal_key=str(principal_info["principal_key"]),
+                principal_generation=int(principal_info.get("principal_generation") or 0),
+            )
+            if principal_info and principal_info.get("principal_key")
+            else internal_ws_credential()
+        )
+        qs = urllib.parse.urlencode({"internal": credential})
     else:
         qs = urllib.parse.urlencode({"token": _SESSION_TOKEN})
 
@@ -15152,6 +15188,7 @@ async def _resolve_chat_argv_async(
     sidecar_url: Optional[str] = None,
     profile: Optional[str] = None,
     active_session_file: Optional[str] = None,
+    principal_info: Optional[Dict[str, Any]] = None,
 ) -> tuple[list[str], Optional[str], Optional[dict]]:
     """Resolve chat argv without blocking the dashboard event loop.
 
@@ -15167,6 +15204,7 @@ async def _resolve_chat_argv_async(
         "resume": resume,
         "sidecar_url": sidecar_url,
         "profile": profile,
+        "principal_info": principal_info,
     }
     if active_session_file is not None:
         kwargs["active_session_file"] = active_session_file
@@ -15178,7 +15216,9 @@ async def _resolve_chat_argv_async(
         )
 
 
-def _build_sidecar_url(channel: str) -> Optional[str]:
+def _build_sidecar_url(
+    channel: str, *, principal_info: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
     """ws:// URL the PTY child should publish events to, or None when unbound.
 
     Loopback / ``--insecure``: uses ``?token=<_SESSION_TOKEN>``.
@@ -15205,9 +15245,17 @@ def _build_sidecar_url(channel: str) -> Optional[str]:
         # _ws_auth_ok and the child can reconnect.
         from hermes_cli.dashboard_auth.ws_tickets import internal_ws_credential
 
-        qs = urllib.parse.urlencode(
-            {"internal": internal_ws_credential(), "channel": channel}
+        credential = (
+            internal_ws_credential(
+                user_id=str(principal_info.get("user_id") or ""),
+                provider=str(principal_info.get("provider") or ""),
+                principal_key=str(principal_info["principal_key"]),
+                principal_generation=int(principal_info.get("principal_generation") or 0),
+            )
+            if principal_info and principal_info.get("principal_key")
+            else internal_ws_credential()
         )
+        qs = urllib.parse.urlencode({"internal": credential, "channel": channel})
     else:
         qs = urllib.parse.urlencode({"token": _SESSION_TOKEN, "channel": channel})
 
@@ -15860,7 +15908,7 @@ async def pty_ws(ws: WebSocket) -> None:
     #     browser banner agree on the cause:
     #       4401 bad credential   4403 host/origin mismatch
     #       4408 peer not allowed  4404 chat disabled
-    auth_reason, cred = _ws_auth_reason(ws)
+    auth_reason, cred, principal_info = _ws_auth_identity(ws)
     mode = _ws_auth_mode()
     if auth_reason is not None:
         _log.warning(
@@ -15902,7 +15950,9 @@ async def pty_ws(ws: WebSocket) -> None:
     resume = raw_resume
     profile = ws.query_params.get("profile") or None
     channel = _channel_or_close_code(ws)
-    sidecar_url = _build_sidecar_url(channel) if channel else None
+    sidecar_url = (
+        _build_sidecar_url(channel, principal_info=principal_info) if channel else None
+    )
     force_fresh = (ws.query_params.get("fresh") or "").strip().lower() in {
         "1",
         "true",
@@ -15923,6 +15973,7 @@ async def pty_ws(ws: WebSocket) -> None:
         "resume": resume,
         "sidecar_url": sidecar_url,
         "profile": profile,
+        "principal_info": principal_info,
     }
     if active_session_file is not None:
         resolve_kwargs["active_session_file"] = str(active_session_file)
@@ -15942,6 +15993,11 @@ async def pty_ws(ws: WebSocket) -> None:
 
 
     attach_token = ws.query_params.get("attach") or None
+    if attach_token is not None and principal_info and principal_info.get("principal_key"):
+        attach_token = (
+            f"{attach_token}\0{principal_info['principal_key']}\0"
+            f"{int(principal_info.get('principal_generation') or 0)}"
+        )
     registry_resume = raw_resume
     if raw_resume and env:
         registry_resume = env.get("HERMES_TUI_RESUME") or raw_resume
@@ -15964,7 +16020,42 @@ async def pty_ws(ws: WebSocket) -> None:
             await ws.send_text(f"\r\n\x1b[31mChat failed to start: {exc}\x1b[0m\r\n")
             await ws.close(code=1011)
             return
-        await _legacy_pump(ws, bridge)
+        revocation_token = None
+        if principal_info and principal_info.get("principal_key"):
+            from hermes_cli.dashboard_auth.live_principals import register_live_channel
+
+            loop = asyncio.get_running_loop()
+
+            async def _close_revoked_legacy_pty() -> None:
+                await asyncio.to_thread(bridge.close)
+                with contextlib.suppress(Exception):
+                    await ws.close(code=4401, reason="logged out")
+
+            def _revoke_legacy() -> None:
+                asyncio.run_coroutine_threadsafe(
+                    _close_revoked_legacy_pty(), loop
+                ).result(timeout=5.0)
+
+            try:
+                revocation_token = register_live_channel(
+                    str(principal_info["principal_key"]),
+                    int(principal_info.get("principal_generation") or 0),
+                    _revoke_legacy,
+                )
+            except Exception:
+                await _close_revoked_legacy_pty()
+                return
+        try:
+            await _legacy_pump(ws, bridge)
+        finally:
+            if revocation_token is not None:
+                from hermes_cli.dashboard_auth.live_principals import unregister_live_channel
+
+                unregister_live_channel(
+                    str(principal_info["principal_key"]),
+                    int(principal_info.get("principal_generation") or 0),
+                    revocation_token,
+                )
         return
 
     # Keep-alive path: the PTY outlives this socket; reattach by token.
@@ -15982,6 +16073,31 @@ async def pty_ws(ws: WebSocket) -> None:
         return
 
     await session.attach(ws)
+    revocation_token = None
+    if principal_info and principal_info.get("principal_key"):
+        from hermes_cli.dashboard_auth.live_principals import register_live_channel
+
+        loop = asyncio.get_running_loop()
+
+        async def _close_revoked_keepalive_pty() -> None:
+            await session.close()
+            with contextlib.suppress(Exception):
+                await ws.close(code=4401, reason="logged out")
+
+        def _revoke_keepalive() -> None:
+            asyncio.run_coroutine_threadsafe(
+                _close_revoked_keepalive_pty(), loop
+            ).result(timeout=5.0)
+
+        try:
+            revocation_token = register_live_channel(
+                str(principal_info["principal_key"]),
+                int(principal_info.get("principal_generation") or 0),
+                _revoke_keepalive,
+            )
+        except Exception:
+            await _close_revoked_keepalive_pty()
+            return
 
     # --- writer loop: WebSocket → PTY master ----------------------------
     # No reader task here: the session's drain task (spawned once per PTY,
@@ -16019,6 +16135,110 @@ async def pty_ws(ws: WebSocket) -> None:
         # Detach only — the PTY keeps running for a reattach; the registry
         # reaper closes it after the TTL (or immediately on process exit).
         PTY_REGISTRY.detach(attach_token, ws)
+        if revocation_token is not None:
+            from hermes_cli.dashboard_auth.live_principals import unregister_live_channel
+
+            unregister_live_channel(
+                str(principal_info["principal_key"]),
+                int(principal_info.get("principal_generation") or 0),
+                revocation_token,
+            )
+
+
+# ---------------------------------------------------------------------------
+# /api/workbench/credentials/v2 — authenticated native reverse channel.
+# ---------------------------------------------------------------------------
+
+
+class _WorkbenchCredentialSocket:
+    """Single-reader ASGI adapter for the native credential protocol."""
+
+    def __init__(self, ws: WebSocket):
+        self._ws = ws
+        self._queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=8)
+        self._closed = asyncio.Event()
+        self._reader = asyncio.create_task(self._pump())
+
+    async def _pump(self) -> None:
+        try:
+            while True:
+                message = await self._ws.receive()
+                await self._queue.put(message)
+                if message.get("type") == "websocket.disconnect":
+                    return
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            return
+        except Exception:
+            try:
+                self._queue.put_nowait({"type": "websocket.disconnect"})
+            except asyncio.QueueFull:
+                pass
+        finally:
+            self._closed.set()
+
+    async def receive(self) -> Dict[str, Any]:
+        message = await self._queue.get()
+        if message.get("type") == "websocket.disconnect":
+            from hermes_cli.workbench_credentials import WorkbenchCredentialError
+            raise WorkbenchCredentialError("channel_disconnected", "The native credential channel disconnected.")
+        return message
+
+    async def send_text(self, data: str) -> None:
+        await self._ws.send_text(data)
+
+    async def send_bytes(self, data: bytes) -> None:
+        await self._ws.send_bytes(data)
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        if not self._closed.is_set():
+            try:
+                await self._ws.close(code=code, reason=reason[:120])
+            except Exception:
+                pass
+        if self._reader is not asyncio.current_task():
+            self._reader.cancel()
+        self._closed.set()
+
+    async def wait_closed(self) -> None:
+        await self._closed.wait()
+
+
+@app.websocket("/api/workbench/credentials/v2")
+async def workbench_credentials_ws(ws: WebSocket) -> None:
+    """Accept only the stdin-bootstrapped, profile-bound native channel."""
+    query = list(ws.query_params.multi_items())
+    if len(query) != 1 or query[0][0] != "session" or not _ws_host_origin_is_allowed(ws):
+        await ws.close(code=4403)
+        return
+    session_id = query[0][1]
+    peer_host = ws.client.host if ws.client else ""
+    await ws.accept()
+    socket = _WorkbenchCredentialSocket(ws)
+    session = None
+    from hermes_cli.workbench_credentials import (
+        PROFILE_PATH,
+        WorkbenchCredentialError,
+        accept_reverse_channel,
+    )
+    try:
+        session = await accept_reverse_channel(
+            socket,
+            peer_host=peer_host,
+            session_id=session_id,
+            profile_path=PROFILE_PATH,
+        )
+        await socket.wait_closed()
+    except WorkbenchCredentialError as exc:
+        logging.getLogger(__name__).warning("Workbench credential channel rejected: %s", exc.code)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Workbench credential channel failed safely: %s", type(exc).__name__,
+        )
+    finally:
+        if session is not None:
+            await session.close(code=1000, reason="credential channel closed")
+        else:
+            await socket.close(code=4403, reason="credential channel rejected")
 
 
 # ---------------------------------------------------------------------------
@@ -16031,14 +16251,14 @@ async def pty_ws(ws: WebSocket) -> None:
 # active, so a tool.start emitted by the agent fans out to both sinks.
 # ---------------------------------------------------------------------------
 
-
 @app.websocket("/api/ws")
 async def gateway_ws(ws: WebSocket) -> None:
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         await ws.close(code=4403)
         return
 
-    if not _ws_auth_ok(ws):
+    auth_reason, _credential, principal_info = _ws_auth_identity(ws)
+    if auth_reason is not None:
         await ws.close(code=4401)
         return
 
@@ -16048,7 +16268,7 @@ async def gateway_ws(ws: WebSocket) -> None:
 
     from tui_gateway.ws import handle_ws
 
-    await handle_ws(ws)
+    await handle_ws(ws, principal_info=principal_info)
 
 
 # ---------------------------------------------------------------------------

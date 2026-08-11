@@ -1,6 +1,7 @@
 """Tests for Mem0Backend abstraction — PlatformBackend, OSSBackend, SelfHostedBackend."""
 
 import copy
+import json
 import pytest
 
 from plugins.memory.mem0._backend import (
@@ -9,6 +10,44 @@ from plugins.memory.mem0._backend import (
     OSSBackend,
     SelfHostedBackend,
 )
+
+
+def test_workbench_dmr_model_pin_requires_request_inventory_and_digest(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "must-not-redirect-dmr")
+    payload = json.dumps({"data": [
+        {
+            "id": "docker.io/ai/qwen3:4B-UD-Q4_K_XL",
+        },
+    ]}).encode()
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return payload
+
+    monkeypatch.setattr(
+        "plugins.memory.mem0._backend.urllib.request.urlopen",
+        lambda *_args, **_kwargs: _Response(),
+    )
+    block = {
+        "provider": "lmstudio",
+        "config": {
+            "model": "ai/qwen3:4B-UD-Q4_K_XL",
+            "model_digest": "sha256:d6bb9d7293698b06da1eb40008cdf5944bd6125f437b34ff1a7d535f5e868e80",
+            "lmstudio_base_url": "http://host.docker.internal:12434/engines/v1",
+            "api_key": "not-needed",
+        },
+    }
+    OSSBackend._validate_dmr_model_pin(block, "LLM")
+
+    block["config"]["model"] = "ai/qwen3:latest"
+    with pytest.raises(RuntimeError, match="Docker model pin is incomplete"):
+        OSSBackend._validate_dmr_model_pin(block, "LLM")
 
 
 class FakePlatformClient:
@@ -151,6 +190,267 @@ class TestOSSBackend:
         assert "api_base" not in captured["llm"]["config"]
         assert "api_base" not in captured["embedder"]["config"]
         assert raw == before
+
+    @staticmethod
+    def _strict_workbench_config():
+        vector_url = "http://memory-vector:6333"
+        collection = "hermes_workbench_mem0_v3"
+        return {
+            "llm": {
+                "provider": "lmstudio",
+                "config": {
+                    "model": "ai/qwen3:4B-UD-Q4_K_XL",
+                    "model_digest": "sha256:d6bb9d7293698b06da1eb40008cdf5944bd6125f437b34ff1a7d535f5e868e80",
+                    "lmstudio_base_url": "http://host.docker.internal:12434/engines/v1",
+                    "api_key": "not-needed",
+                },
+            },
+            "embedder": {
+                "provider": "lmstudio",
+                "config": {
+                    "model": "ai/nomic-embed-text-v1.5",
+                    "model_digest": "sha256:653017dd060f5cd345118ff90382ceb213d383de2887820d2f303893d32ef40d",
+                    "lmstudio_base_url": "http://host.docker.internal:12434/engines/v1",
+                    "api_key": "not-needed",
+                    "embedding_dims": 768,
+                },
+            },
+            "vector_store": {
+                "provider": "qdrant",
+                "config": {"url": vector_url, "collection_name": collection},
+            },
+            "embedding_identity": {
+                "version": 3,
+                "provider": "lmstudio",
+                "model": "ai/nomic-embed-text-v1.5",
+                "inventory_model": "docker.io/ai/nomic-embed-text-v1.5:latest",
+                "model_digest": "sha256:653017dd060f5cd345118ff90382ceb213d383de2887820d2f303893d32ef40d",
+                "model_url": "http://host.docker.internal:12434/engines/v1",
+                "dimensions": 768,
+                "vector_provider": "qdrant",
+                "vector_url": vector_url,
+                "collection": collection,
+                "distance": "cosine",
+            },
+        }
+
+    def test_two_workbench_providers_use_http_qdrant_without_embedded_locking(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        qdrant_constructions = []
+        memory_configs = []
+
+        class QdrantClient:
+            def __init__(self, **kwargs):
+                qdrant_constructions.append(kwargs)
+
+            def collection_exists(self, _collection):
+                return False
+
+            def close(self):
+                return None
+
+        class _Store:
+            collection_name = "hermes_workbench_mem0_v3"
+
+            def __init__(self):
+                self.client = object()
+
+        class _MemoryInstance(FakeOSSMemory):
+            def __init__(self):
+                super().__init__()
+                self.vector_store = _Store()
+
+        class Memory:
+            @staticmethod
+            def from_config(config):
+                memory_configs.append(config)
+                return _MemoryInstance()
+
+        stub_mem0 = types.ModuleType("mem0")
+        stub_mem0.Memory = Memory  # type: ignore[attr-defined]
+        stub_qdrant = types.ModuleType("qdrant_client")
+        stub_qdrant.QdrantClient = QdrantClient  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mem0", stub_mem0)
+        monkeypatch.setitem(sys.modules, "qdrant_client", stub_qdrant)
+        monkeypatch.setenv("HERMES_WORKBENCH_AUTHENTICATED_MEM0", "1")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr(OSSBackend, "_validate_dmr_model_pin", lambda *_args: None)
+
+        first = OSSBackend(self._strict_workbench_config())
+        second = OSSBackend(self._strict_workbench_config())
+
+        assert first is not second
+        assert len(memory_configs) == 2
+        assert qdrant_constructions == [
+            {"url": "http://memory-vector:6333", "api_key": None},
+            {"url": "http://memory-vector:6333", "api_key": None},
+        ]
+        assert all("path" not in config["vector_store"]["config"] for config in memory_configs)
+
+    def test_workbench_qdrant_endpoint_and_collection_drift_fail_before_mem0_init(
+        self, monkeypatch
+    ):
+        import sys
+        import types
+
+        calls = []
+
+        class Memory:
+            @staticmethod
+            def from_config(config):
+                calls.append(config)
+                return FakeOSSMemory()
+
+        stub_mem0 = types.ModuleType("mem0")
+        stub_mem0.Memory = Memory  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mem0", stub_mem0)
+        monkeypatch.setenv("HERMES_WORKBENCH_AUTHENTICATED_MEM0", "1")
+        monkeypatch.setattr(OSSBackend, "_validate_dmr_model_pin", lambda *_args: None)
+
+        wrong_url = self._strict_workbench_config()
+        wrong_url["vector_store"]["config"]["url"] = "http://localhost:6333"
+        with pytest.raises(RuntimeError, match="exact internal Qdrant"):
+            OSSBackend(wrong_url)
+
+        wrong_collection = self._strict_workbench_config()
+        wrong_collection["vector_store"]["config"]["collection_name"] = "mem0"
+        with pytest.raises(RuntimeError, match="exact internal Qdrant"):
+            OSSBackend(wrong_collection)
+
+        embedded = self._strict_workbench_config()
+        embedded["vector_store"]["config"] = {"path": "/tmp/qdrant"}
+        with pytest.raises(RuntimeError, match="exact internal Qdrant"):
+            OSSBackend(embedded)
+        assert calls == []
+
+    @pytest.mark.parametrize(
+        ("dimensions", "distance", "message"),
+        [
+            (384, "Cosine", "dimensions changed"),
+            (768, "Dot", "distance changed"),
+        ],
+    )
+    def test_existing_workbench_qdrant_vector_drift_fails_closed(
+        self, monkeypatch, tmp_path, dimensions, distance, message
+    ):
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        class QdrantClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            def collection_exists(self, _collection):
+                return True
+
+            def get_collection(self, _collection):
+                vectors = SimpleNamespace(size=dimensions, distance=distance)
+                return SimpleNamespace(
+                    config=SimpleNamespace(params=SimpleNamespace(vectors=vectors))
+                )
+
+            def close(self):
+                return None
+
+        stub_qdrant = types.ModuleType("qdrant_client")
+        stub_qdrant.QdrantClient = QdrantClient  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "qdrant_client", stub_qdrant)
+        monkeypatch.setenv("HERMES_WORKBENCH_AUTHENTICATED_MEM0", "1")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        config = self._strict_workbench_config()
+
+        with pytest.raises(RuntimeError, match=message):
+            OSSBackend._validate_collection_identity(
+                "qdrant",
+                config["vector_store"]["config"],
+                768,
+                config["embedding_identity"],
+            )
+
+    def test_unavailable_workbench_qdrant_fails_closed_without_embedded_fallback(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        class QdrantClient:
+            def __init__(self, **kwargs):
+                assert kwargs == {
+                    "url": "http://memory-vector:6333",
+                    "api_key": None,
+                }
+
+            def collection_exists(self, _collection):
+                raise OSError("service unavailable")
+
+            def close(self):
+                return None
+
+        stub_qdrant = types.ModuleType("qdrant_client")
+        stub_qdrant.QdrantClient = QdrantClient  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "qdrant_client", stub_qdrant)
+        monkeypatch.setenv("HERMES_WORKBENCH_AUTHENTICATED_MEM0", "1")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        config = self._strict_workbench_config()
+
+        with pytest.raises(RuntimeError, match="authenticated Workbench Qdrant") as caught:
+            OSSBackend._validate_collection_identity(
+                "qdrant",
+                config["vector_store"]["config"],
+                768,
+                config["embedding_identity"],
+            )
+        assert "service unavailable" not in str(caught.value)
+
+    def test_delete_owned_uses_one_atomic_id_and_principal_filter(self):
+        pytest.importorskip("qdrant_client")
+
+        class _Client:
+            def __init__(self):
+                self.calls = []
+
+            def delete(self, **kwargs):
+                self.calls.append(kwargs)
+
+        class _Store:
+            collection_name = "mem0"
+
+            def __init__(self):
+                self.client = _Client()
+
+        memory = FakeOSSMemory()
+        memory.vector_store = _Store()
+        backend = OSSBackend.__new__(OSSBackend)
+        backend._memory = memory
+        backend.supports_owner_filtered_delete = True
+        memory_id = "72a8548f-4841-41ee-b37a-b8c3d736503c"
+        principal = "phk2_owner-bound-principal"
+
+        result = backend.delete_owned(memory_id, principal)
+
+        assert result["memory_id"] == memory_id
+        assert len(memory.vector_store.client.calls) == 1
+        call = memory.vector_store.client.calls[0]
+        assert call["collection_name"] == "mem0"
+        assert call["wait"] is True
+        must = call["points_selector"].filter.must
+        assert any(getattr(condition, "has_id", None) == [memory_id] for condition in must)
+        assert any(
+            getattr(condition, "key", None) == "user_id"
+            and getattr(getattr(condition, "match", None), "value", None) == principal
+            for condition in must
+        )
+
+    def test_delete_owned_rejects_noncanonical_id_before_storage(self):
+        backend, _ = self._make()
+        backend.supports_owner_filtered_delete = True
+        with pytest.raises(ValueError, match="canonical UUID"):
+            backend.delete_owned("not-a-uuid", "phk2_owner-bound-principal")
 
 
 httpx = pytest.importorskip("httpx")

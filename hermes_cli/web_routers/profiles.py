@@ -533,6 +533,8 @@ async def set_active_profile_endpoint(body: ProfileActiveUpdate):
     except Exception as e:
         _log.exception("POST /api/profiles/active failed")
         raise HTTPException(status_code=500, detail=str(e))
+    from hermes_cli.workbench_credentials import revoke_all_sessions
+    await revoke_all_sessions()
     return {"ok": True, "active": profiles_mod.normalize_profile_name(body.name)}
 
 

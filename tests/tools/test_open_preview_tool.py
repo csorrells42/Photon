@@ -33,3 +33,15 @@ def test_emitter_failure_is_reported():
 
     desktop_ui.set_emitter(_boom)
     assert "no window" in json.loads(op.open_preview_tool("https://x.example"))["error"]
+
+
+def test_workbench_local_preview_is_confined_and_honest(monkeypatch):
+    emitted = []
+    desktop_ui.set_emitter(lambda event, payload: emitted.append((event, payload)) or True)
+    monkeypatch.setenv("HERMES_WORKBENCH", "1")
+
+    assert json.loads(op.open_preview_tool("/workspace/docs/readme.md"))["success"] is True
+    assert emitted == [("preview.open", {"url": "/workspace/docs/readme.md", "label": ""})]
+    assert "error" in json.loads(op.open_preview_tool("/workspace"))
+    assert "error" in json.loads(op.open_preview_tool("/etc/passwd"))
+    assert len(emitted) == 1

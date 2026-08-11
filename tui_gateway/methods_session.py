@@ -33,6 +33,9 @@ def _(rid, params: dict) -> dict:
         explicit_cwd = False
     resolved_cwd = _completion_cwd(params)
     source = _resolve_session_source(str(params.get("source") or "").strip() or None)
+    principal = _current_memory_principal()
+    if _authenticated_memory_mode() and principal is None:
+        return _err(rid, 4401, "login required")
     _enable_gateway_prompts()
 
     # ``profile`` (app-global remote mode): a new chat started under a non-launch
@@ -107,6 +110,8 @@ def _(rid, params: dict) -> dict:
             "tool_progress_mode": _load_tool_progress_mode(),
             "tool_started_at": {},
             "transport": current_transport() or _stdio_transport,
+            "memory_principal_id": principal[0] if principal else None,
+            "memory_principal_generation": principal[1] if principal else None,
         }
         _register_session_cwd(_sessions[sid])
 
@@ -181,6 +186,9 @@ def _(rid, params: dict) -> dict:
             # short; the compression-tip projection in ``list_sessions_rich``
             # can also merge rows.
             fetch_limit = max(limit * 2, 200)
+            principal = _current_memory_principal()
+            if _authenticated_memory_mode() and principal is None:
+                return _err(rid, 4401, "login required")
             rows = [
                 s
                 for s in db.list_sessions_rich(
@@ -190,6 +198,7 @@ def _(rid, params: dict) -> dict:
                     compact_rows=True,
                 )
                 if (s.get("source") or "").strip().lower() not in deny
+                and _principal_may_access_session(s, principal)
             ][:limit]
             return _ok(
                 rid,
@@ -241,9 +250,12 @@ def _(rid, params: dict) -> dict:
             rows = db.list_sessions_rich(
                 source=None, limit=200, order_by_last_active=True, compact_rows=True
             )
+            principal = _current_memory_principal()
+            if _authenticated_memory_mode() and principal is None:
+                return _ok(rid, {"session_id": None})
             for row in rows:
                 src = (row.get("source") or "").strip().lower()
-                if src in deny:
+                if src in deny or not _principal_may_access_session(row, principal):
                     continue
                 return _ok(
                     rid,
@@ -315,6 +327,9 @@ def _(rid, params: dict) -> dict:
     # ``profile`` (app-global remote mode): resume a session that lives in another
     # local profile's state.db. None/own profile → the launch profile (unchanged).
     profile = (params.get("profile") or "").strip() or None
+    principal = _current_memory_principal()
+    if _authenticated_memory_mode() and principal is None:
+        return _err(rid, 4401, "login required")
     profile_home = _profile_home(profile)
     # Desktop hydrates persisted transcripts through the authenticated REST
     # route in parallel. Suppress the duplicate WebSocket transcript only when
@@ -357,6 +372,8 @@ def _(rid, params: dict) -> dict:
                 found = {}
             else:
                 return _err(rid, 4007, "session not found")
+        if found and not _principal_may_access_session(found, principal):
+            return _err(rid, 4007, "session not found")
 
         # Follow the compression-continuation chain to the live tip so a resume on
         # a rotated-out parent id binds to the descendant that actually holds the
@@ -377,6 +394,8 @@ def _(rid, params: dict) -> dict:
             if tip and tip != target:
                 target = tip
                 found = db.get_session(target) or found
+                if not _principal_may_access_session(found, principal):
+                    return _err(rid, 4007, "session not found")
 
         # Every interactive resume path materializes the model history, even when
         # omit_messages suppresses the response copy. Count the complete lineage
@@ -435,6 +454,8 @@ def _(rid, params: dict) -> dict:
         with _session_resume_lock:
             live = _find_live_session_by_key(target)
             if live is not None:
+                if _session_principal(live[1]) != principal and _authenticated_memory_mode():
+                    return _err(rid, 4007, "session not found")
                 return _ok(rid, _reuse_live_payload(*live))
 
         # Lazy/watch resume: register the live session WITHOUT building an agent.
@@ -474,6 +495,8 @@ def _(rid, params: dict) -> dict:
                 lazy=True,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+                if _authenticated_memory_mode() and _session_principal(live[1]) != principal:
+                    return _err(rid, 4007, "session not found")
                 return _ok(rid, _reuse_live_payload(*live))
             # A delegated child mid-run emits no session events of its own — report
             # its liveness from the relay registry so the window shows a busy turn.
@@ -572,6 +595,8 @@ def _(rid, params: dict) -> dict:
                 resume_runtime_overrides=overrides or None,
             )
             if (live := _claim_or_reuse_live(sid, target, record, lease)) is not None:
+                if _authenticated_memory_mode() and _session_principal(live[1]) != principal:
+                    return _err(rid, 4007, "session not found")
                 return _ok(rid, _reuse_live_payload(*live))
 
             _schedule_agent_build(sid)
@@ -683,6 +708,8 @@ def _(rid, params: dict) -> dict:
                 if lease is not None:
                     lease.release()
                 other_sid, other_session = live
+                if _authenticated_memory_mode() and _session_principal(other_session) != principal:
+                    return _err(rid, 4007, "session not found")
                 payload = _live_session_payload(
                     other_sid,
                     other_session,
@@ -1006,6 +1033,11 @@ def _(rid, params: dict) -> dict:
     with _profile_db(params) as db:
         if db is None:
             return _db_unavailable_error(rid, code=5036)
+        principal = _current_memory_principal()
+        if _authenticated_memory_mode():
+            row = db.get_session(target)
+            if principal is None or not _principal_may_access_session(row, principal):
+                return _err(rid, 4007, "session not found")
         if profile_home is not None:
             sessions_dir = Path(profile_home) / "sessions"
         else:
@@ -2752,6 +2784,11 @@ def _(rid, params: dict) -> dict:
     # reaper. Finalization may run arbitrary plugin/agent cleanup and must not
     # keep every unrelated session.resume waiting behind it.
     with _session_resume_lock:
+        candidate = _sessions.get(sid)
+        if _authenticated_memory_mode():
+            principal = _current_memory_principal()
+            if candidate is None or principal is None or _session_principal(candidate) != principal:
+                return _err(rid, 4001, "session not found")
         session = _pop_session_by_id(sid)
     closed = _teardown_popped_session(session, end_reason="tui_close")
     return _ok(rid, {"closed": closed})
@@ -2810,6 +2847,7 @@ def _(rid, params: dict) -> dict:
                     if session.get("profile_home")
                     else None
                 ),
+                user_id=(session.get("memory_principal_id") or None),
             )
             # Copy the whole parent history in bounded-chunk transactions —
             # a branch seed can be hundreds of rows, and per-row transactions

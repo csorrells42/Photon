@@ -21,6 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from agent.conversation_loop import _restore_or_build_system_prompt
+from agent.workbench_identity import WORKBENCH_IDENTITY_MARKER
 
 
 def _make_agent(session_db=None, prebuilt_prompt: str = "BUILT_PROMPT"):
@@ -112,6 +113,59 @@ class TestStoredPromptReuse:
             agent.session_id, agent._cached_system_prompt
         )
         assert any("stale runtime identity" in r.getMessage() for r in caplog.records)
+
+    def test_workbench_prompt_missing_marker_rebuilds_and_persists_once(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setenv("HERMES_WORKBENCH", "1")
+        stored = "Legacy prompt without the product identity marker"
+        rebuilt = WORKBENCH_IDENTITY_MARKER + "\nCurrent product prompt"
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stored}
+        agent = _make_agent(session_db=db, prebuilt_prompt=rebuilt)
+
+        with caplog.at_level(logging.INFO, logger="agent.conversation_loop"):
+            _restore_or_build_system_prompt(
+                agent, None, [{"role": "user", "content": "hi"}]
+            )
+
+        assert agent._cached_system_prompt == rebuilt
+        agent._build_system_prompt.assert_called_once_with(None)
+        db.update_system_prompt.assert_called_once_with(agent.session_id, rebuilt)
+        assert any(
+            "predates the Workbench identity contract" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_marked_workbench_prompt_is_reused_by_exact_reference(self, monkeypatch):
+        monkeypatch.setenv("HERMES_WORKBENCH", "1")
+        stored = WORKBENCH_IDENTITY_MARKER + "\nStored product prompt"
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stored}
+        agent = _make_agent(session_db=db)
+
+        _restore_or_build_system_prompt(
+            agent, None, [{"role": "user", "content": "hi"}]
+        )
+
+        assert agent._cached_system_prompt is stored
+        agent._build_system_prompt.assert_not_called()
+        db.update_system_prompt.assert_not_called()
+
+    def test_standalone_resume_reuses_unmarked_prompt(self, monkeypatch):
+        monkeypatch.delenv("HERMES_WORKBENCH", raising=False)
+        stored = "Standalone upstream prompt"
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stored}
+        agent = _make_agent(session_db=db)
+
+        _restore_or_build_system_prompt(
+            agent, None, [{"role": "user", "content": "hi"}]
+        )
+
+        assert agent._cached_system_prompt is stored
+        agent._build_system_prompt.assert_not_called()
+        db.update_system_prompt.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

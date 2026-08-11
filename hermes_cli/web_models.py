@@ -407,6 +407,28 @@ class MCPServersReplace(BaseModel):
     profile: Optional[str] = None
 
 
+class MCPServerSafeEdit(BaseModel):
+    transport: str
+    url: str = ""
+    command: str = ""
+    args: List[str] = []
+    environment_variable_names: List[str] = []
+    auth: Optional[str] = None
+    enabled: bool = True
+
+
+class MCPServerReviewRequest(BaseModel):
+    revision: str
+    edit: MCPServerSafeEdit
+    profile: Optional[str] = None
+
+
+class MCPServerCommitRequest(BaseModel):
+    review_handle: str
+    risk_confirmed: bool = False
+    profile: Optional[str] = None
+
+
 # --- from web_server.py (originally lines 13518-13520) ---
 
 class MCPEnabledToggle(BaseModel):
@@ -722,4 +744,3 @@ class _PluginProvidersPutBody(BaseModel):
 
 class _PluginVisibilityBody(BaseModel):
     hidden: bool
-

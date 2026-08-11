@@ -510,6 +510,8 @@ def init_agent(
     prefill_messages: List[Dict[str, Any]] = None,
     platform: str = None,
     user_id: str = None,
+    memory_principal_id: str = None,
+    memory_principal_generation: int = None,
     user_id_alt: str = None,
     user_name: str = None,
     chat_id: str = None,
@@ -595,7 +597,19 @@ def init_agent(
     agent.tool_progress_mode = tool_progress_mode
     agent.ephemeral_system_prompt = ephemeral_system_prompt
     agent.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
+    if (
+        memory_principal_id is None
+        and isinstance(user_id_alt, str)
+        and user_id_alt.startswith("workbench-principal-generation:")
+    ):
+        memory_principal_id = user_id
+        try:
+            memory_principal_generation = int(user_id_alt.rsplit(":", 1)[-1])
+        except ValueError:
+            memory_principal_generation = None
     agent._user_id = user_id  # Platform user identifier (gateway sessions)
+    agent._memory_principal_id = memory_principal_id
+    agent._memory_principal_generation = memory_principal_generation
     agent._user_id_alt = user_id_alt  # Optional stable alternate platform identifier
     agent._user_name = user_name
     agent._chat_id = chat_id
@@ -1688,6 +1702,32 @@ def init_agent(
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
+    try:
+        from hermes_cli.dashboard_auth.live_principals import (
+            authenticated_memory_mode_enabled,
+            lease_is_live,
+        )
+
+        _strict_memory_mode = authenticated_memory_mode_enabled()
+        _memory_authorized = (
+            not _strict_memory_mode
+            or lease_is_live(memory_principal_id or "", int(memory_principal_generation or 0))
+        )
+    except Exception:
+        _strict_memory_mode = os.environ.get("HERMES_WORKBENCH_AUTHENTICATED_MEM0") == "1"
+        _memory_authorized = not _strict_memory_mode
+
+    # In strict Workbench mode the profile-wide MEMORY.md / USER.md provider
+    # is quarantined legacy data.  It is never mounted, even after login;
+    # authenticated Mem0 is the sole live memory surface.
+    if _strict_memory_mode:
+        agent._memory_enabled = False
+        agent._user_profile_enabled = False
+        agent.tools = [
+            tool for tool in (agent.tools or [])
+            if (tool.get("function") or {}).get("name") != "memory"
+        ]
+        agent.valid_tool_names.discard("memory")
     # A flush/background agent may pass skip_memory=True to avoid spinning up an
     # external memory *provider*, but if the caller also explicitly enables the
     # "memory" toolset it still needs the built-in file-backed store — otherwise
@@ -1695,9 +1735,11 @@ def init_agent(
     # So the built-in store is created unless memory is globally disabled, while
     # the external-provider block below stays gated on skip_memory.
     _memory_toolset_requested = "memory" in (agent.enabled_toolsets or [])
-    if not skip_memory or _memory_toolset_requested:
+    mem_config = _agent_cfg.get("memory", {})
+    if not isinstance(mem_config, dict):
+        mem_config = {}
+    if (not skip_memory or _memory_toolset_requested) and not _strict_memory_mode:
         try:
-            mem_config = _agent_cfg.get("memory", {})
             agent._memory_enabled = mem_config.get("memory_enabled", False)
             agent._user_profile_enabled = mem_config.get("user_profile_enabled", False)
             agent._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
@@ -1716,14 +1758,21 @@ def init_agent(
     # Memory provider plugin (external — one at a time, alongside built-in)
     # Reads memory.provider from config to select which plugin to activate.
     agent._memory_manager = None
-    if not skip_memory:
+    if not skip_memory and _memory_authorized:
         try:
-            _mem_provider_name = mem_config.get("provider", "") if mem_config else ""
+            _mem_provider_name = (
+                "mem0"
+                if _strict_memory_mode
+                else (mem_config.get("provider", "") if mem_config else "")
+            )
 
             if _mem_provider_name and _mem_provider_name.strip():
                 from agent.memory_manager import MemoryManager as _MemoryManager
                 from plugins.memory import load_memory_provider as _load_mem
-                agent._memory_manager = _MemoryManager()
+                agent._memory_manager = _MemoryManager(
+                    principal_id=memory_principal_id,
+                    principal_generation=memory_principal_generation,
+                )
                 _mp = _load_mem(_mem_provider_name)
                 if _mp and _mp.is_available():
                     agent._memory_manager.add_provider(_mp)
@@ -1734,6 +1783,9 @@ def init_agent(
                         "hermes_home": str(get_hermes_home()),
                         "agent_context": "primary",
                     }
+                    if _strict_memory_mode:
+                        _init_kwargs["principal_id"] = memory_principal_id
+                        _init_kwargs["principal_generation"] = memory_principal_generation
                     if _init_kwargs["platform"] == "cli":
                         _init_kwargs["warning_callback"] = agent._emit_warning
                         _init_kwargs["status_callback"] = agent._emit_status

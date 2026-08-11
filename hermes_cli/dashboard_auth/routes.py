@@ -15,6 +15,7 @@ The routes:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -51,6 +52,20 @@ from hermes_cli.dashboard_auth.login_page import render_login_html
 _log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _begin_memory_principal_session(session) -> None:
+    """Reactivate memory only at a successfully completed auth boundary."""
+    try:
+        from hermes_cli.dashboard_auth.live_principals import (
+            begin_principal_session,
+        )
+
+        begin_principal_session(session.provider, session.user_id)
+    except Exception:
+        # Auth itself remains usable when memory is disabled/unavailable.  The
+        # memory provider will stay fail-closed until a live lease exists.
+        _log.warning("dashboard-auth: could not activate authenticated memory principal")
 
 
 def _redirect_uri(request: Request) -> str:
@@ -541,6 +556,7 @@ async def auth_callback(
     # that lets attacker-controlled bytes into the cookie would otherwise
     # produce an open redirect.
     landing = _validate_post_login_target(next_from_cookie) or "/"
+    _begin_memory_principal_session(session)
     resp = RedirectResponse(url=landing, status_code=302)
     set_session_cookies(
         resp,
@@ -725,6 +741,7 @@ async def auth_password_login(request: Request, body: _PasswordLoginBody):
     )
 
     expires_in = max(60, session.expires_at - int(time.time()))
+    _begin_memory_principal_session(session)
     landing = _validate_post_login_target(body.next) or "/"
     resp = JSONResponse({"ok": True, "next": landing})
     set_session_cookies(
@@ -741,7 +758,39 @@ async def auth_password_login(request: Request, body: _PasswordLoginBody):
 
 @router.post("/auth/logout", name="auth_logout")
 async def auth_logout(request: Request):
-    _at, rt = read_session_cookies(request)
+    at, rt = read_session_cookies(request)
+    sess = getattr(request.state, "session", None)
+    if sess is None and at:
+        # /auth/logout is intentionally public/bypass, so middleware normally
+        # does not populate request.state.session. Resolve the verified issuer
+        # + subject here before cookies disappear; never infer identity from a
+        # caller-supplied user id.
+        for provider in list_session_providers():
+            try:
+                candidate = provider.verify_session(access_token=at)
+            except Exception:
+                continue
+            if candidate is not None:
+                sess = candidate
+                break
+
+    if sess is not None:
+        from hermes_cli.dashboard_auth.live_principals import (
+            canonical_principal_key,
+            revoke_principal,
+        )
+        from hermes_cli.dashboard_auth.ws_tickets import revoke_principal_credentials
+
+        principal_key = canonical_principal_key(sess.provider, sess.user_id)
+        try:
+            # Invalidate first, close every registered live channel, and do not
+            # return until old-generation memory commits have drained.
+            await asyncio.to_thread(revoke_principal, sess.provider, sess.user_id)
+        finally:
+            # Credentials belong to the revoked generation.  Remove all
+            # principal-bound tickets/internal credentials regardless of
+            # provider-side session revocation success.
+            revoke_principal_credentials(principal_key)
     if rt:
         # Best-effort revoke. Try every provider so a session minted by
         # any registered provider is revoked correctly. Failures are
@@ -755,7 +804,12 @@ async def auth_logout(request: Request):
                     provider.name, e,
                 )
 
-    sess = getattr(request.state, "session", None)
+    # Native Windows credential leases are process-local and profile-bound.
+    # Logout closes every reverse channel before the response clears cookies;
+    # a fresh desktop bootstrap is required before another lease can exist.
+    from hermes_cli.workbench_credentials import revoke_all_sessions
+    await revoke_all_sessions()
+
     audit_log(
         AuditEvent.LOGOUT,
         provider=(sess.provider if sess else "unknown"),
@@ -816,9 +870,16 @@ async def api_auth_ws_ticket(request: Request):
 
     # Import here so the routes module stays usable in test contexts that
     # don't load the ticket store.
-    from hermes_cli.dashboard_auth.ws_tickets import TTL_SECONDS, mint_ticket
+    from hermes_cli.dashboard_auth.ws_tickets import (
+        TTL_SECONDS,
+        TicketInvalid,
+        mint_ticket,
+    )
 
-    ticket = mint_ticket(user_id=sess.user_id, provider=sess.provider)
+    try:
+        ticket = mint_ticket(user_id=sess.user_id, provider=sess.provider)
+    except TicketInvalid as exc:
+        raise HTTPException(status_code=401, detail="Fresh login required") from exc
     audit_log(
         AuditEvent.WS_TICKET_MINTED,
         provider=sess.provider,
@@ -876,6 +937,7 @@ async def auth_native_token(request: Request, body: _NativeTokenBody):
         user_id=session.user_id,
         ip=_client_ip(request),
     )
+    _begin_memory_principal_session(session)
     return {
         "access_token": session.access_token,
         "refresh_token": session.refresh_token,
@@ -936,6 +998,7 @@ async def auth_native_refresh(request: Request, body: _NativeRefreshBody):
             user_id=session.user_id,
             ip=_client_ip(request),
         )
+        _begin_memory_principal_session(session)
         return {
             "access_token": session.access_token,
             "refresh_token": session.refresh_token,

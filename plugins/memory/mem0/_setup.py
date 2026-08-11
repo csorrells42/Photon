@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,123 @@ from ._oss_providers import (
     EMBEDDER_PROVIDERS,
     VECTOR_PROVIDERS,
     KNOWN_DIMS,
+    WORKBENCH_DMR_DEFAULT_URL,
+    WORKBENCH_DMR_EMBEDDER_DIGEST,
+    WORKBENCH_DMR_EMBEDDER_INVENTORY_ID,
+    WORKBENCH_DMR_EMBEDDER_PULL_ID,
+    WORKBENCH_DMR_LLM_DIGEST,
+    WORKBENCH_DMR_LLM_INVENTORY_ID,
+    WORKBENCH_DMR_LLM_PULL_ID,
+    WORKBENCH_QDRANT_COLLECTION,
+    WORKBENCH_QDRANT_DEFAULT_URL,
     validate_oss_config,
 )
+
+
+def _authenticated_workbench_mode() -> bool:
+    return os.environ.get("HERMES_WORKBENCH_AUTHENTICATED_MEM0") == "1"
+
+
+def _workbench_model_url() -> str:
+    """Return the normalized nonsecret Docker-internal model endpoint."""
+    raw = os.environ.get("HERMES_MEM0_MODEL_URL", WORKBENCH_DMR_DEFAULT_URL).strip()
+    if not raw or len(raw) > 512 or any(ord(char) < 32 for char in raw):
+        raise ValueError("HERMES_MEM0_MODEL_URL is invalid")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("HERMES_MEM0_MODEL_URL has an invalid port") from exc
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("HERMES_MEM0_MODEL_URL must use http or https")
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/", "/engines/v1", "/engines/v1/"}
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise ValueError(
+            "HERMES_MEM0_MODEL_URL must contain only a bounded host and port"
+        )
+    host = parsed.hostname.lower()
+    if len(host) > 253 or "%" in host:
+        raise ValueError("HERMES_MEM0_MODEL_URL host is invalid")
+    if ":" not in host:
+        labels = host.split(".")
+        if any(
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or any(not (char.isascii() and (char.isalnum() or char == "-")) for char in label)
+            for label in labels
+        ):
+            raise ValueError("HERMES_MEM0_MODEL_URL host is invalid")
+        rendered_host = host
+    else:
+        import ipaddress
+
+        try:
+            rendered_host = f"[{ipaddress.IPv6Address(host).compressed}]"
+        except ipaddress.AddressValueError as exc:
+            raise ValueError("HERMES_MEM0_MODEL_URL host is invalid") from exc
+    port_suffix = f":{port}" if port is not None else ""
+    return f"{parsed.scheme.lower()}://{rendered_host}{port_suffix}/engines/v1"
+
+
+def _workbench_qdrant_url() -> str:
+    """Return the normalized nonsecret Docker-internal Qdrant endpoint."""
+    raw = os.environ.get(
+        "HERMES_MEM0_QDRANT_URL", WORKBENCH_QDRANT_DEFAULT_URL
+    ).strip()
+    if not raw or len(raw) > 512 or any(ord(char) < 32 for char in raw):
+        raise ValueError("HERMES_MEM0_QDRANT_URL is invalid")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("HERMES_MEM0_QDRANT_URL has an invalid port") from exc
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("HERMES_MEM0_QDRANT_URL must use http or https")
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise ValueError(
+            "HERMES_MEM0_QDRANT_URL must contain only a bounded host and port"
+        )
+    host = parsed.hostname.lower()
+    if len(host) > 253 or "%" in host:
+        raise ValueError("HERMES_MEM0_QDRANT_URL host is invalid")
+    if ":" not in host:
+        labels = host.split(".")
+        if any(
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or any(not (char.isascii() and (char.isalnum() or char == "-")) for char in label)
+            for label in labels
+        ):
+            raise ValueError("HERMES_MEM0_QDRANT_URL host is invalid")
+        rendered_host = host
+    else:
+        import ipaddress
+
+        try:
+            rendered_host = f"[{ipaddress.IPv6Address(host).compressed}]"
+        except ipaddress.AddressValueError as exc:
+            raise ValueError("HERMES_MEM0_QDRANT_URL host is invalid") from exc
+    port_suffix = f":{port}" if port is not None else ""
+    return f"{parsed.scheme.lower()}://{rendered_host}{port_suffix}"
 
 
 def _curses_select(title: str, items: list[tuple[str, str]], default: int = 0) -> int:
@@ -64,18 +180,20 @@ def has_oss_flags() -> bool:
 def parse_flags(argv: list[str] | None = None) -> dict[str, str]:
     """Parse CLI flags from argv. Returns dict of flag values."""
     args = argv if argv is not None else sys.argv[1:]
+    workbench = _authenticated_workbench_mode()
+    workbench_model_url = _workbench_model_url() if workbench else ""
     flags: dict[str, str] = {
         "mode": "",
         "api_key": "",
         "host": "",
-        "oss_llm": "openai",
+        "oss_llm": "lmstudio" if workbench else "openai",
         "oss_llm_key": "",
-        "oss_llm_model": "",
-        "oss_llm_url": "",
-        "oss_embedder": "openai",
+        "oss_llm_model": WORKBENCH_DMR_LLM_PULL_ID if workbench else "",
+        "oss_llm_url": workbench_model_url,
+        "oss_embedder": "lmstudio" if workbench else "openai",
         "oss_embedder_key": "",
-        "oss_embedder_model": "",
-        "oss_embedder_url": "",
+        "oss_embedder_model": WORKBENCH_DMR_EMBEDDER_PULL_ID if workbench else "",
+        "oss_embedder_url": workbench_model_url,
         "oss_vector": "qdrant",
         "oss_vector_path": "",
         "oss_vector_url": "",
@@ -131,6 +249,31 @@ def build_oss_config(flags: dict[str, str]) -> tuple[dict, dict[str, str]]:
     Returns (oss_config, env_writes) where oss_config goes into mem0.json
     and env_writes maps env var names to secret values for .env.
     """
+    if _authenticated_workbench_mode():
+        # Product mode is intentionally local-only.  Do not let legacy parser
+        # defaults or caller-supplied flags silently select a paid remote API.
+        flags = dict(flags)
+        flags["oss_llm"] = "lmstudio"
+        flags["oss_embedder"] = "lmstudio"
+        flags["oss_vector"] = "qdrant"
+        flags["oss_llm_key"] = ""
+        flags["oss_embedder_key"] = ""
+        # Product mode binds exact OCI model identifiers. Environment or CLI
+        # model overrides would silently change the embedding space or the
+        # review model, so they remain a standalone-Hermes capability only.
+        flags["oss_llm_model"] = WORKBENCH_DMR_LLM_PULL_ID
+        flags["oss_embedder_model"] = WORKBENCH_DMR_EMBEDDER_PULL_ID
+        local_url = _workbench_model_url()
+        # The product endpoint is selected only by the nonsecret environment
+        # contract. CLI URL flags remain a standalone-Hermes capability.
+        flags["oss_llm_url"] = local_url
+        flags["oss_embedder_url"] = local_url
+        # A server-backed Qdrant client is mandatory in the authenticated,
+        # multi-process product.  CLI path/URL flags remain standalone-only;
+        # product composition may supply the bounded internal service URL.
+        flags["oss_vector_path"] = ""
+        flags["oss_vector_url"] = _workbench_qdrant_url()
+
     llm_id = flags.get("oss_llm", "openai")
     llm_def = LLM_PROVIDERS[llm_id]
     llm_model = flags.get("oss_llm_model") or llm_def["default_model"]
@@ -138,6 +281,11 @@ def build_oss_config(flags: dict[str, str]) -> tuple[dict, dict[str, str]]:
     llm_url = flags.get("oss_llm_url") or llm_def.get("default_url")
     if llm_url and llm_def.get("base_url_key"):
         llm_config[llm_def["base_url_key"]] = llm_url
+    if _authenticated_workbench_mode():
+        # The OpenAI SDK requires a nonempty value. DMR ignores Authorization;
+        # this fixed public sentinel is not a credential and is never persisted
+        # in .env or offered by the renderer.
+        llm_config["api_key"] = "not-needed"
 
     embedder_id = flags.get("oss_embedder", "openai")
     embedder_def = EMBEDDER_PROVIDERS[embedder_id]
@@ -146,6 +294,8 @@ def build_oss_config(flags: dict[str, str]) -> tuple[dict, dict[str, str]]:
     embedder_url = flags.get("oss_embedder_url") or embedder_def.get("default_url")
     if embedder_url and embedder_def.get("base_url_key"):
         embedder_config[embedder_def["base_url_key"]] = embedder_url
+    if _authenticated_workbench_mode():
+        embedder_config["api_key"] = "not-needed"
     dims = KNOWN_DIMS.get(embedder_model)
     if dims:
         embedder_config["embedding_dims"] = dims
@@ -176,6 +326,22 @@ def build_oss_config(flags: dict[str, str]) -> tuple[dict, dict[str, str]]:
         "embedder": {"provider": embedder_id, "config": embedder_config},
         "vector_store": {"provider": vector_id, "config": vector_config},
     }
+    if _authenticated_workbench_mode():
+        vector_config.pop("path", None)
+        vector_config["url"] = _workbench_qdrant_url()
+        vector_config["collection_name"] = WORKBENCH_QDRANT_COLLECTION
+        oss_config["embedding_identity"] = {
+            "version": 3,
+            "provider": embedder_id,
+            "model": embedder_model,
+            "inventory_model": WORKBENCH_DMR_EMBEDDER_INVENTORY_ID,
+            "model_url": embedder_url,
+            "dimensions": dims,
+            "vector_provider": vector_id,
+            "vector_url": vector_config["url"],
+            "collection": vector_config["collection_name"],
+            "distance": "cosine",
+        }
 
     env_writes: dict[str, str] = {}
     if llm_def.get("needs_key") and flags.get("oss_llm_key"):
@@ -239,10 +405,11 @@ def _setup_platform(hermes_home: str, config: dict, flags: dict[str, str]) -> No
     """
     schema = [
         {"key": "api_key", "description": "Mem0 Platform API key", "secret": True, "required": True, "env_var": "MEM0_API_KEY", "url": "https://app.mem0.ai"},
-        {"key": "user_id", "description": "User identifier", "default": "hermes-user"},
         {"key": "agent_id", "description": "Agent identifier", "default": "hermes"},
         {"key": "rerank", "description": "Enable reranking for recall", "default": "false", "choices": ["true", "false"]},
     ]
+    if not _authenticated_workbench_mode():
+        schema.insert(1, {"key": "user_id", "description": "User identifier", "default": "hermes-user"})
 
     existing_config = {}
     config_path = Path(hermes_home) / "mem0.json"
@@ -399,8 +566,10 @@ def _setup_selfhosted(hermes_home: str, config: dict, flags: dict[str, str]) -> 
         if val:
             env_writes["MEM0_API_KEY"] = val
 
-    user_id = flags.get("user_id") or _prompt(
-        "User identifier", default=provider_config.get("user_id") or "hermes-user"
+    user_id = "" if _authenticated_workbench_mode() else (
+        flags.get("user_id") or _prompt(
+            "User identifier", default=provider_config.get("user_id") or "hermes-user"
+        )
     )
     agent_id = _prompt("Agent identifier", default=provider_config.get("agent_id") or "hermes")
 
@@ -414,7 +583,10 @@ def _setup_selfhosted(hermes_home: str, config: dict, flags: dict[str, str]) -> 
 
     provider_config["mode"] = "platform"  # routing: oss > host > platform; host wins
     provider_config["host"] = host
-    provider_config["user_id"] = user_id
+    if _authenticated_workbench_mode():
+        provider_config.pop("user_id", None)
+    else:
+        provider_config["user_id"] = user_id
     provider_config["agent_id"] = agent_id
 
     from hermes_cli.config import save_config
@@ -450,12 +622,16 @@ def _setup_oss(hermes_home: str, config: dict, flags: dict[str, str]) -> None:
 
     oss_config, env_writes = build_oss_config(flags)
     errors = validate_oss_config(oss_config)
+    if _authenticated_workbench_mode():
+        errors.extend(_validate_workbench_local_runtime(oss_config))
     if errors:
         for e in errors:
             print(f"  Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    user_id = flags.get("user_id") or os.getenv("USER", "hermes-user")
+    user_id = "" if _authenticated_workbench_mode() else (
+        flags.get("user_id") or os.getenv("USER", "hermes-user")
+    )
 
     llm_id = oss_config["llm"]["provider"]
     embedder_id = oss_config["embedder"]["provider"]
@@ -474,7 +650,10 @@ def _setup_oss(hermes_home: str, config: dict, flags: dict[str, str]) -> None:
 
     if env_writes:
         _write_env(Path(hermes_home) / ".env", env_writes)
-    _save_mem0_json(hermes_home, {"mode": "oss", "user_id": user_id, "agent_id": "hermes", "oss": oss_config})
+    saved = {"mode": "oss", "agent_id": "hermes", "oss": oss_config}
+    if not _authenticated_workbench_mode():
+        saved["user_id"] = user_id
+    _save_mem0_json(hermes_home, saved)
 
     _install_provider_deps(llm_id, embedder_id, vector_id)
 
@@ -663,15 +842,191 @@ def _ensure_ollama(models: list[str]) -> bool:
 
 def _ollama_has_model(url: str, model: str) -> bool:
     """Check if Ollama already has a model pulled."""
+    return _ollama_model_manifest(url, model) is not None
+
+
+def _ollama_model_manifest(
+    url: str,
+    model: str,
+    *,
+    allow_latest_alias: bool = True,
+) -> dict | None:
+    """Return the exact installed tag+digest; never satisfy a pinned tag loosely."""
     try:
         req = urllib.request.Request(f"{url}/api/tags", method="GET")
         resp = urllib.request.urlopen(req, timeout=5)
         data = json.loads(resp.read())
-        names = [m.get("name", "") for m in data.get("models", [])]
-        base_model = model.split(":")[0]
-        return any(model in n or base_model in n for n in names)
+        requested = str(model or "").strip()
+        for entry in data.get("models", []):
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or entry.get("model") or "").strip()
+            matches = name == requested
+            if allow_latest_alias and ":" not in requested:
+                matches = name in {requested, f"{requested}:latest"}
+            if matches and entry.get("digest"):
+                return {"name": name, "digest": str(entry["digest"])}
+        return None
     except Exception:
-        return False
+        return None
+
+
+def _dmr_model_inventory(url: str) -> set[str] | None:
+    """Return exact OpenAI-compatible DMR inventory IDs, or None on failure."""
+    try:
+        req = urllib.request.Request(f"{url.rstrip('/')}/models", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            payload = json.loads(response.read())
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            return None
+        return {
+            str(row.get("id") or "")
+            for row in rows
+            if isinstance(row, dict) and row.get("id")
+        }
+    except Exception:
+        return None
+
+
+def _probe_dmr_openai_compatibility(url: str) -> str | None:
+    """Prove chat and 768-wide embeddings using request IDs, not response paths."""
+    try:
+        chat_body = json.dumps({
+            "model": WORKBENCH_DMR_LLM_PULL_ID,
+            "messages": [{"role": "user", "content": "Return a JSON object with ok true."}],
+            "max_tokens": 8,
+            "stream": False,
+            "response_format": {"type": "json_object"},
+        }).encode("utf-8")
+        chat_request = urllib.request.Request(
+            f"{url.rstrip('/')}/chat/completions",
+            data=chat_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(chat_request, timeout=60) as response:
+            chat = json.loads(response.read())
+        # DMR may report an internal bundle path in `model`; it is not an
+        # identity assertion. Only a well-formed completion is required here.
+        choices = chat.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return "Docker Model Runner chat compatibility probe returned no completion"
+
+        embed_body = json.dumps({
+            "model": WORKBENCH_DMR_EMBEDDER_PULL_ID,
+            "input": ["memory compatibility probe"],
+            "encoding_format": "float",
+            "dimensions": 768,
+        }).encode("utf-8")
+        embed_request = urllib.request.Request(
+            f"{url.rstrip('/')}/embeddings",
+            data=embed_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(embed_request, timeout=60) as response:
+            embeddings = json.loads(response.read())
+        rows = embeddings.get("data")
+        vector = rows[0].get("embedding") if isinstance(rows, list) and rows else None
+        if not isinstance(vector, list) or len(vector) != 768:
+            return "Docker Model Runner embedding compatibility probe did not return 768 dimensions"
+        return None
+    except Exception as exc:
+        return f"Docker Model Runner OpenAI compatibility probe failed: {exc}"
+
+
+def _validate_workbench_local_runtime(oss_config: dict) -> list[str]:
+    """Prove the pinned DMR models exist before saving product config."""
+    errors: list[str] = []
+    llm = oss_config.get("llm", {})
+    embedder = oss_config.get("embedder", {})
+    vector_store = oss_config.get("vector_store", {})
+    if llm.get("provider") != "lmstudio" or embedder.get("provider") != "lmstudio":
+        return ["Authenticated Workbench memory requires its local DMR OpenAI-compatible adapter"]
+    llm_cfg = llm.get("config", {})
+    embed_cfg = embedder.get("config", {})
+    llm_url = str(llm_cfg.get("lmstudio_base_url") or "").rstrip("/")
+    embed_url = str(embed_cfg.get("lmstudio_base_url") or "").rstrip("/")
+    if not llm_url or not embed_url:
+        return ["Authenticated Workbench memory requires an explicit Docker Model Runner URL"]
+    if llm_url != embed_url:
+        return ["Authenticated Workbench memory requires one exact Docker Model Runner endpoint"]
+    vector_cfg = vector_store.get("config", {})
+    try:
+        expected_vector_url = _workbench_qdrant_url()
+    except ValueError as exc:
+        return [str(exc)]
+    if (
+        vector_store.get("provider") != "qdrant"
+        or "path" in vector_cfg
+        or vector_cfg.get("url") != expected_vector_url
+        or vector_cfg.get("collection_name") != WORKBENCH_QDRANT_COLLECTION
+        or vector_cfg.get("api_key")
+    ):
+        errors.append(
+            "Authenticated Workbench memory requires its exact internal Qdrant service identity"
+        )
+    qdrant_error = _probe_workbench_qdrant_ready(expected_vector_url)
+    if qdrant_error:
+        errors.append(qdrant_error)
+    if (
+        llm_cfg.get("model") != WORKBENCH_DMR_LLM_PULL_ID
+        or embed_cfg.get("model") != WORKBENCH_DMR_EMBEDDER_PULL_ID
+        or llm_cfg.get("api_key") != "not-needed"
+        or embed_cfg.get("api_key") != "not-needed"
+    ):
+        errors.append("Docker Model Runner request model binding is incomplete")
+    inventory = _dmr_model_inventory(llm_url)
+    if inventory is None:
+        errors.append("Docker Model Runner OpenAI-compatible inventory is unavailable")
+    else:
+        for label, expected_inventory_id in (
+            ("LLM", WORKBENCH_DMR_LLM_INVENTORY_ID),
+            ("embedder", WORKBENCH_DMR_EMBEDDER_INVENTORY_ID),
+        ):
+            if expected_inventory_id not in inventory:
+                errors.append(
+                    f"Required Docker Model Runner {label} model is not installed: {expected_inventory_id}"
+                )
+        if not errors:
+            compatibility_error = _probe_dmr_openai_compatibility(llm_url)
+            if compatibility_error:
+                errors.append(compatibility_error)
+    llm_cfg["model_digest"] = WORKBENCH_DMR_LLM_DIGEST
+    embed_cfg["model_digest"] = WORKBENCH_DMR_EMBEDDER_DIGEST
+    identity = oss_config.get("embedding_identity", {})
+    if (
+        identity.get("version") != 3
+        or identity.get("provider") != "lmstudio"
+        or identity.get("model") != embed_cfg.get("model")
+        or identity.get("inventory_model") != WORKBENCH_DMR_EMBEDDER_INVENTORY_ID
+        or identity.get("model_url") != embed_url
+        or identity.get("dimensions") != embed_cfg.get("embedding_dims")
+        or identity.get("vector_provider") != "qdrant"
+        or identity.get("vector_url") != expected_vector_url
+        or identity.get("collection") != WORKBENCH_QDRANT_COLLECTION
+        or identity.get("distance") != "cosine"
+    ):
+        errors.append("Embedding provider/model/dimensions/collection identity is incomplete")
+    else:
+        identity["model_digest"] = WORKBENCH_DMR_EMBEDDER_DIGEST
+    return errors
+
+
+def _probe_workbench_qdrant_ready(url: str) -> str | None:
+    """Probe Qdrant process readiness, separately from config validation."""
+    try:
+        request = urllib.request.Request(f"{url.rstrip('/')}/readyz", method="GET")
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = int(getattr(response, "status", 200))
+            if not 200 <= status < 300:
+                return "Authenticated Workbench Qdrant service is not ready"
+        return None
+    except Exception:
+        # Do not include exception/URL text: proxy errors can echo credentials
+        # from ambient configuration even though the accepted endpoint cannot.
+        return "Authenticated Workbench Qdrant service is unavailable"
 
 
 def _ensure_pgvector_extension(pg_config: dict) -> None:
@@ -799,8 +1154,11 @@ def _setup_oss_interactive(hermes_home: str, config: dict) -> None:
             if pg_password:
                 pgvector_config["password"] = pg_password
 
-    user_id = input(f"  User ID [{os.getenv('USER', 'hermes-user')}]: ").strip()
-    user_id = user_id or os.getenv("USER", "hermes-user")
+    if _authenticated_workbench_mode():
+        user_id = ""
+    else:
+        user_id = input(f"  User ID [{os.getenv('USER', 'hermes-user')}]: ").strip()
+        user_id = user_id or os.getenv("USER", "hermes-user")
 
     agent_id = input("  Agent ID [hermes]: ").strip()
     agent_id = agent_id or "hermes"
@@ -829,7 +1187,10 @@ def _setup_oss_interactive(hermes_home: str, config: dict) -> None:
 
     if env_writes:
         _write_env(Path(hermes_home) / ".env", env_writes)
-    _save_mem0_json(hermes_home, {"mode": "oss", "user_id": user_id, "agent_id": agent_id, "oss": oss_config})
+    saved = {"mode": "oss", "agent_id": agent_id, "oss": oss_config}
+    if not _authenticated_workbench_mode():
+        saved["user_id"] = user_id
+    _save_mem0_json(hermes_home, saved)
 
     _install_provider_deps(llm_id, embedder_id, vector_id)
 
@@ -971,6 +1332,14 @@ def post_setup(hermes_home: str, config: dict) -> None:
     """
     _check_min_dep_version()
     flags = parse_flags(sys.argv[1:])
+
+    if _authenticated_workbench_mode():
+        # Workbench product setup is deterministic local OSS.  Cloud and the
+        # interactive provider picker remain available to standalone Hermes.
+        flags["mode"] = "oss"
+        flags["_mode_from_flag"] = True
+        _setup_oss(hermes_home, config, flags)
+        return
 
     if flags["mode"] == "oss":
         flags["_mode_from_flag"] = True

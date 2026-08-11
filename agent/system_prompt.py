@@ -49,6 +49,7 @@ from agent.prompt_builder import (
     drain_truncation_warnings,
 )
 from agent.runtime_cwd import resolve_context_cwd
+from agent.workbench_identity import workbench_identity_block
 from hermes_constants import get_hermes_home
 from utils import is_truthy_value
 
@@ -185,6 +186,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
 
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts: List[str] = []
+
+    # The Workbench product identity is developer-owned, not profile persona
+    # or memory. Keep it first so SOUL.md may customize style without replacing
+    # the product contract. Outside exact product mode this returns empty,
+    # preserving standalone upstream prompt bytes.
+    if _workbench_identity := workbench_identity_block():
+        stable_parts.append(_workbench_identity)
 
     # Try SOUL.md as primary identity unless the caller explicitly skipped it.
     # Some execution modes (cron) still want HERMES_HOME persona while keeping

@@ -10,6 +10,7 @@ steals focus for a background session.
 """
 
 import json
+import os
 import re
 
 from tools import desktop_ui
@@ -42,6 +43,14 @@ def open_preview_tool(url: str, label: str = "") -> str:
             "file path to show in the preview pane."
         )
 
+    if os.environ.get("HERMES_WORKBENCH") == "1" and not re.match(r"^https?://", target, re.I):
+        workbench_path = target[7:] if target.startswith("file://") else target
+        if not workbench_path.startswith("/workspace/"):
+            return tool_error(
+                "This Workbench can preview web URLs and files inside /workspace only. "
+                "Use the Files pane for other local content."
+            )
+
     label = (label or "").strip()
     try:
         ok = desktop_ui.emit("preview.open", {"url": target, "label": label})
@@ -59,9 +68,12 @@ OPEN_PREVIEW_SCHEMA = {
         "Open something in the preview pane beside the chat in the Hermes desktop "
         "app. Use this when the user asks to see a page, dev server, or file in the "
         "preview pane — e.g. \"open cnn.com in the preview pane\" or \"preview "
-        "localhost:3000\". Accepts a web URL (a bare domain like www.cnn.com is fine), "
-        "a localhost dev-server URL, or a file path (HTML renders live; other files "
-        "show their contents). The pane opens for the current window only."
+        "localhost:3000\". Also use it to visibly open a map or directions URL when "
+        "the user asks to pull up a map, route, location, or directions. Accepts a "
+        "web URL (a bare domain like www.cnn.com is fine), "
+        "a localhost dev-server URL, or a file path. In authenticated Workbench "
+        "mode, local paths must be inside /workspace and open in the source editor; "
+        "web URLs open in the isolated browser. The pane opens for the current window only."
     ),
     "parameters": {
         "type": "object",

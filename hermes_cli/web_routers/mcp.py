@@ -22,7 +22,9 @@ from hermes_cli.web_deps import late, LateState
 from hermes_cli.web_models import (
     MCPCatalogInstall,
     MCPEnabledToggle,
+    MCPServerCommitRequest,
     MCPServerCreate,
+    MCPServerReviewRequest,
     MCPServersReplace,
 )
 
@@ -69,7 +71,7 @@ async def list_mcp_servers(profile: Optional[str] = None):
     servers = await asyncio.to_thread(_read)
     return {
         "servers": [
-            _mcp_server_summary(name, cfg) for name, cfg in sorted(servers.items())
+            _mcp_server_summary(name, cfg, profile) for name, cfg in sorted(servers.items())
         ]
     }
 
@@ -114,7 +116,78 @@ async def add_mcp_server(body: MCPServerCreate, profile: Optional[str] = None):
         _log.exception("POST /api/mcp/servers failed")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return _mcp_server_summary(name, server_config)
+    return _mcp_server_summary(name, server_config, body.profile or profile)
+
+
+@router.post("/api/mcp/servers/{name}/review")
+async def review_mcp_server(
+    name: str, body: MCPServerReviewRequest, profile: Optional[str] = None
+):
+    from hermes_cli.mcp_config import _get_mcp_servers
+    from hermes_cli.mcp_editor import McpEditorError, prepare_review
+
+    scope = body.profile or profile
+
+    def _run():
+        with _profile_scope(scope):
+            with _CONFIG_MUTATION_LOCK:
+                current = _get_mcp_servers().get(name)
+                if not isinstance(current, dict):
+                    raise HTTPException(status_code=404, detail="server-not-found")
+                try:
+                    return prepare_review(scope, name, body.revision, body.edit, current)
+                except McpEditorError as exc:
+                    status = 409 if exc.reason in {"stale-revision", "secret-rebind-required"} else 400
+                    raise HTTPException(status_code=status, detail=exc.reason) from exc
+
+    return await asyncio.to_thread(_run)
+
+
+@router.post("/api/mcp/servers/{name}/commit")
+async def commit_mcp_server(
+    name: str, body: MCPServerCommitRequest, profile: Optional[str] = None
+):
+    from hermes_cli.mcp_config import _get_mcp_servers, _save_mcp_server
+    from hermes_cli.mcp_editor import McpEditorError, consume_review
+
+    scope = body.profile or profile
+
+    def _run():
+        with _profile_scope(scope):
+            with _CONFIG_MUTATION_LOCK:
+                current = _get_mcp_servers().get(name)
+                if not isinstance(current, dict):
+                    raise HTTPException(status_code=404, detail="server-not-found")
+                try:
+                    record = consume_review(
+                        scope, name, body.review_handle, body.risk_confirmed, current
+                    )
+                except McpEditorError as exc:
+                    status = 409 if exc.reason in {
+                        "stale-revision", "expired-review", "risk-confirmation-required"
+                    } else 400
+                    raise HTTPException(status_code=status, detail=exc.reason) from exc
+                if not _save_mcp_server(name, record.next_config):
+                    raise HTTPException(status_code=400, detail="commit-failed")
+                saved = _get_mcp_servers().get(name)
+                return {
+                    "contract_version": 3,
+                    "status": "success",
+                    "reason": "committed",
+                    "server": _mcp_server_summary(name, saved, scope),
+                }
+
+    return await asyncio.to_thread(_run)
+
+
+@router.delete("/api/mcp/servers/{name}/review/{review_handle}")
+async def discard_mcp_server_review(
+    name: str, review_handle: str, profile: Optional[str] = None
+):
+    from hermes_cli.mcp_editor import discard_review
+
+    await asyncio.to_thread(discard_review, profile, name, review_handle)
+    return {"ok": True}
 
 
 @router.put("/api/mcp/servers")

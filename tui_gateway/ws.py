@@ -89,10 +89,14 @@ class WSTransport:
         loop: asyncio.AbstractEventLoop,
         *,
         peer: str = "unknown",
+        principal_key: str = "",
+        principal_generation: int = 0,
     ) -> None:
         self._ws = ws
         self._loop = loop
         self._peer = peer
+        self.principal_key = str(principal_key or "")
+        self.principal_generation = int(principal_generation or 0)
         self._closed = False
         # Token-coalescing buffer (CF-2). Streamed token frames land here and a
         # short timer flushes the batch. The lock guards the buffer + the
@@ -283,7 +287,7 @@ def _disable_nagle(ws: Any) -> None:
         _log.debug("ws TCP_NODELAY skip: %s", exc)
 
 
-async def handle_ws(ws: Any) -> None:
+async def handle_ws(ws: Any, *, principal_info: dict | None = None) -> None:
     """Run one WebSocket session. Wire-compatible with ``tui_gateway.entry``."""
     peer = _ws_peer_label(ws)
     transport: WSTransport | None = None
@@ -292,6 +296,11 @@ async def handle_ws(ws: Any) -> None:
     dispatch_crashes = 0
     send_failures = 0
     disconnect_reason = "not_connected"
+    principal_key = str((principal_info or {}).get("principal_key") or "")
+    principal_generation = int(
+        (principal_info or {}).get("principal_generation") or 0
+    )
+    live_channel_token: str | None = None
 
     try:
         await ws.accept()
@@ -301,7 +310,30 @@ async def handle_ws(ws: Any) -> None:
         _disable_nagle(ws)
         _log.info("ws accepted peer=%s", peer)
 
-        transport = WSTransport(ws, asyncio.get_running_loop(), peer=peer)
+        loop = asyncio.get_running_loop()
+        transport = WSTransport(
+            ws,
+            loop,
+            peer=peer,
+            principal_key=principal_key,
+            principal_generation=principal_generation,
+        )
+        if principal_key and principal_generation:
+            from hermes_cli.dashboard_auth.live_principals import register_live_channel
+
+            def _revoke_close() -> None:
+                async def _close() -> None:
+                    transport.close()
+                    try:
+                        await ws.close(code=4401, reason="authentication revoked")
+                    except Exception:
+                        pass
+
+                asyncio.run_coroutine_threadsafe(_close(), loop).result(timeout=5.0)
+
+            live_channel_token = register_live_channel(
+                principal_key, principal_generation, _revoke_close
+            )
 
         # resolve_skin() reads config + initializes the skin engine —
         # synchronous I/O + CPU work that should not block the event loop
@@ -458,6 +490,15 @@ async def handle_ws(ws: Any) -> None:
                 )
             except Exception:
                 _log.exception("ws transport teardown failed peer=%s", peer)
+        if live_channel_token and principal_key and principal_generation:
+            try:
+                from hermes_cli.dashboard_auth.live_principals import unregister_live_channel
+
+                unregister_live_channel(
+                    principal_key, principal_generation, live_channel_token
+                )
+            except Exception:
+                pass
         try:
             await ws.close()
         except Exception as exc:

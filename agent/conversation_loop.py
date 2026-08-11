@@ -594,6 +594,28 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
                 agent.session_id, exc,
             )
 
+    # Product-mode identity is not memory and is not user/profile-owned. Older
+    # stored sessions may predate its version marker; rebuild those once so a
+    # reconnect cannot silently bypass the product contract. Marked prompts
+    # remain byte-for-byte cache gold.
+    if stored_prompt:
+        from agent.workbench_identity import (
+            is_workbench_product_mode,
+            stored_prompt_has_workbench_identity,
+        )
+
+        if (
+            is_workbench_product_mode()
+            and not stored_prompt_has_workbench_identity(stored_prompt)
+        ):
+            stored_state = "stale_workbench_identity"
+            stored_prompt = None
+            logger.info(
+                "Stored system prompt for session %s predates the Workbench "
+                "identity contract; rebuilding once.",
+                agent.session_id,
+            )
+
     if stored_prompt and _stored_prompt_matches_runtime(agent, stored_prompt):
         # Continuing session — reuse the exact system prompt from the
         # previous turn so the Anthropic cache prefix matches.

@@ -36,9 +36,55 @@ from __future__ import annotations
 import logging
 import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+class MemoryLogicalRecordsUnsupported(RuntimeError):
+    """The provider has no safe provider-neutral logical-record capability."""
+
+
+@dataclass(frozen=True)
+class LogicalMemoryRecord:
+    """One portable memory record, intentionally excluding backend state.
+
+    ``portable_id`` is a provider-neutral stable identifier.  It is not a raw
+    backend/vector-database identifier.  Embeddings are deliberately absent:
+    the destination provider rebuilds them from ``content`` during import.
+    """
+
+    portable_id: str
+    content: str
+    source: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+    content_fingerprint: str = ""
+
+
+@dataclass(frozen=True)
+class LogicalMemoryPage:
+    """A bounded page returned by :meth:`export_logical_records`."""
+
+    records: List[LogicalMemoryRecord]
+    next_cursor: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class LogicalMemoryImportResult:
+    """Provider result for an idempotent logical-record import.
+
+    ``conflicts`` counts imported records whose portable ID already existed
+    with different content.  Such records must be preserved under a fresh
+    provider-local identity rather than overwriting the existing record.
+    """
+
+    imported: int
+    duplicates: int
+    conflicts: int
+    skipped: int = 0
 
 
 # Prompts that carry no semantic signal — trivial acknowledgements, greetings,
@@ -337,6 +383,62 @@ class MemoryProvider(ABC):
 
         Use to mirror built-in memory writes to your backend.
         """
+
+    def export_logical_records(
+        self,
+        *,
+        principal_id: str,
+        cursor: Optional[str] = None,
+        limit: int = 500,
+    ) -> LogicalMemoryPage:
+        """Export an owner-filtered page of provider-neutral records.
+
+        Implementations must atomically scope the read to ``principal_id`` and
+        must not return embeddings, credentials, raw backend identifiers, or
+        another principal's records.  The default fails closed so an archive
+        caller cannot silently fall back to raw provider storage.
+        """
+        raise MemoryLogicalRecordsUnsupported(
+            f"Memory provider {self.name!r} does not support logical export"
+        )
+
+    def import_logical_records(
+        self,
+        records: List[LogicalMemoryRecord],
+        *,
+        principal_id: str,
+        infer: bool = False,
+        idempotency_key: str = "",
+    ) -> LogicalMemoryImportResult:
+        """Add logical records for one principal and rebuild embeddings.
+
+        Implementations must reject ``infer=True``.  Exact duplicates are
+        no-ops; portable-ID/content conflicts are preserved as separate
+        records and reported.  ``idempotency_key`` must make retries safe.
+        """
+        raise MemoryLogicalRecordsUnsupported(
+            f"Memory provider {self.name!r} does not support logical import"
+        )
+
+    def delete_logical_records(
+        self,
+        record_ids: List[str],
+        *,
+        principal_id: str,
+    ) -> int:
+        """Atomically delete only the principal-owned logical record IDs.
+
+        A provider that cannot enforce the owner predicate in the mutation
+        itself must leave this unsupported; a scoped pre-read followed by an
+        unscoped delete is not sufficient. Full-principal replacement callers
+        pass the complete exported ID set. Implementations that support only
+        atomic owner-filtered delete-all must reject a non-matching subset and
+        treat an already-empty owner set as an idempotent retry, returning the
+        requested count. Partial deletion is never a valid result.
+        """
+        raise MemoryLogicalRecordsUnsupported(
+            f"Memory provider {self.name!r} does not support logical deletion"
+        )
 
     def backup_paths(self) -> List[str]:
         """Return extra on-disk paths this provider stores OUTSIDE HERMES_HOME.

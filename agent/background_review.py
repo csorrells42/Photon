@@ -3,9 +3,10 @@
 After every turn, ``AIAgent.run_conversation`` may call
 :func:`spawn_background_review` to fire off a daemon thread that replays
 the conversation snapshot in a forked :class:`AIAgent` and asks itself
-"should any skill/memory be saved or updated?".  Writes go straight to
-the memory + skill stores.  Main conversation and prompt cache are never
-touched.
+"should any skill/memory be saved or updated?".  Standalone writes use the
+memory + skill stores. In authenticated Workbench mode, memory calls are
+no-I/O intents committed only through the live parent MemoryManager. Main
+conversation and prompt cache are never touched.
 
 The fork inherits the parent's live runtime (provider, model, base_url,
 credentials, cached system prompt) so it hits the same prefix cache and
@@ -22,11 +23,153 @@ import copy
 import json
 import logging
 import os
+import threading
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from agent.thread_scoped_output import thread_scoped_silence
 
 logger = logging.getLogger(__name__)
+
+_REVIEW_MIDDLEWARE_LOCK = threading.Lock()
+
+
+def _background_memory_intent_result(args: Any) -> str:
+    """Validate a review-only memory mutation without touching any store."""
+    generic_error = json.dumps(
+        {"success": False, "error": "The background memory intent is invalid."},
+        ensure_ascii=False,
+    )
+    if not isinstance(args, dict) or len(args) > 5:
+        return generic_error
+    if set(args) - {"action", "target", "content", "old_text", "operations"}:
+        return generic_error
+    target = args.get("target", "memory")
+    if target not in {"memory", "user"}:
+        return generic_error
+
+    operations = args.get("operations")
+    if operations is not None:
+        if not isinstance(operations, list) or not 1 <= len(operations) <= 16:
+            return generic_error
+        candidates = operations
+    else:
+        candidates = [
+            {
+                "action": args.get("action"),
+                "content": args.get("content"),
+                "old_text": args.get("old_text"),
+            }
+        ]
+
+    for operation in candidates:
+        if not isinstance(operation, dict):
+            return generic_error
+        if set(operation) - {"action", "content", "old_text"}:
+            return generic_error
+        action = operation.get("action")
+        content = operation.get("content")
+        old_text = operation.get("old_text")
+        if action not in {"add", "replace", "remove"}:
+            return generic_error
+        if content is not None and not isinstance(content, str):
+            return generic_error
+        if old_text is not None and not isinstance(old_text, str):
+            return generic_error
+        if action == "add" and not content:
+            return generic_error
+        if action == "replace" and (not content or not old_text):
+            return generic_error
+        if action == "remove" and not old_text:
+            return generic_error
+        for value in (content, old_text):
+            if value is None:
+                continue
+            if not value.strip() or len(value) > 4096 or "\x00" in value:
+                return generic_error
+            try:
+                value.encode("utf-8")
+            except UnicodeError:
+                return generic_error
+            try:
+                from tools.threat_patterns import scan_for_threats
+
+                if scan_for_threats(value, scope="strict"):
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "error": "The background memory intent failed the memory safety policy.",
+                        },
+                        ensure_ascii=False,
+                    )
+            except Exception:
+                return generic_error
+
+    try:
+        encoded = json.dumps(args, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        return generic_error
+    if len(encoded.encode("utf-8")) > 64 * 1024:
+        return generic_error
+    return json.dumps(
+        {
+            "success": True,
+            "intent_only": True,
+            "target": target,
+            "message": "Memory write intent validated for the authenticated parent.",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _authenticated_review_intent_enabled(agent: Any) -> bool:
+    manager = getattr(agent, "_memory_manager", None)
+    principal = getattr(agent, "_memory_principal_id", None)
+    generation = getattr(agent, "_memory_principal_generation", None)
+    predicate = getattr(manager, "is_authorized", None)
+    if (
+        not isinstance(principal, str)
+        or not principal
+        or not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation <= 0
+        or not callable(predicate)
+    ):
+        return False
+    try:
+        return predicate() is True
+    except Exception:
+        return False
+
+
+@contextmanager
+def _review_memory_intent_execution(enabled: bool):
+    """Thread-bound execution middleware for the no-I/O review tool."""
+    if not enabled:
+        yield
+        return
+    from hermes_cli.middleware import TOOL_EXECUTION_MIDDLEWARE
+    from hermes_cli.plugins import get_plugin_manager
+
+    owner_thread = threading.get_ident()
+
+    def _intent_middleware(*, tool_name, args, next_call, **_context):
+        if threading.get_ident() == owner_thread and tool_name == "memory":
+            return _background_memory_intent_result(args)
+        return next_call(args)
+
+    manager = get_plugin_manager()
+    with _REVIEW_MIDDLEWARE_LOCK:
+        callbacks = manager._middleware.setdefault(TOOL_EXECUTION_MIDDLEWARE, [])
+        callbacks.insert(0, _intent_middleware)
+    try:
+        yield
+    finally:
+        with _REVIEW_MIDDLEWARE_LOCK:
+            callbacks = manager._middleware.get(TOOL_EXECUTION_MIDDLEWARE, [])
+            manager._middleware[TOOL_EXECUTION_MIDDLEWARE] = [
+                callback for callback in callbacks if callback is not _intent_middleware
+            ]
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +794,142 @@ def build_memory_write_metadata(
     return {k: v for k, v in metadata.items() if v not in {None, ""}}
 
 
+def relay_background_review_memory_writes(
+    agent: Any,
+    review_messages: List[Dict],
+    prior_snapshot: List[Dict],
+) -> int:
+    """Relay committed review memory writes through the authenticated parent.
+
+    The review fork is constructed with ``skip_memory=True`` so its harness
+    prompt, recall query, and generated response can never be ingested by an
+    external provider.  After the fork finishes, this function extracts only
+    new ``memory`` tool calls that have a matching successful, non-staged tool
+    result and hands those raw call/result pairs to the parent
+    ``MemoryManager``.  The manager remains the single success parser and the
+    provider remains responsible for a final principal-generation check.
+
+    Workbench authenticated-memory mode publishes the opaque principal and a
+    positive live generation on the parent agent.  Missing identity, logout,
+    or a generation change makes the relay fail closed.
+    """
+    manager = getattr(agent, "_memory_manager", None)
+    principal = getattr(agent, "_memory_principal_id", None)
+    generation = getattr(agent, "_memory_principal_generation", None)
+    is_authorized = getattr(manager, "is_authorized", None)
+    if (
+        manager is None
+        or not isinstance(principal, str)
+        or not principal
+        or not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation <= 0
+        or not callable(is_authorized)
+    ):
+        return 0
+    try:
+        if is_authorized() is not True:
+            return 0
+    except Exception:
+        return 0
+
+    prior_ids = {
+        message.get("tool_call_id")
+        for message in (prior_snapshot or [])
+        if isinstance(message, dict)
+        and message.get("role") == "tool"
+        and message.get("tool_call_id")
+    }
+    calls: Dict[str, Dict[str, Any]] = {}
+    for message in review_messages or []:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls", []) or []:
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get("id")
+            function = call.get("function")
+            if not call_id or call_id in prior_ids or not isinstance(function, dict):
+                continue
+            if function.get("name") != "memory":
+                continue
+            try:
+                args = json.loads(function.get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(args, dict):
+                calls[str(call_id)] = args
+
+    relayed = 0
+    seen_results = set()
+    for message in review_messages or []:
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        call_id = message.get("tool_call_id")
+        if not call_id or call_id in seen_results or call_id not in calls:
+            continue
+        seen_results.add(call_id)
+
+        # Re-check identity immediately before every provider mutation.  A
+        # logout or principal switch during review invalidates all remaining
+        # intents from that fork.
+        if (
+            getattr(agent, "_memory_principal_id", None) != principal
+            or getattr(agent, "_memory_principal_generation", None) != generation
+        ):
+            break
+        try:
+            if is_authorized() is not True:
+                break
+        except Exception:
+            break
+
+        tool_result = message.get("content")
+        args = calls[call_id]
+        result_data = tool_result
+        if isinstance(result_data, str):
+            try:
+                result_data = json.loads(result_data)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        if (
+            not isinstance(result_data, dict)
+            or result_data.get("success") is not True
+            or result_data.get("staged") is True
+        ):
+            continue
+        operations = args.get("operations")
+        if isinstance(operations, list) and operations:
+            has_mutation = any(
+                isinstance(operation, dict)
+                and str(operation.get("action") or "") in {"add", "replace", "remove"}
+                for operation in operations
+            )
+        else:
+            has_mutation = str(args.get("action") or "") in {"add", "replace", "remove"}
+        if not has_mutation:
+            continue
+        try:
+            manager.notify_memory_tool_write(
+                tool_result,
+                args,
+                build_metadata=lambda call_id=str(call_id): {
+                    **build_memory_write_metadata(
+                        agent,
+                        write_origin="background_review",
+                        execution_context="background_review",
+                        tool_call_id=call_id,
+                    ),
+                    "principal_generation": generation,
+                },
+            )
+            relayed += 1
+        except Exception as exc:
+            logger.warning("Background review memory intent relay failed: %s", exc)
+            break
+    return relayed
+
+
 def _run_review_in_thread(
     agent: Any,
     messages_snapshot: List[Dict],
@@ -684,6 +963,7 @@ def _run_review_in_thread(
 
     review_agent = None
     review_messages: List[Dict] = []
+    review_intent_mode = _authenticated_review_intent_enabled(agent)
     try:
         # Silence stdout/stderr for THIS worker thread only.  A process-global
         # ``contextlib.redirect_stdout(devnull)`` here would also blank
@@ -809,7 +1089,12 @@ def _run_review_in_thread(
             # add late-connecting MCP tools to this fork and break that parity,
             # so opt the review fork out of it.
             review_agent._skip_mcp_refresh = True
-            review_agent._memory_store = agent._memory_store
+            # Strict authenticated mode uses a review-local no-I/O intent
+            # executor below. Never bind the quarantined profile-wide file
+            # store into that fork.
+            review_agent._memory_store = (
+                None if review_intent_mode else agent._memory_store
+            )
             review_agent._memory_enabled = agent._memory_enabled
             review_agent._user_profile_enabled = agent._user_profile_enabled
             review_agent._memory_nudge_interval = 0
@@ -891,8 +1176,28 @@ def _run_review_in_thread(
             # read/write tool even when a profile set memory_enabled: false,
             # contaminating a memory-disabled profile (#54937 layer 2).
             review_toolsets = ["skills"]
-            if review_agent._memory_enabled or review_agent._user_profile_enabled:
+            if (
+                review_intent_mode
+                or review_agent._memory_enabled
+                or review_agent._user_profile_enabled
+            ):
                 review_toolsets.insert(0, "memory")
+            if review_intent_mode:
+                # Agent initialization strips the legacy file-backed tool in
+                # strict mode. Re-add only its schema to this ephemeral fork;
+                # the thread-bound middleware below performs no I/O.
+                from tools.memory_tool import MEMORY_SCHEMA
+
+                existing_names = {
+                    tool.get("function", {}).get("name")
+                    for tool in (review_agent.tools or [])
+                    if isinstance(tool, dict)
+                }
+                if "memory" not in existing_names:
+                    review_agent.tools.append(
+                        {"type": "function", "function": copy.deepcopy(MEMORY_SCHEMA)}
+                    )
+                review_agent.valid_tool_names.add("memory")
             review_whitelist = {
                 t["function"]["name"]
                 for t in get_tool_definitions(
@@ -922,15 +1227,16 @@ def _run_review_in_thread(
                     _digest_history(messages_snapshot) if _routed
                     else messages_snapshot
                 )
-                review_agent.run_conversation(
-                    user_message=(
+                with _review_memory_intent_execution(review_intent_mode):
+                    review_agent.run_conversation(
+                        user_message=(
                         prompt
                         + "\n\nYou can only call memory and skill "
                         "management tools. Other tools will be denied "
                         "at runtime — do not attempt them."
-                    ),
-                    conversation_history=_review_history,
-                )
+                        ),
+                        conversation_history=_review_history,
+                    )
             finally:
                 clear_thread_tool_whitelist()
 
@@ -952,6 +1258,15 @@ def _run_review_in_thread(
             except Exception:
                 pass
             review_agent = None
+
+        # The fork never owns an external provider.  Relay only its verified,
+        # committed memory-tool intents through the still-live authenticated
+        # parent so the harness prompt and review response remain excluded.
+        relay_background_review_memory_writes(
+            agent,
+            review_messages,
+            messages_snapshot,
+        )
 
         # Scan the review agent's messages for successful tool actions
         # and surface a compact summary to the user. Tool messages
@@ -1078,4 +1393,5 @@ __all__ = [
     "spawn_background_review_thread",
     "summarize_background_review_actions",
     "build_memory_write_metadata",
+    "relay_background_review_memory_writes",
 ]

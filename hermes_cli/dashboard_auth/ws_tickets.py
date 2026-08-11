@@ -48,6 +48,8 @@ _tickets: Dict[str, Tuple[int, Dict[str, Any]]] = {}  # ticket -> (expires_at, i
 #: minted on first ``internal_ws_credential()`` call and stable for the life
 #: of the process. Guarded by ``_lock``.
 _internal_credential: Optional[str] = None
+_internal_credentials: Dict[str, Dict[str, Any]] = {}
+_principal_internal_credentials: Dict[Tuple[str, int], str] = {}
 
 #: Identity recorded for connections that authenticate via the internal
 #: credential, so audit logs distinguish them from browser-initiated tickets.
@@ -67,9 +69,17 @@ def mint_ticket(*, user_id: str, provider: str) -> str:
     WS handler can carry the identity forward into its session log.
     """
     ticket = secrets.token_urlsafe(32)
+    from hermes_cli.dashboard_auth.live_principals import PrincipalRevoked, activate_principal
+
+    try:
+        lease = activate_principal(provider, user_id)
+    except PrincipalRevoked as exc:
+        raise TicketInvalid("fresh authentication required") from exc
     info = {
         "user_id": user_id,
         "provider": provider,
+        "principal_key": lease.principal_key,
+        "principal_generation": lease.generation,
         "minted_at": int(time.time()),
     }
     with _lock:
@@ -96,6 +106,18 @@ def consume_ticket(ticket: str) -> Dict[str, Any]:
         expires_at, info = entry
         if expires_at < now:
             raise TicketInvalid("expired")
+        principal_key = str(info.get("principal_key") or "")
+        generation = int(info.get("principal_generation") or 0)
+        if principal_key and generation:
+            from hermes_cli.dashboard_auth.live_principals import (
+                PrincipalRevoked,
+                require_live,
+            )
+
+            try:
+                require_live(principal_key, generation)
+            except PrincipalRevoked as exc:
+                raise TicketInvalid("principal revoked") from exc
         return info
 
 
@@ -107,7 +129,13 @@ def _gc_expired_locked() -> None:
         _tickets.pop(t, None)
 
 
-def internal_ws_credential() -> str:
+def internal_ws_credential(
+    *,
+    user_id: str | None = None,
+    provider: str | None = None,
+    principal_key: str | None = None,
+    principal_generation: int | None = None,
+) -> str:
     """Return the process-lifetime internal WS credential, minting it once.
 
     Used by the server to authenticate WS clients it spawns itself (the
@@ -120,6 +148,34 @@ def internal_ws_credential() -> str:
     environment. See the module docstring for the threat-model rationale.
     """
     global _internal_credential
+    if user_id is not None or provider is not None or principal_key is not None:
+        if principal_key is None:
+            from hermes_cli.dashboard_auth.live_principals import activate_principal
+
+            lease = activate_principal(str(provider or ""), str(user_id or ""))
+            principal_key = lease.principal_key
+            principal_generation = lease.generation
+        if not principal_generation:
+            raise ValueError("principal generation is required")
+        from hermes_cli.dashboard_auth.live_principals import require_live
+
+        require_live(principal_key, principal_generation)
+        identity = (principal_key, int(principal_generation))
+        with _lock:
+            existing = _principal_internal_credentials.get(identity)
+            if existing is not None:
+                return existing
+            value = secrets.token_urlsafe(32)
+            info = {
+                "user_id": str(user_id or ""),
+                "provider": str(provider or ""),
+                "principal_key": principal_key,
+                "principal_generation": int(principal_generation),
+            }
+            _internal_credentials[value] = info
+            _principal_internal_credentials[identity] = value
+            return value
+
     with _lock:
         if _internal_credential is None:
             _internal_credential = secrets.token_urlsafe(32)
@@ -143,6 +199,21 @@ def consume_internal_credential(value: str) -> Dict[str, Any]:
     """
     with _lock:
         expected = _internal_credential
+        principal_info = _internal_credentials.get(value)
+    if principal_info is not None:
+        from hermes_cli.dashboard_auth.live_principals import (
+            PrincipalRevoked,
+            require_live,
+        )
+
+        try:
+            require_live(
+                str(principal_info["principal_key"]),
+                int(principal_info["principal_generation"]),
+            )
+        except PrincipalRevoked as exc:
+            raise TicketInvalid("principal revoked") from exc
+        return dict(principal_info)
     if not value or expected is None:
         raise TicketInvalid("no internal credential")
     if not secrets.compare_digest(value.encode(), expected.encode()):
@@ -153,9 +224,45 @@ def consume_internal_credential(value: str) -> Dict[str, Any]:
     }
 
 
+def revoke_principal_credentials(
+    principal_key: str, generation: int | None = None
+) -> None:
+    """Remove unconsumed credentials for a principal (optionally one generation)."""
+    with _lock:
+        doomed_tickets = [
+            token
+            for token, (_expiry, info) in _tickets.items()
+            if info.get("principal_key") == principal_key
+            and (
+                generation is None
+                or int(info.get("principal_generation") or 0) == int(generation)
+            )
+        ]
+        for token in doomed_tickets:
+            _tickets.pop(token, None)
+        identities = [
+            identity
+            for identity in _principal_internal_credentials
+            if identity[0] == principal_key
+            and (generation is None or identity[1] == int(generation))
+        ]
+        for identity in identities:
+            credential = _principal_internal_credentials.pop(identity, None)
+            if credential:
+                _internal_credentials.pop(credential, None)
+
+
 def _reset_for_tests() -> None:
     """Test-only: drop all tickets and the internal credential."""
     global _internal_credential
     with _lock:
         _tickets.clear()
+        _internal_credentials.clear()
+        _principal_internal_credentials.clear()
         _internal_credential = None
+    try:
+        from hermes_cli.dashboard_auth.live_principals import _reset_for_tests as _reset_live
+
+        _reset_live()
+    except Exception:
+        pass

@@ -251,6 +251,39 @@ class TestEnvFileParsing:
 
         assert ss.build_profile_secret_scope(profile) == {}
 
+    def test_native_scope_overlays_only_the_exact_default_profile(
+        self, tmp_path, monkeypatch
+    ):
+        default = tmp_path / "default"
+        named = tmp_path / "named"
+        default.mkdir()
+        named.mkdir()
+        (default / ".env").write_text("OPENAI_API_KEY=legacy\n")
+        (named / ".env").write_text("OPENAI_API_KEY=named\n")
+
+        from hermes_cli import profiles, workbench_credentials
+
+        monkeypatch.setattr(profiles, "get_profile_dir", lambda profile_id: default)
+        calls = []
+
+        def resolve(profile_id):
+            calls.append(profile_id)
+            return {"OPENAI_API_KEY": "native", "PATH": "must-not-overlay"}
+
+        monkeypatch.setattr(
+            workbench_credentials,
+            "resolve_profile_secret_scope",
+            resolve,
+        )
+
+        assert ss.build_profile_secret_scope(default) == {
+            "OPENAI_API_KEY": "native"
+        }
+        assert ss.build_profile_secret_scope(named) == {
+            "OPENAI_API_KEY": "named"
+        }
+        assert calls == ["default"]
+
 
 class TestApiServerListenerGlobals:
     """API_SERVER listener settings are deployment config (#69379), not
