@@ -1,3 +1,4 @@
+using PhotonCadProjects;
 using PhotonCadProjects.Codec;
 using PhotonCadProjects.RuntimeSync;
 
@@ -116,6 +117,15 @@ internal static class MutationMapperV1
                     command.PartNumber,
                     command.EntityId,
                     newOccurrence.Transform),
+            ],
+            bom:
+            [
+                new PhotonCadBomRow(
+                    command.PartNumber,
+                    command.Label,
+                    1,
+                    PhotonCadBomUnit.Each,
+                    command.EntityId),
             ],
             artifacts: [stepArtifact, previewArtifact]);
     }

@@ -59,6 +59,7 @@ internal static class PhotonCadBridgeSmoke
             if (reopened.Dirty || reopened.Revision != 4
                 || state.Entities.Count != 2
                 || state.Occurrences.Count != 2
+                || state.Bom.Count != 2
                 || state.Operations.Count != 4
                 || state.Artifacts.Count(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry) != 2
                 || state.Artifacts.Count(value => value.Role == PhotonCadArtifactRoleV1.ProjectPreview) != 1)

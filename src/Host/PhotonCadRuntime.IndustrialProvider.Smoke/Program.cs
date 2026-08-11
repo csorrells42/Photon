@@ -75,6 +75,9 @@ internal sealed class Smoke
         Equal("industrial.preview.glb.v1", mutation.Operations[1].CapabilityId, "preview capability");
         Equal(1, mutation.Entities.Count, "entity count");
         Equal(1, mutation.Occurrences.Count, "occurrence count");
+        Equal(1, mutation.Bom.Count, "BOM row count");
+        Equal("BOX", mutation.Bom[0].PartNumber, "BOM part number");
+        Equal("box-root", mutation.Bom[0].SourceEntityId, "BOM source entity");
         Equal(2, mutation.Artifacts.Count, "artifact count");
         True(mutation.Artifacts.Any(value => value.Kind == PhotonCadArtifactKindV1.Step), "STEP missing");
         True(mutation.Artifacts.Any(value => value.Kind == PhotonCadArtifactKindV1.Glb), "GLB missing");
@@ -144,6 +147,9 @@ internal sealed class Smoke
         var secondState = codec.Inspect(reopened);
         Equal(4L, secondState.Revision, "second canonical revision");
         Equal(2, secondState.Entities.Count, "second canonical entity count");
+        Equal(2, secondState.Bom.Count, "second canonical BOM count");
+        True(secondState.Bom.Select(row => row.SourceEntityId).ToHashSet(StringComparer.Ordinal)
+            .SetEquals(["first-root", "second-root"]), "second canonical BOM source binding");
         Equal(2, secondState.Artifacts.Count(artifact => artifact.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry),
             "second canonical geometry count");
         Equal(1, secondState.Artifacts.Count(artifact => artifact.Role == PhotonCadArtifactRoleV1.ProjectPreview),
