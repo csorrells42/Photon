@@ -42,7 +42,7 @@ internal sealed class ConPtySession : IAsyncDisposable
         arguments ??= ["-NoLogo", "-NoProfile"];
         var options = new PtyOptions
         {
-            Name = "Photos Agape Aphthartos",
+            Name = "Phos Agape Aphthartos",
             Cols = Math.Clamp(columns, 20, 400),
             Rows = Math.Clamp(rows, 5, 200),
             Cwd = workingDirectory,

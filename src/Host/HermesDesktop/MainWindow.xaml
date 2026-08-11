@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-        Title="Photos Agape Aphthartos"
+        Title="Phos Agape Aphthartos"
         Width="1440"
         Height="900"
         MinWidth="960"
@@ -18,7 +18,7 @@
         <Border Width="64" Height="64" CornerRadius="18" Margin="0,0,0,18" ClipToBounds="True">
           <Image Source="Assets/photon-mark.png" Stretch="UniformToFill" />
         </Border>
-        <TextBlock Text="Photos Agape Aphthartos" Foreground="#E3E6EF" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
+        <TextBlock Text="Phos Agape Aphthartos" Foreground="#E3E6EF" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
         <TextBlock x:Name="LoadingMessage" Text="Connecting to the local Workbench…" Foreground="#737D90" FontSize="12" Margin="0,8,0,0" HorizontalAlignment="Center" />
         <Button x:Name="RetryButton" Content="Retry" Visibility="Collapsed" Click="RetryClicked" Margin="0,18,0,0" Padding="18,7" Background="#6F58D8" Foreground="White" BorderThickness="0" />
       </StackPanel>

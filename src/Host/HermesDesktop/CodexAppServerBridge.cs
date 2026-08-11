@@ -62,7 +62,7 @@ internal sealed class CodexAppServerBridge(string workspacePath, Action<object> 
                 {
                     type = "codex.unavailable",
                     version = ProtocolVersion,
-                    message = "Codex was not found. Install Codex Desktop, the Codex CLI, or the OpenAI VS Code extension, then restart Photos Agape Aphthartos.",
+                    message = "Codex was not found. Install Codex Desktop, the Codex CLI, or the OpenAI VS Code extension, then restart Phos Agape Aphthartos.",
                 });
                 return;
             }

@@ -144,7 +144,7 @@ export class DesktopWorkspaceSearchClient {
     }
     if (execution.signal.aborted) return Promise.reject(abortError())
     const bridge = this.connect()
-    if (!bridge) return Promise.reject(new Error('Workspace search is available in the Photos Agape Aphthartos desktop app.'))
+    if (!bridge) return Promise.reject(new Error('Workspace search is available in the Phos Agape Aphthartos desktop app.'))
     if (this.pending.has(request.requestId)) return Promise.reject(new Error('That workspace-search request is already active.'))
 
     return new Promise<unknown>((resolve, reject) => {

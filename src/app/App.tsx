@@ -441,7 +441,7 @@ export function App() {
   return (
     <div className={`workbench layout-${layout} panel-${leftPanel} ${terminalOpen ? '' : 'terminal-closed'}`}>
       <header className="titlebar">
-        <div className="brand" title="Photos Agape Aphthartos"><span className="brand-mark"><img src="/app/assets/photon-mark.png" alt="" /></span><strong>Photos Agape Aphthartos</strong></div>
+        <div className="brand" title="Phos Agape Aphthartos"><span className="brand-mark"><img src="/app/assets/photon-mark.png" alt="" /></span><strong>Phos Agape Aphthartos</strong></div>
         <nav ref={menuBarRef} aria-label="Application menu">
           <div className="workbench-menu">
             <button aria-expanded={openMenu === 'file'} aria-haspopup="menu" onClick={() => setOpenMenu((open) => open === 'file' ? null : 'file')}>File</button>
@@ -498,7 +498,7 @@ export function App() {
           <button onClick={() => { setLayout('code'); setLeftPanel('run') }}>Run</button><button onClick={toggleTerminal}>Terminal</button>
         </nav>
         <div className="command-center-shell">
-          <button className="command-center" aria-expanded={commandCenterOpen} aria-haspopup="dialog" onClick={() => { setCommandCenterOpen(true); setCommandQuery('') }} title="Open Command Center"><Search size={14} /><span>Photos Agape Aphthartos</span><small>Ctrl K</small></button>
+          <button className="command-center" aria-expanded={commandCenterOpen} aria-haspopup="dialog" onClick={() => { setCommandCenterOpen(true); setCommandQuery('') }} title="Open Command Center"><Search size={14} /><span>Phos Agape Aphthartos</span><small>Ctrl K</small></button>
           {commandCenterOpen && <section className="command-palette" role="dialog" aria-label="Command Center">
             <div className="command-palette-input"><Search size={15} /><input autoFocus aria-label="Search commands" placeholder="Type a command…" value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} onKeyDown={(event) => {
               if (event.key === 'Escape') { event.preventDefault(); setCommandCenterOpen(false) }

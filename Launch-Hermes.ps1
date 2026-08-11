@@ -18,7 +18,7 @@ $runtimeGenerationCandidates = @(
 )
 $runtimeGenerationScript = @($runtimeGenerationCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
 if ($runtimeGenerationScript.Count -ne 1) {
-    throw 'Verified runtime generation support is missing. Reinstall Photos Agape Aphthartos.'
+    throw 'Verified runtime generation support is missing. Reinstall Phos Agape Aphthartos.'
 }
 . ([string]$runtimeGenerationScript[0])
 
@@ -374,7 +374,7 @@ function Start-WorkbenchWeb {
     $viteScript = [IO.Path]::GetFullPath((Join-Path $frontendRoot 'node_modules\vite\bin\vite.js'))
     $viteConfig = [IO.Path]::GetFullPath((Join-Path $frontendRoot 'vite.config.ts'))
     if (-not (Test-Path -LiteralPath $viteScript -PathType Leaf) -or -not (Test-Path -LiteralPath $viteConfig -PathType Leaf)) {
-        throw 'Photos Agape Aphthartos dependencies are missing. Run Install-Hermes.ps1 first.'
+        throw 'Phos Agape Aphthartos dependencies are missing. Run Install-Hermes.ps1 first.'
     }
     $nodeExecutable = [IO.Path]::GetFullPath((Find-NodeExecutable))
 
@@ -435,10 +435,10 @@ function Start-WorkbenchWeb {
                 return
             }
         }
-        if ($process.HasExited) { throw "Photos Agape Aphthartos exited during startup. Check $stderr." }
+        if ($process.HasExited) { throw "Phos Agape Aphthartos exited during startup. Check $stderr." }
         Start-Sleep -Milliseconds 500
     }
-    throw "Photos Agape Aphthartos did not start on port $workbenchPort. Check $stderr."
+    throw "Phos Agape Aphthartos did not start on port $workbenchPort. Check $stderr."
 }
 
 function Ensure-SerenaMcpConfiguration {
@@ -613,7 +613,7 @@ try {
             Start-Process $script:workbenchUrl
         }
     }
-    Write-Host 'Photon, Serena, and Photos Agape Aphthartos are running.' -ForegroundColor Green
+    Write-Host 'Photon, Serena, and Phos Agape Aphthartos are running.' -ForegroundColor Green
 }
 finally {
     Pop-Location

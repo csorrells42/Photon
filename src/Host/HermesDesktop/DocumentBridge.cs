@@ -26,7 +26,7 @@ internal sealed class DocumentBridge
         if (!TryValidateEnvelope(version, requestId, out var id)) return;
         var dialog = new OpenFileDialog
         {
-            Title = "Open a file in Photos Agape Aphthartos",
+            Title = "Open a file in Phos Agape Aphthartos",
             InitialDirectory = _workspaceRoot,
             CheckFileExists = true,
             Multiselect = false,
@@ -55,7 +55,7 @@ internal sealed class DocumentBridge
         if (!TryValidateEnvelope(version, requestId, out var id)) return;
         var dialog = new OpenFolderDialog
         {
-            Title = "Open a Git repository in Photos Agape Aphthartos",
+            Title = "Open a Git repository in Phos Agape Aphthartos",
             InitialDirectory = _workspaceRoot,
             Multiselect = false,
         };
@@ -98,7 +98,7 @@ internal sealed class DocumentBridge
             var suggested = string.IsNullOrWhiteSpace(relativePath) ? "untitled.txt" : Path.GetFileName(relativePath);
             var dialog = new SaveFileDialog
             {
-                Title = "Save a file in Photos Agape Aphthartos",
+                Title = "Save a file in Phos Agape Aphthartos",
                 InitialDirectory = _workspaceRoot,
                 FileName = suggested,
                 OverwritePrompt = true,

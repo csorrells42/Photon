@@ -21,7 +21,7 @@
 
 Photon turns [Hermes Agent](https://github.com/NousResearch/hermes-agent) into a cohesive, desktop-grade engineering environment. It combines an autonomous agent workspace with native developer services, operational intelligence, source control, and an emerging CAD platform—without flattening everything into one privileged process.
 
-The application is internally named **Photos Agape Aphthartos**; **Photon** is its public-facing identity and default assistant name. Hermes remains the isolated agent runtime and upstream compatibility boundary.
+The application is formally named **Phos Agape Aphthartos**; **Photon** is its public-facing product identity and default assistant name. Hermes remains the isolated agent runtime and upstream compatibility boundary.
 
 > **Development preview:** Photon is under active construction. The repository contains working product surfaces, focused smoke suites, and portable-delivery tooling, but it is not yet presented as a finished general-availability release.
 
