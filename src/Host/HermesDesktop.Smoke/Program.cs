@@ -12,6 +12,9 @@ using HermesDeveloperServices;
 if (args.Contains("--photon-cad-only", StringComparer.Ordinal))
     return await PhotonCadBridgeSmoke.RunAsync() ? 0 : 95;
 
+if (args.Contains("--photon-cad-live-industrial", StringComparer.Ordinal))
+    return await PhotonCadBridgeSmoke.RunLiveIndustrialAsync(Directory.GetCurrentDirectory()) ? 0 : 96;
+
 const string marker = "__HERMES_CONPTY_OK__";
 
 await WorkspaceSearchBridgeSmoke.RunAsync();

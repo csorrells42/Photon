@@ -10,6 +10,7 @@ import {
   closePhotonCadNewProjectDialog,
   normalizePhotonCadNewProjectDetails,
   openPhotonCadNewProjectDialog,
+  photonCadDescribeNeedsBridgeRetry,
   photonCadCloseRequiresConfirmation,
   photonCadAcceptedRuntimeSnapshot,
   photonCadControllerForAttachment,
@@ -270,6 +271,14 @@ describe('PhotonCadDesktopWorkspace', () => {
     schedulePhotonCadLifecycleCleanup(() => generation, 2, cleanup, (callback) => scheduled.push(callback))
     scheduled.shift()!()
     expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries only the bounded pre-injection desktop bridge describe result', () => {
+    expect(photonCadDescribeNeedsBridgeRetry({ contractVersion: 1, status: 'unavailable', reason: 'desktop-host-unavailable' }, 0)).toBe(true)
+    expect(photonCadDescribeNeedsBridgeRetry({ contractVersion: 1, status: 'unavailable', reason: 'desktop-host-unavailable' }, 39)).toBe(true)
+    expect(photonCadDescribeNeedsBridgeRetry({ contractVersion: 1, status: 'unavailable', reason: 'desktop-host-unavailable' }, 40)).toBe(false)
+    expect(photonCadDescribeNeedsBridgeRetry({ contractVersion: 1, status: 'unavailable', reason: 'industrial_runtime_unavailable' }, 0)).toBe(false)
+    expect(photonCadDescribeNeedsBridgeRetry({ contractVersion: 1, status: 'available', reason: 'ready' }, 0)).toBe(false)
   })
 
   it('renders an honest empty project shell without inventing a viewer or host success', () => {

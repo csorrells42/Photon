@@ -100,7 +100,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             lock (_rendererLock)
             {
                 if (_disposed || !_rendererAdmissionOpen) return;
-                LogProjectFrame(message);
+                LogCadResultFrame(message);
                 post(message);
             }
         };
@@ -130,14 +130,14 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             new PhotonCadPreviewCustodyOptions(previewOrigin, PreviewResourcePathPrefix));
     }
 
-    private static void LogProjectFrame(object message)
+    private static void LogCadResultFrame(object message)
     {
         try
         {
             var frame = JsonSerializer.SerializeToElement(message);
             if (!frame.TryGetProperty("type", out var typeElement)
-                || typeElement.GetString() is not { } type
-                || !type.StartsWith("photonCad.project.", StringComparison.Ordinal))
+                || SafeDiagnosticToken(typeElement.GetString()) is not { } type
+                || !type.StartsWith("photonCad.", StringComparison.Ordinal))
             {
                 return;
             }
@@ -146,23 +146,31 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             string? reason = null;
             if (frame.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.Object)
             {
-                if (value.TryGetProperty("status", out var statusElement)) status = statusElement.GetString();
-                if (value.TryGetProperty("reason", out var reasonElement)) reason = reasonElement.GetString();
+                if (value.TryGetProperty("status", out var statusElement)) status = SafeDiagnosticToken(statusElement.GetString());
+                if (value.TryGetProperty("reason", out var reasonElement)) reason = SafeDiagnosticToken(reasonElement.GetString());
             }
             else if (frame.TryGetProperty("code", out var codeElement))
             {
                 status = "error";
-                reason = codeElement.GetString();
+                reason = SafeDiagnosticToken(codeElement.GetString());
             }
 
             // Project status and reason are already identifier-bounded. Never serialize the full
             // frame: it can carry opaque handles and project metadata that diagnostics do not need.
-            DesktopLog.Write($"Photon CAD project frame: type={type}, status={status ?? "none"}, reason={reason ?? "none"}");
+            DesktopLog.Write($"Photon CAD result frame: type={type}, status={status ?? "none"}, reason={reason ?? "none"}");
         }
         catch
         {
             // Diagnostics cannot affect the host-to-renderer result path.
         }
+    }
+
+    private static string? SafeDiagnosticToken(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 128) return null;
+        return value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_' or ':')
+            ? value
+            : null;
     }
 
     internal bool ProjectActionsAvailable => !_disposed && _projects.Readiness.Available;
@@ -194,6 +202,8 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         if (message.ValueKind != JsonValueKind.Object || !TryBeginRendererHandler()) return;
         try
         {
+            if (SafeDiagnosticToken(type) is { } safeType && safeType.StartsWith("photonCad.", StringComparison.Ordinal))
+                DesktopLog.Write($"Photon CAD request frame: type={safeType}");
             switch (type)
             {
                 case "photonCad.describe":
@@ -317,6 +327,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 }
                 catch (Exception exception) when (IsIndustrialAvailabilityFailure(exception))
                 {
+                    DesktopLog.Write($"Photon CAD industrial runtime unavailable: {SafeAvailabilityDiagnostic(exception)}");
                     _post(new
                     {
                         type = "photonCad.describe.result",
@@ -730,6 +741,15 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     private static bool IsIndustrialAvailabilityFailure(Exception exception) => exception is
         ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException or
         System.ComponentModel.Win32Exception or CryptographicException or JsonException or TimeoutException;
+
+    private static string SafeAvailabilityDiagnostic(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (SafeDiagnosticToken(current.Message) is { } code) return $"{current.GetType().Name}:{code}";
+        }
+        return exception.GetType().Name;
+    }
 
     private Task ResolvePreviewAsync(JsonElement message)
     {

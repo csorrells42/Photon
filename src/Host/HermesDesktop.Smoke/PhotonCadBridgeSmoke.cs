@@ -15,6 +15,110 @@ using PhotonCadRuntime;
 
 internal static class PhotonCadBridgeSmoke
 {
+    internal static async Task<bool> RunLiveIndustrialAsync(string installRoot)
+    {
+        EnsureRuntimeSyncLoadedForSmoke();
+        var exactInstallRoot = Path.GetFullPath(installRoot);
+        var tempRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"photon-cad-bridge-smoke-live-{Guid.NewGuid():N}"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var projectPath = Path.Combine(tempRoot, "live-industrial.photoncad");
+            var frames = new List<JsonElement>();
+            var origin = new Uri("https://127.0.0.1:4173/", UriKind.Absolute);
+            await using var bridge = new PhotonCadBridge(
+                exactInstallRoot,
+                message => frames.Add(JsonSerializer.SerializeToElement(message)),
+                projectDialog: new SmokeProjectDialog(projectPath),
+                workbenchOrigin: origin);
+
+            var epoch = await bridge.ResetAsync();
+            if (!bridge.TryOpenRendererGeneration(epoch)) return Fail("Live industrial bridge generation did not open.");
+            await SendAsync(bridge,
+                """{"type":"photonCad.describe","version":1,"contractVersion":1,"requestId":"live-industrial-describe"}""");
+            var described = Frame(frames, "photonCad.describe.result").GetProperty("value");
+            if (Text(described, "status") != "available"
+                || Text(described, "reason") != "ready"
+                || described.GetProperty("catalog").GetProperty("capabilities").GetArrayLength() != 2)
+                return Fail("Live industrial provider did not expose its exact ready catalog.");
+
+            var identity = await CreateCanonicalProjectAsync(bridge, frames, "live-industrial");
+            var box = await ExecuteLivePrimitiveAsync(
+                bridge, frames, "live-box", identity.SessionId, identity.ProjectId, 0,
+                CadPinnedCapabilityCatalog.BoxCapabilityId, expectedRevision: 2, expectedPreviewEntities: 1);
+            if (!await ReadLivePreviewAsync(bridge, frames, identity, box, "live-box-preview")) return false;
+
+            var cylinder = await ExecuteLivePrimitiveAsync(
+                bridge, frames, "live-cylinder", identity.SessionId, identity.ProjectId, 2,
+                CadPinnedCapabilityCatalog.CylinderCapabilityId, expectedRevision: 4, expectedPreviewEntities: 2);
+            if (!await ReadLivePreviewAsync(bridge, frames, identity, cylinder, "live-cylinder-preview")) return false;
+
+            var codec = new PhotonCadCanonicalProjectCodecV1();
+            var reopened = codec.Decode(await File.ReadAllBytesAsync(projectPath));
+            var state = codec.Inspect(reopened);
+            if (reopened.Dirty || reopened.Revision != 4
+                || state.Entities.Count != 2
+                || state.Occurrences.Count != 2
+                || state.Operations.Count != 4
+                || state.Artifacts.Count(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry) != 2
+                || state.Artifacts.Count(value => value.Role == PhotonCadArtifactRoleV1.ProjectPreview) != 1)
+                return Fail("Live industrial project did not reopen as exact clean revision four with complete geometry and preview state.");
+
+            Console.WriteLine("Desktop Photon CAD LIVE industrial Docker 0-to-2-to-4 persistence and preview responder passed.");
+            return true;
+        }
+        finally { DeleteOwnedSmokeRoot(tempRoot); }
+    }
+
+    private static async Task<JsonElement> ExecuteLivePrimitiveAsync(
+        PhotonCadBridge bridge,
+        List<JsonElement> frames,
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        string capabilityId,
+        long expectedRevision,
+        int expectedPreviewEntities)
+    {
+        await SendPrimitiveAsync(bridge, requestId, sessionId, projectId, baseRevision, capabilityId);
+        var value = Frame(frames, "photonCad.execute.result").GetProperty("value");
+        if (Text(value, "status") != "accepted"
+            || value.GetProperty("resultingRevision").GetInt64() != expectedRevision
+            || !value.TryGetProperty("preview", out var preview)
+            || preview.GetProperty("entityCount").GetInt32() != expectedPreviewEntities)
+            throw new InvalidOperationException($"Live industrial {capabilityId} did not return the exact committed preview result.");
+        return preview.Clone();
+    }
+
+    private static async Task<bool> ReadLivePreviewAsync(
+        PhotonCadBridge bridge,
+        List<JsonElement> frames,
+        (string SessionId, string ProjectId) identity,
+        JsonElement preview,
+        string requestId)
+    {
+        var revision = preview.GetProperty("revision").GetInt64();
+        var previewId = Text(preview, "previewId")!;
+        var digest = Text(preview, "contentDigest")!;
+        await SendAsync(bridge, $$"""
+            {"type":"photonCad.preview.resolve","version":1,"contractVersion":1,"requestId":"{{requestId}}","sessionId":"{{identity.SessionId}}","projectId":"{{identity.ProjectId}}","revision":{{revision}},"previewId":"{{previewId}}","expectedDigest":"{{digest}}","maximumBytes":134217728}
+            """);
+        var resolved = Frame(frames, "photonCad.preview.resolve.result").GetProperty("value");
+        if (Text(resolved, "status") != "available" || Text(resolved, "contentDigest") != digest)
+            return Fail("Live industrial committed preview did not resolve through its exact receipt.");
+        var url = new Uri(Text(resolved, "url")!, UriKind.Absolute);
+        using var response = bridge.TryRespondPreviewResource("GET", url, true)!;
+        if (response.StatusCode != 200 || response.Content is null)
+            return Fail("Live industrial preview responder did not return the authorized GLB.");
+        using var memory = new MemoryStream();
+        await response.Content.CopyToAsync(memory);
+        var bytes = memory.ToArray();
+        if (bytes.Length < 20 || BinaryPrimitives.ReadUInt32LittleEndian(bytes) != 0x46546C67)
+            return Fail("Live industrial preview responder did not return a valid GLB envelope.");
+        return true;
+    }
+
     internal static async Task<bool> RunAsync()
     {
         EnsureRuntimeSyncLoadedForSmoke();

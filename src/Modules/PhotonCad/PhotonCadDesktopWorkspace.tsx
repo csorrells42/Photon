@@ -559,16 +559,29 @@ export function PhotonCadDesktopWorkspace({
       return
     }
     let active = true
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
     const generation = ++describeGeneration.current
     setDescribedRuntime({ contractVersion: PHOTON_CAD_CONTRACT_VERSION, status: 'checking', reason: 'unavailable' })
-    void coreControllerRef.current!.describe().then((description) => {
-      if (active && generation === describeGeneration.current) setDescribedRuntime(description)
-    }).catch(() => {
-      if (active && generation === describeGeneration.current) {
-        setDescribedRuntime({ contractVersion: PHOTON_CAD_CONTRACT_VERSION, status: 'error', reason: 'unavailable' })
+    const describe = async (attempt = 0): Promise<void> => {
+      try {
+        const description = await coreControllerRef.current!.describe()
+        if (!active || generation !== describeGeneration.current) return
+        if (photonCadDescribeNeedsBridgeRetry(description, attempt)) {
+          retryTimer = setTimeout(() => void describe(attempt + 1), 250)
+          return
+        }
+        setDescribedRuntime(description)
+      } catch {
+        if (active && generation === describeGeneration.current) {
+          setDescribedRuntime({ contractVersion: PHOTON_CAD_CONTRACT_VERSION, status: 'error', reason: 'unavailable' })
+        }
       }
-    })
-    return () => { active = false }
+    }
+    void describe()
+    return () => {
+      active = false
+      if (retryTimer !== undefined) clearTimeout(retryTimer)
+    }
   }, [suppliedRuntimeDescription])
 
   useEffect(() => {
@@ -1180,6 +1193,12 @@ export function schedulePhotonCadLifecycleCleanup(
   schedule(() => {
     if (currentGeneration() === scheduledGeneration) cleanup()
   })
+}
+
+export function photonCadDescribeNeedsBridgeRetry(description: PhotonCadRuntimeDescription, attempt: number) {
+  return attempt < 40
+    && description.status === 'unavailable'
+    && description.reason === 'desktop-host-unavailable'
 }
 
 export function normalizePhotonCadNewProjectDetails(value: NewProjectDraft | null | undefined): NewProjectDraft | null {
