@@ -27,6 +27,9 @@ internal sealed class HermesConnectionsBridge : IDisposable
     private readonly CredentialPrincipalBinding _principal;
     private readonly DpapiCredentialVaultV2 _vault;
     private readonly NativeCredentialBrokerV2 _broker;
+    private readonly SessionCredentialLeaseResolver _sessionResolver = new();
+    private readonly ICredentialLeaseResolver _leaseResolver;
+    private readonly OpenRouterUsageCollector _openRouterValidator = new();
     private readonly Dictionary<string, ReviewBinding> _reviews = new(StringComparer.Ordinal);
     private readonly string _workbenchSessionId = $"wbs2_{Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()}";
     private CredentialDialog? _dialog;
@@ -36,7 +39,7 @@ internal sealed class HermesConnectionsBridge : IDisposable
 
     internal CredentialPrincipalBinding Principal => _principal;
 
-    internal ICredentialLeaseResolver LeaseResolver => _vault;
+    internal ICredentialLeaseResolver LeaseResolver => _leaseResolver;
 
     internal HermesConnectionsBridge(string applicationInstallRoot, Action<object> postMessage)
     {
@@ -53,6 +56,7 @@ internal sealed class HermesConnectionsBridge : IDisposable
             "CredentialsV2");
         _vault = new DpapiCredentialVaultV2(root, _principal, new CurrentUserDpapiRecordProtector(), new StrictWindowsCredentialStorageSecurity());
         _broker = new NativeCredentialBrokerV2(_vault);
+        _leaseResolver = new RoutedCredentialLeaseResolver(_sessionResolver, _vault);
     }
 
     internal async Task ListAsync(int version, string? requestId)
@@ -126,6 +130,72 @@ internal sealed class HermesConnectionsBridge : IDisposable
                 secret?.Dispose();
                 CryptographicOperations.ZeroMemory(bytes);
             }
+        }
+        catch (Exception exception) { PostFailure(id, exception); }
+    }
+
+    internal async Task ForceOpenRouterSessionAsync(int version, string? requestId)
+    {
+        if (!TryEnvelope(version, requestId, out var id)) return;
+        try
+        {
+            var definition = Catalog["openrouter:default"];
+            _dialog?.Close();
+            _dialog = new CredentialDialog(
+                definition.DisplayName,
+                "temporary-session",
+                definition.Purposes,
+                "SESSION ONLY · ERASED WHEN PHOTON CLOSES",
+                "Enter a prepaid OpenRouter API key. Photon sends it directly to OpenRouter for validation, then keeps it only in the trusted desktop process for this session.",
+                "The key is not written to the credential vault, browser storage, configuration, logs, transcript, command line, or environment variables.",
+                "Validate & connect")
+            { Owner = System.Windows.Application.Current.MainWindow };
+            if (_dialog.ShowDialog() != true)
+            {
+                _dialog.ClearSecret();
+                _dialog = null;
+                PostError(id, "cancelled", "The OpenRouter session connection was cancelled.", retryable: true);
+                return;
+            }
+
+            using var secure = _dialog.TakeSecret();
+            _dialog = null;
+            var bytes = Utf8Bytes(secure);
+            CredentialSecret? secret = null;
+            try
+            {
+                var key = Encoding.UTF8.GetString(bytes);
+                try { _ = await _openRouterValidator.CollectAsync(key).ConfigureAwait(true); }
+                finally { key = string.Empty; }
+                secret = new CredentialSecret(bytes);
+                var metadata = _sessionResolver.Replace(new CredentialBinding(
+                    _principal,
+                    definition.ProviderId,
+                    definition.SlotId,
+                    definition.AuthKind,
+                    CredentialSourceKind.Native,
+                    definition.Purposes), secret);
+                secret = null;
+                RuntimeBindingsChanged?.Invoke(this, EventArgs.Empty);
+                _postMessage(new
+                {
+                    type = "connections.openrouter.session.result",
+                    version = HermesCredentialBrokerProtocol.Version,
+                    requestId = id,
+                    providerId = definition.ProviderId,
+                    revision = metadata.Revision,
+                    sessionOnly = true,
+                });
+            }
+            finally
+            {
+                secret?.Dispose();
+                CryptographicOperations.ZeroMemory(bytes);
+            }
+        }
+        catch (UsageCollectionException exception)
+        {
+            PostError(id, exception.Code, exception.Message, exception.Retryable);
         }
         catch (Exception exception) { PostFailure(id, exception); }
     }
@@ -307,6 +377,19 @@ internal sealed class HermesConnectionsBridge : IDisposable
                 runtime.Purpose,
                 entry.Revision));
         }
+        var session = _sessionResolver.CurrentMetadata;
+        if (session is not null
+            && session.ProviderId == "openrouter"
+            && session.SlotId == "default"
+            && session.Purposes.Contains("model:openrouter", StringComparer.Ordinal))
+        {
+            result.RemoveAll(entry => entry.EnvironmentName == "OPENROUTER_API_KEY");
+            result.Add(new CredentialRuntimeBindingMetadata(
+                "OPENROUTER_API_KEY",
+                session.ConnectionRef.Value,
+                "model:openrouter",
+                session.Revision));
+        }
         return result.OrderBy(entry => entry.EnvironmentName, StringComparer.Ordinal).ToArray();
     }
 
@@ -316,6 +399,8 @@ internal sealed class HermesConnectionsBridge : IDisposable
         _disposed = true;
         _dialog?.Close();
         _dialog?.ClearSecret();
+        _openRouterValidator.Dispose();
+        _sessionResolver.Dispose();
         _broker.Dispose();
         _vault.Dispose();
     }
@@ -328,6 +413,18 @@ internal sealed class HermesConnectionsBridge : IDisposable
         string[] Purposes);
 
     private sealed record ReviewBinding(CredentialReviewAction Action, DateTimeOffset ExpiresAt);
+
+    private sealed class RoutedCredentialLeaseResolver(
+        SessionCredentialLeaseResolver session,
+        ICredentialLeaseResolver persistent) : ICredentialLeaseResolver
+    {
+        public Task<CredentialLease> ResolveLeaseAsync(
+            CredentialLeaseRequest request,
+            CancellationToken cancellationToken = default) =>
+            session.Owns(request.ConnectionRef)
+                ? session.ResolveLeaseAsync(request, cancellationToken)
+                : persistent.ResolveLeaseAsync(request, cancellationToken);
+    }
 }
 
 internal sealed record CredentialRuntimeBindingMetadata(

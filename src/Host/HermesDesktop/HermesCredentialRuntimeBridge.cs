@@ -13,7 +13,9 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
     private const string ProfilePath = "/run/photon-credentials/profile.json";
     private const string BootstrapPath = "/run/photon-credentials/bootstrap.bin";
     private const int MaximumDockerOutputCharacters = 64 * 1024;
+    internal const int CredentialGatewayPort = 9119;
     private static readonly TimeSpan SessionLifetime = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan SessionRenewalInterval = TimeSpan.FromMinutes(8);
     private static readonly TimeSpan InspectionInterval = TimeSpan.FromSeconds(2);
     private const string WriteProfileScript =
         "umask 077; install -d -m 700 -o 10000 -g 10000 /run/photon-credentials; " +
@@ -77,6 +79,7 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
                 var active = new CancellationTokenSource();
                 _activeCancellation = active;
                 _activeTask = RunSessionAsync(reinspection, bootstrap, active.Token);
+                _ = RenewSessionAsync(active);
                 bootstrap = null;
                 return;
             }
@@ -108,7 +111,7 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
         {
             var client = new CredentialRuntimeClient(() =>
                 new DockerExecCredentialRuntimeSocket(_dockerExecutable, runtime.ContainerId));
-            var endpoint = BuildEndpoint(bootstrap.SessionId);
+            var endpoint = BuildCredentialEndpoint(_workbenchUri, bootstrap.SessionId);
             var channel = client.RunAsync(endpoint, bootstrap, _connections.LeaseResolver, linked.Token);
             var monitor = MonitorIdentityAsync(runtime, linked);
             await Task.WhenAny(channel, monitor).ConfigureAwait(false);
@@ -132,6 +135,25 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
         }
     }
 
+    private async Task RenewSessionAsync(CancellationTokenSource owner)
+    {
+        try
+        {
+            await Task.Delay(SessionRenewalInterval, owner.Token).ConfigureAwait(false);
+            if (!owner.IsCancellationRequested) await RestartAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (owner.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception exception)
+        {
+            DesktopLog.Write($"Native credential runtime renewal failed safely: {exception.GetType().Name}");
+        }
+    }
+
     private async Task MonitorIdentityAsync(VerifiedHermesRuntime expected, CancellationTokenSource cancellation)
     {
         while (!cancellation.IsCancellationRequested)
@@ -144,13 +166,15 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
         }
     }
 
-    private Uri BuildEndpoint(string sessionId)
+    internal static Uri BuildCredentialEndpoint(Uri workbenchUri, string sessionId)
     {
-        if (!DesktopOptions.IsTrustedWorkbenchUri(_workbenchUri))
+        if (!DesktopOptions.IsTrustedWorkbenchUri(workbenchUri))
             throw new CredentialRuntimeException("endpoint_untrusted", "The Workbench credential endpoint is not trusted.");
-        var builder = new UriBuilder(_workbenchUri)
+        var builder = new UriBuilder(workbenchUri)
         {
-            Scheme = _workbenchUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
+            Scheme = workbenchUri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
+            Host = "127.0.0.1",
+            Port = CredentialGatewayPort,
             Path = "/api/workbench/credentials/v2",
             Query = $"session={Uri.EscapeDataString(sessionId)}",
             Fragment = string.Empty,
@@ -243,7 +267,7 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
             || !StringComparer.Ordinal.Equals(container.GetProperty("Image").GetString(), imageId)
             || container.GetProperty("State").GetProperty("Running").ValueKind != JsonValueKind.True)
             throw new CredentialRuntimeException("container_binding_mismatch", "The running Hermes container does not match the verified generation.");
-        RequireLoopbackPort(container, _workbenchUri.Port);
+        RequireLoopbackGatewayPort(container);
 
         var image = await RunDockerAsync(["image", "inspect", imageId], imageId, null, cancellationToken).ConfigureAwait(false);
         using var images = StrictJson(Encoding.UTF8.GetBytes(image));
@@ -253,17 +277,17 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
         return new VerifiedHermesRuntime(containerId, imageId);
     }
 
-    private static void RequireLoopbackPort(JsonElement container, int expectedPort)
+    internal static void RequireLoopbackGatewayPort(JsonElement container)
     {
         var ports = container.GetProperty("NetworkSettings").GetProperty("Ports");
-        if (!ports.TryGetProperty("9119/tcp", out var bindings)
+        if (!ports.TryGetProperty($"{CredentialGatewayPort}/tcp", out var bindings)
             || bindings.ValueKind != JsonValueKind.Array
             || bindings.GetArrayLength() != 1)
             throw new CredentialRuntimeException("runtime_port_untrusted", "The Hermes credential endpoint is not published on one fixed port.");
         var binding = bindings[0];
         if (!StringComparer.Ordinal.Equals(binding.GetProperty("HostIp").GetString(), "127.0.0.1")
             || !int.TryParse(binding.GetProperty("HostPort").GetString(), out var port)
-            || port != expectedPort)
+            || port != CredentialGatewayPort)
             throw new CredentialRuntimeException("runtime_port_untrusted", "The Hermes credential endpoint is not loopback-bound.");
     }
 

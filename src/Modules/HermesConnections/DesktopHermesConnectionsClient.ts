@@ -10,7 +10,9 @@ import {
   normalizeConnectionRef,
   normalizeConnectionReview,
   normalizeIdentifier,
+  normalizeOpenRouterSessionConnection,
   normalizeReviewHandle,
+  type OpenRouterSessionConnection,
 } from './contracts'
 
 type WebViewBridge = {
@@ -31,6 +33,7 @@ export interface HermesConnectionsClient {
   beginRemove(connectionRef: string, expectedRevision: number, signal?: AbortSignal): Promise<ConnectionClientResult<ConnectionReview>>
   commit(reviewHandle: string, signal?: AbortSignal): Promise<ConnectionClientResult<ConnectionMetadata | null>>
   cancel(reviewHandle: string, signal?: AbortSignal): Promise<ConnectionClientResult<null>>
+  forceOpenRouterSession(signal?: AbortSignal): Promise<ConnectionClientResult<OpenRouterSessionConnection>>
 }
 
 export class DesktopHermesConnectionsClient implements HermesConnectionsClient {
@@ -49,7 +52,7 @@ export class DesktopHermesConnectionsClient implements HermesConnectionsClient {
   beginChange(intent: ConnectionChangeIntent, signal?: AbortSignal) {
     const safe = assertSafeChangeIntent(intent)
     return this.request<ConnectionReview>('connections.change.begin', safe, (frame) =>
-      frame.type === 'connections.review.ready' ? normalizeConnectionReview(frame.review) : null, signal)
+      frame.type === 'connections.review.ready' ? normalizeConnectionReview(frame.review) : null, signal, false, null)
   }
 
   beginRemove(connectionRef: string, expectedRevision: number, signal?: AbortSignal) {
@@ -78,12 +81,24 @@ export class DesktopHermesConnectionsClient implements HermesConnectionsClient {
       frame.type === 'connections.review.cancelled' ? null : undefined, signal, true)
   }
 
+  forceOpenRouterSession(signal?: AbortSignal) {
+    return this.request<OpenRouterSessionConnection>(
+      'connections.openrouter.session.force',
+      {},
+      (frame) => normalizeOpenRouterSessionConnection(frame),
+      signal,
+      false,
+      null,
+    )
+  }
+
   private request<T>(
     type: string,
     payload: Record<string, unknown>,
     normalize: (frame: ConnectionsHostFrame) => T | null | undefined,
     signal?: AbortSignal,
     nullIsSuccess = false,
+    timeoutMs: number | null = 10_000,
   ): Promise<ConnectionClientResult<T>> {
     const bridge = this.bridge()
     if (!bridge) return Promise.resolve({ kind: 'unavailable', message: 'Native Connections & Credentials is not registered in this build.' })
@@ -94,7 +109,7 @@ export class DesktopHermesConnectionsClient implements HermesConnectionsClient {
       const finish = (result: ConnectionClientResult<T>) => {
         if (settled) return
         settled = true
-        window.clearTimeout(timeout)
+        if (timeout !== null) window.clearTimeout(timeout)
         signal?.removeEventListener('abort', abort)
         bridge.removeEventListener('message', receive)
         resolve(result)
@@ -115,7 +130,12 @@ export class DesktopHermesConnectionsClient implements HermesConnectionsClient {
         const value = normalize(frame)
         if (value !== undefined && (value !== null || nullIsSuccess)) finish({ kind: 'success', value: value as T })
       }
-      const timeout = window.setTimeout(() => finish({ kind: 'failure', code: 'timeout', message: 'The native credential request timed out.', retryable: true }), 10_000)
+      // A native credential dialog is explicitly user-paced. Never abandon its
+      // correlated listener while the user is still entering or reviewing a key.
+      // Bounded non-interactive operations retain their transport timeout.
+      const timeout = timeoutMs === null
+        ? null
+        : window.setTimeout(() => finish({ kind: 'failure', code: 'timeout', message: 'The native credential request timed out.', retryable: true }), timeoutMs)
       signal?.addEventListener('abort', abort, { once: true })
       bridge.addEventListener('message', receive)
       try {

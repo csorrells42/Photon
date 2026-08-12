@@ -22,7 +22,10 @@ internal sealed class CredentialDialog : Window
         string provider,
         string credentialId,
         IReadOnlyList<string>? purposes = null,
-        string storageLabel = "WINDOWS CREDENTIAL MANAGER")
+        string storageLabel = "WINDOWS CREDENTIAL MANAGER",
+        string? description = null,
+        string? note = null,
+        string actionLabel = "Save securely")
     {
         Title = $"Connect {provider}";
         Width = 520;
@@ -65,17 +68,17 @@ internal sealed class CredentialDialog : Window
         Grid.SetRow(title, 1);
         content.Children.Add(title);
 
-        var description = new TextBlock
+        var descriptionBlock = new TextBlock
         {
-            Text = $"Credential profile: {credentialId}. Authorized use: {FormatPurposes(purposes)}. The secret goes directly into your Windows vault and is never returned to the Workbench renderer.",
+            Text = description ?? $"Credential profile: {credentialId}. Authorized use: {FormatPurposes(purposes)}. The secret goes directly into your Windows vault and is never returned to the Workbench renderer.",
             Foreground = MutedTextBrush,
             FontSize = 13,
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 19,
             Margin = new Thickness(0, 0, 0, 20),
         };
-        Grid.SetRow(description, 2);
-        content.Children.Add(description);
+        Grid.SetRow(descriptionBlock, 2);
+        content.Children.Add(descriptionBlock);
 
         var field = new StackPanel();
         field.Children.Add(new TextBlock
@@ -102,17 +105,17 @@ internal sealed class CredentialDialog : Window
         Grid.SetRow(field, 3);
         content.Children.Add(field);
 
-        var note = new TextBlock
+        var noteBlock = new TextBlock
         {
-            Text = "Hermes Workbench stores only an opaque credential reference in its UI. Provider collectors will read the secret inside the trusted desktop host.",
+            Text = note ?? "Hermes Workbench stores only an opaque credential reference in its UI. Provider collectors will read the secret inside the trusted desktop host.",
             Foreground = MutedTextBrush,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, 12, 0, 0),
         };
-        Grid.SetRow(note, 4);
-        content.Children.Add(note);
+        Grid.SetRow(noteBlock, 4);
+        content.Children.Add(noteBlock);
 
         var actions = new StackPanel
         {
@@ -128,7 +131,7 @@ internal sealed class CredentialDialog : Window
         };
         actions.Children.Add(cancelButton);
 
-        _saveButton = CreateButton("Save securely", AccentBrush, AccentBrush);
+        _saveButton = CreateButton(actionLabel, AccentBrush, AccentBrush);
         _saveButton.IsDefault = true;
         _saveButton.IsEnabled = false;
         _saveButton.Margin = new Thickness(10, 0, 0, 0);

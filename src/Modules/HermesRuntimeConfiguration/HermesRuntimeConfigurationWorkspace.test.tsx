@@ -24,6 +24,9 @@ describe('Hermes runtime configuration workspace', () => {
         options: vi.fn(async () => modelCatalog),
         selectDefault: vi.fn(async () => ({ confirmRequired: false, deferred: false, model: '' })),
       }}
+      sessionConnectionsClient={{
+        forceOpenRouterSession: vi.fn(async () => ({ kind: 'success' as const, value: { providerId: 'openrouter' as const, revision: 1, sessionOnly: true as const } })),
+      }}
       onOpenConnections={() => undefined}
     />)
     expect(markup).toContain('Hosted providers')
@@ -34,5 +37,27 @@ describe('Hermes runtime configuration workspace', () => {
     expect(markup).toContain('LM Studio remains fully authoritative')
     expect(markup).not.toContain('type="password"')
     expect(markup).not.toMatch(/API Key|secret value/i)
+  })
+
+  it('places an explicit session-only OpenRouter recovery action beneath hosted selection', () => {
+    const markup = renderToStaticMarkup(<HermesRuntimeConfigurationWorkspace
+      client={{
+        list: vi.fn(async () => ({ current: { provider: '', model: '', baseUrl: '' }, endpoints: [] })),
+        save: vi.fn(), validate: vi.fn(), activate: vi.fn(), delete: vi.fn(), saveProfile: vi.fn(), activateProfile: vi.fn(), deleteProfile: vi.fn(),
+      }}
+      modelAdapter={{
+        options: vi.fn(async () => ({
+          currentProvider: 'openrouter', currentModel: 'deepseek/deepseek-v4-flash',
+          providers: [{ slug: 'openrouter', name: 'OpenRouter', authenticated: true, models: ['deepseek/deepseek-v4-flash'], featuredModels: [], unavailableModels: [], modelMetadata: {}, capabilities: {} }],
+          reasoningControl: { label: 'Reasoning' as const, optionLabels: {}, options: [], source: 'unverified' as const },
+        })),
+        selectDefault: vi.fn(),
+      }}
+      sessionConnectionsClient={{ forceOpenRouterSession: vi.fn(async () => ({ kind: 'unavailable' as const, message: 'native only' })) }}
+      onOpenConnections={() => undefined}
+    />)
+    expect(markup.indexOf('Force OpenRouter session')).toBeGreaterThan(markup.indexOf('Use for new conversations'))
+    expect(markup).toContain('Session only')
+    expect(markup).not.toContain('type="password"')
   })
 })

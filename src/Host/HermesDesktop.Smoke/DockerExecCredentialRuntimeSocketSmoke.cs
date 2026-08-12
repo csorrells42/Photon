@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using HermesCredentialBroker.Runtime;
 using HermesDesktop;
 
@@ -27,6 +28,21 @@ internal static class DockerExecCredentialRuntimeSocketSmoke
         True(!start.Environment.Any(pair =>
             pair.Key.Contains(sessionSentinel, StringComparison.Ordinal)
             || pair.Value?.Contains(sessionSentinel, StringComparison.Ordinal) == true), "session absent from environment");
+
+        var credentialEndpoint = HermesCredentialRuntimeBridge.BuildCredentialEndpoint(
+            new Uri("http://127.0.0.1:4173/"), sessionSentinel);
+        Equal(9119, credentialEndpoint.Port, "credential gateway port independent of Workbench UI port");
+        Equal("ws", credentialEndpoint.Scheme, "credential gateway scheme");
+        Equal("127.0.0.1", credentialEndpoint.Host, "credential gateway host");
+        using (var loopbackPort = JsonDocument.Parse("""
+            {"NetworkSettings":{"Ports":{"9119/tcp":[{"HostIp":"127.0.0.1","HostPort":"9119"}]}}}
+            """))
+        {
+            HermesCredentialRuntimeBridge.RequireLoopbackGatewayPort(loopbackPort.RootElement);
+        }
+        RejectPort("""
+            {"NetworkSettings":{"Ports":{"9119/tcp":[{"HostIp":"0.0.0.0","HostPort":"9119"}]}}}
+            """, "non-loopback gateway publication");
 
         var textPayload = "hello"u8.ToArray();
         var textWire = DockerExecCredentialRuntimeSocket.EncodeHeader(
@@ -71,6 +87,17 @@ internal static class DockerExecCredentialRuntimeSocketSmoke
             throw new InvalidOperationException($"Credential relay accepted {message}.");
         }
         catch (CredentialRuntimeException exception) when (exception.Code == "relay_protocol_invalid") { }
+    }
+
+    private static void RejectPort(string json, string message)
+    {
+        using var document = JsonDocument.Parse(json);
+        try
+        {
+            HermesCredentialRuntimeBridge.RequireLoopbackGatewayPort(document.RootElement);
+            throw new InvalidOperationException($"Credential relay accepted {message}.");
+        }
+        catch (CredentialRuntimeException exception) when (exception.Code == "runtime_port_untrusted") { }
     }
 
     private static void True(bool condition, string message)

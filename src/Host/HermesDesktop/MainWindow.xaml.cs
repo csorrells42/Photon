@@ -429,6 +429,12 @@ public partial class MainWindow : Window
                         GetString(document.RootElement, "existingReference"),
                         GetInteger(document.RootElement, "expectedRevision", -1));
                     break;
+                case "connections.openrouter.session.force":
+                    if (_connectionsBridge is null) { PostConnectionsUnavailable(GetString(document.RootElement, "requestId")); break; }
+                    await _connectionsBridge.ForceOpenRouterSessionAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"));
+                    break;
                 case "connections.remove.review":
                     if (_connectionsBridge is null) { PostConnectionsUnavailable(GetString(document.RootElement, "requestId")); break; }
                     await _connectionsBridge.BeginRemoveAsync(

@@ -55,6 +55,12 @@ export type ConnectionClientResult<T> =
   | { kind: 'failure'; code: string; message: string; retryable: boolean }
   | { kind: 'unavailable'; message: string }
 
+export type OpenRouterSessionConnection = {
+  providerId: 'openrouter'
+  revision: number
+  sessionOnly: true
+}
+
 export type ConnectionsHostFrame = {
   type?: unknown
   version?: unknown
@@ -65,6 +71,21 @@ export type ConnectionsHostFrame = {
   code?: unknown
   message?: unknown
   retryable?: unknown
+  providerId?: unknown
+  revision?: unknown
+  sessionOnly?: unknown
+}
+
+export function normalizeOpenRouterSessionConnection(value: ConnectionsHostFrame): OpenRouterSessionConnection | null {
+  const revision = typeof value.revision === 'number' && Number.isSafeInteger(value.revision) && value.revision > 0
+    ? value.revision
+    : null
+  return value.type === 'connections.openrouter.session.result'
+    && value.providerId === 'openrouter'
+    && value.sessionOnly === true
+    && revision !== null
+    ? { providerId: 'openrouter', revision, sessionOnly: true }
+    : null
 }
 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/

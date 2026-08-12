@@ -1,15 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Check, CircleAlert, Cloud, Cpu, KeyRound, LoaderCircle, Network, Plus, RefreshCw, Save, Server, SlidersHorizontal, Trash2, Zap } from 'lucide-react'
 import { hermesModelAdapter, type HermesModelCatalog, type HermesModelSelection } from '../HermesSettings/HermesModelAdapter'
+import { DesktopHermesConnectionsClient } from '../HermesConnections'
 import { hermesRuntimeConfigurationClient, type HermesRuntimeConfigurationClient } from './HermesRuntimeConfigurationClient'
 import { type HermesRuntimeEndpoint, type HermesRuntimeEndpointDraft, type HermesRuntimeEndpointSnapshot, type HermesRuntimeEndpointValidation, type HermesRuntimeProfileDraft, type HermesRuntimeProfileOverrides } from './contracts'
 import './HermesRuntimeConfigurationWorkspace.css'
 
 type ModelAdapter = Pick<typeof hermesModelAdapter, 'options' | 'selectDefault'>
+type SessionConnectionsClient = Pick<DesktopHermesConnectionsClient, 'forceOpenRouterSession'>
+const OPENROUTER_SAFE_DEFAULT_MODEL = 'deepseek/deepseek-v4-flash'
+
+function preferredModel(provider: HermesModelCatalog['providers'][number] | undefined, currentModel = '') {
+  if (currentModel && provider?.models.includes(currentModel)) return currentModel
+  if (provider?.slug === 'openrouter' && provider.models.includes(OPENROUTER_SAFE_DEFAULT_MODEL)) return OPENROUTER_SAFE_DEFAULT_MODEL
+  return provider?.models[0] ?? ''
+}
+
+const wait = (milliseconds: number) => new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
+
+async function refreshOpenRouterCatalog(modelAdapter: ModelAdapter) {
+  let catalog = await modelAdapter.options(undefined, true)
+  for (let attempt = 0; attempt < 20 && !catalog.providers.some((provider) => provider.slug === 'openrouter' && provider.authenticated); attempt += 1) {
+    await wait(250)
+    catalog = await modelAdapter.options(undefined, true)
+  }
+  return catalog
+}
 
 export type HermesRuntimeConfigurationWorkspaceProps = {
   client?: HermesRuntimeConfigurationClient
   modelAdapter?: ModelAdapter
+  sessionConnectionsClient?: SessionConnectionsClient
   onOpenConnections: () => void
 }
 
@@ -35,6 +56,7 @@ function message(reason: unknown) {
 export function HermesRuntimeConfigurationWorkspace({
   client = hermesRuntimeConfigurationClient,
   modelAdapter = hermesModelAdapter,
+  sessionConnectionsClient = new DesktopHermesConnectionsClient(),
   onOpenConnections,
 }: HermesRuntimeConfigurationWorkspaceProps) {
   const [catalog, setCatalog] = useState<HermesModelCatalog | null>(null)
@@ -56,7 +78,7 @@ export function HermesRuntimeConfigurationWorkspace({
       setSnapshot(nextSnapshot)
       const provider = nextCatalog.providers.find((item) => item.slug === nextCatalog.currentProvider)
         ?? nextCatalog.providers.find((item) => item.authenticated)
-      setSelection({ provider: provider?.slug ?? '', model: nextCatalog.currentModel || provider?.models[0] || '' })
+      setSelection({ provider: provider?.slug ?? '', model: preferredModel(provider, nextCatalog.currentModel) })
       const current = nextSnapshot.endpoints.find((endpoint) => endpoint.isCurrent) ?? nextSnapshot.endpoints[0]
       if (current) {
         setDraft(draftFromEndpoint(current))
@@ -100,6 +122,35 @@ export function HermesRuntimeConfigurationWorkspace({
       setCatalog(nextCatalog)
       setSnapshot(nextSnapshot)
       setNotice({ tone: 'good', text: `${selection.model} is now the default for new Photon conversations.` })
+    } catch (reason) { setNotice({ tone: 'bad', text: message(reason) }) }
+    finally { setWorking(null) }
+  }
+
+  async function forceOpenRouterSession() {
+    setWorking('openrouter-session')
+    setNotice(null)
+    try {
+      const result = await sessionConnectionsClient.forceOpenRouterSession()
+      if (result.kind === 'unavailable') {
+        setNotice({ tone: 'bad', text: result.message })
+        return
+      }
+      if (result.kind === 'failure') {
+        setNotice({ tone: result.retryable ? 'warn' : 'bad', text: result.message })
+        return
+      }
+      const nextCatalog = await refreshOpenRouterCatalog(modelAdapter)
+      setCatalog(nextCatalog)
+      const openRouter = nextCatalog.providers.find((provider) => provider.slug === 'openrouter')
+      setSelection((current) => ({
+        provider: 'openrouter',
+        model: current.provider === 'openrouter' && current.model
+          ? current.model
+          : preferredModel(openRouter),
+      }))
+      setNotice(openRouter?.authenticated
+        ? { tone: 'good', text: 'OpenRouter is connected for this Photon session only. The key will be erased when Photon closes.' }
+        : { tone: 'warn', text: 'The key was validated by OpenRouter. The encrypted runtime connection is still starting; use Refresh if the catalog does not appear shortly.' })
     } catch (reason) { setNotice({ tone: 'bad', text: message(reason) }) }
     finally { setWorking(null) }
   }
@@ -226,11 +277,12 @@ export function HermesRuntimeConfigurationWorkspace({
           <header><span><Cloud size={16} /></span><div><strong>Hosted providers</strong><small>OpenRouter and authenticated provider catalogs</small></div></header>
           <label><span>Provider</span><select value={selection.provider} onChange={(event) => {
             const provider = catalog?.providers.find((item) => item.slug === event.target.value)
-            setSelection({ provider: event.target.value, model: provider?.models[0] ?? '' })
+            setSelection({ provider: event.target.value, model: preferredModel(provider) })
           }}>{catalog?.providers.filter((provider) => provider.authenticated).map((provider) => <option key={provider.slug} value={provider.slug}>{provider.name}</option>)}</select></label>
           <label><span>Model ID</span><input list="runtime-hosted-models" value={selection.model} onChange={(event) => setSelection((current) => ({ ...current, model: event.target.value }))} placeholder="provider/model" /><datalist id="runtime-hosted-models">{hostedModels.map((model) => <option value={model} key={model} />)}</datalist></label>
           <div className="runtime-configuration__credential"><KeyRound size={14} /><span><strong>Credentials stay native</strong><small>Connect or replace provider keys in Connections. Runtime never displays them.</small></span><button type="button" onClick={onOpenConnections}>Open Connections</button></div>
           <button className="is-primary" type="button" disabled={!selection.provider || !selection.model || working !== null} onClick={() => void useHostedProvider()}>{working === 'hosted' ? <LoaderCircle className="spin" size={14} /> : <Zap size={14} />} Use for new conversations</button>
+          {(!selection.provider || selection.provider === 'openrouter') && <button className="runtime-configuration__force-session" type="button" disabled={working !== null} onClick={() => void forceOpenRouterSession()}>{working === 'openrouter-session' ? <LoaderCircle className="spin" size={14} /> : <KeyRound size={14} />} Force OpenRouter session <small>Session only</small></button>}
         </article>
 
         <article className="runtime-configuration__panel">

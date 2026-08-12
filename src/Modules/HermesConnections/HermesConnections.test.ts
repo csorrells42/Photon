@@ -108,6 +108,42 @@ describe('DesktopHermesConnectionsClient', () => {
       message: 'Native Connections & Credentials is not registered in this build.',
     })
   })
+
+  it('does not time out while the native credential dialog is waiting for the user', async () => {
+    vi.useFakeTimers()
+    const listeners = new Set<(event: MessageEvent) => void>()
+    const bridge = {
+      addEventListener: (_type: 'message', listener: (event: MessageEvent) => void) => listeners.add(listener),
+      removeEventListener: (_type: 'message', listener: (event: MessageEvent) => void) => listeners.delete(listener),
+      postMessage: (message: unknown) => {
+        const request = message as { requestId: string }
+        window.setTimeout(() => listeners.forEach((listener) => listener({ data: {
+          type: 'connections.review.ready',
+          version: hermesConnectionsProtocolVersion,
+          requestId: request.requestId,
+          review,
+        } } as MessageEvent)), 30_000)
+      },
+    }
+    vi.stubGlobal('window', {
+      __HERMES_DESKTOP_HOST__: { capabilities: { connections: true, connectionsVersion: 2 } },
+      chrome: { webview: bridge },
+      setTimeout,
+      clearTimeout,
+    })
+    const pending = new DesktopHermesConnectionsClient().beginChange({
+      profileId: 'profile-1',
+      providerId: catalog.providerId,
+      slotId: catalog.slotId,
+      authKind: catalog.authKind,
+      sourceKind: catalog.sourceKind,
+      purposes: catalog.purposes,
+      expectedRevision: 0,
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+    await expect(pending).resolves.toEqual({ kind: 'success', value: review })
+    vi.useRealTimers()
+  })
 })
 
 describe('HermesConnectionsController', () => {
@@ -138,6 +174,9 @@ class FakeClient implements HermesConnectionsClient {
   async beginChange(intent: unknown): Promise<ConnectionClientResult<ConnectionReview>> {
     this.lastIntent = intent
     return { kind: 'success', value: review }
+  }
+  async forceOpenRouterSession() {
+    return { kind: 'success' as const, value: { providerId: 'openrouter' as const, revision: 1, sessionOnly: true as const } }
   }
   async beginRemove(): Promise<ConnectionClientResult<ConnectionReview>> { return { kind: 'failure', code: 'unused', message: 'unused', retryable: false } }
   async commit(): Promise<ConnectionClientResult<ConnectionMetadata | null>> {

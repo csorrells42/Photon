@@ -8,6 +8,8 @@
 .runtime-configuration button:disabled { opacity: .45; cursor: default; }
 .runtime-configuration button.is-primary { border-color: #6d57ca; background: linear-gradient(135deg, #4f3da2, #6e51c8); color: white; }
 .runtime-configuration button.is-danger { color: #f59aaa; padding-inline: 9px; }
+.runtime-configuration button.runtime-configuration__force-session { border-color: #7b6330; background: #211c11; color: #efd58f; }
+.runtime-configuration button.runtime-configuration__force-session small { margin-left: auto; color: #a58d55; font-size: 8px; letter-spacing: .07em; text-transform: uppercase; }
 .runtime-configuration__notice { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 11px; border: 1px solid; border-radius: 5px; font-size: 11px; }
 .runtime-configuration__notice.is-good { border-color: #1c6f5c; background: #0c2925; color: #82e0c6; }
 .runtime-configuration__notice.is-warn { border-color: #725d25; background: #282211; color: #e8ca78; }

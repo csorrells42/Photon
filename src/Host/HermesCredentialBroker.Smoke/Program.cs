@@ -135,6 +135,33 @@ await suite.RunAsync("runtime lease is exact-purpose revision and principal boun
         foreign, stored.ConnectionRef, "model:chat", stored.Revision)), "principal_mismatch");
 });
 
+await suite.RunAsync("session credential is memory-only replaceable and zeroed on disposal", async () =>
+{
+    var principal = Principal();
+    using var resolver = new SessionCredentialLeaseResolver();
+    var metadata = resolver.Replace(Binding(principal), new CredentialSecret(Encoding.UTF8.GetBytes("session-one")));
+    True(resolver.Owns(metadata.ConnectionRef), "session reference owned");
+    using (var lease = await resolver.ResolveLeaseAsync(new CredentialLeaseRequest(
+        principal, metadata.ConnectionRef, "model:chat", metadata.Revision)))
+    {
+        var copied = new byte[lease.SecretLength];
+        try
+        {
+            lease.CopySecretTo(copied);
+            Equal("session-one", Encoding.UTF8.GetString(copied), "session lease value");
+        }
+        finally { CryptographicOperations.ZeroMemory(copied); }
+    }
+    var replacement = resolver.Replace(Binding(principal), new CredentialSecret(Encoding.UTF8.GetBytes("session-two")));
+    True(!resolver.Owns(metadata.ConnectionRef), "old reference revoked");
+    await ThrowsCodeAsync(async () => _ = await resolver.ResolveLeaseAsync(new CredentialLeaseRequest(
+        principal, metadata.ConnectionRef, "model:chat", metadata.Revision)), "credential_not_found");
+    using var current = await resolver.ResolveLeaseAsync(new CredentialLeaseRequest(
+        principal, replacement.ConnectionRef, "model:chat", replacement.Revision));
+    resolver.Clear();
+    True(resolver.CurrentMetadata is null, "session removed without persistence");
+});
+
 await suite.RunAsync("renderer frames expose metadata and no read reveal or export operation", () =>
 {
     var reference = CredentialReference.Create();
