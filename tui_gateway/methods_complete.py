@@ -356,6 +356,7 @@ def _(rid, params: dict) -> dict:
 
 @method("model.options")
 def _(rid, params: dict) -> dict:
+    secret_token = set_secret_scope(build_profile_secret_scope(Path(_hermes_home)))
     try:
         from hermes_cli.inventory import build_model_options_payload
 
@@ -428,6 +429,8 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, payload)
     except Exception as e:
         return _err(rid, 5033, str(e))
+    finally:
+        reset_secret_scope(secret_token)
 
 
 @method("model.save_key")

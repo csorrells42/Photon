@@ -1992,6 +1992,7 @@ def list_authenticated_providers(
     endpoint.
     """
     import os
+    from agent.secret_scope import get_secret
     from agent.models_dev import (
         PROVIDER_TO_MODELS_DEV,
         fetch_models_dev,
@@ -2069,15 +2070,15 @@ def list_authenticated_providers(
         botocore may otherwise probe EC2 IMDS (169.254.169.254) on local
         machines before returning no credentials.
         """
-        if os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
+        if str(get_secret("AWS_BEARER_TOKEN_BEDROCK", "") or "").strip():
             return True
         if (
-            os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
-            and os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+            str(get_secret("AWS_ACCESS_KEY_ID", "") or "").strip()
+            and str(get_secret("AWS_SECRET_ACCESS_KEY", "") or "").strip()
         ):
             return True
         return any(
-            os.environ.get(name, "").strip()
+            str(get_secret(name, "") or "").strip()
             for name in (
                 "AWS_PROFILE",
                 "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
@@ -2122,7 +2123,7 @@ def list_authenticated_providers(
     # On auth rejection or unreachable server, fall back to the caller-supplied
     # current model so the picker still shows something when offline / mis-keyed.
     if "lmstudio" not in curated and (
-        os.environ.get("LM_API_KEY") or os.environ.get("LM_BASE_URL") or current_provider.strip().lower() == "lmstudio"
+        get_secret("LM_API_KEY", "") or os.environ.get("LM_BASE_URL") or current_provider.strip().lower() == "lmstudio"
     ):
         from hermes_cli.models import fetch_lmstudio_models
         from hermes_cli.auth import AuthError
@@ -2134,7 +2135,7 @@ def list_authenticated_providers(
         )
         try:
             live = fetch_lmstudio_models(
-                api_key=os.environ.get("LM_API_KEY", ""),
+                api_key=str(get_secret("LM_API_KEY", "") or ""),
                 base_url=lm_base,
                 timeout=1.5, # Smaller timeout for picker
             )
@@ -2216,7 +2217,7 @@ def list_authenticated_providers(
                 continue
 
         # Check if any env var is set
-        has_creds = any(os.environ.get(ev) for ev in env_vars)
+        has_creds = any(get_secret(ev, "") for ev in env_vars)
         if not has_creds:
             try:
                 from hermes_cli.auth import _load_auth_store
@@ -2311,13 +2312,13 @@ def list_authenticated_providers(
             except Exception as exc:
                 logger.debug("Vertex credential check failed: %s", exc)
         elif overlay.extra_env_vars:
-            has_creds = any(os.environ.get(ev) for ev in overlay.extra_env_vars)
+            has_creds = any(get_secret(ev, "") for ev in overlay.extra_env_vars)
         # Also check api_key_env_vars from PROVIDER_REGISTRY for api_key auth_type
         if not has_creds and overlay.auth_type == "api_key":
             for _key in (pid, hermes_slug):
                 pcfg = _auth_registry.get(_key)
                 if pcfg and pcfg.api_key_env_vars:
-                    if any(os.environ.get(ev) for ev in pcfg.api_key_env_vars):
+                    if any(get_secret(ev, "") for ev in pcfg.api_key_env_vars):
                         has_creds = True
                         break
         # Check auth store and credential pool for non-env-var credentials.
@@ -2481,7 +2482,7 @@ def list_authenticated_providers(
         _cp_config = _auth_registry.get(_cp.slug)
         _cp_has_creds = False
         if _cp_config and _cp_config.api_key_env_vars:
-            _cp_has_creds = any(os.environ.get(ev) for ev in _cp_config.api_key_env_vars)
+            _cp_has_creds = any(get_secret(ev, "") for ev in _cp_config.api_key_env_vars)
         # Also check auth store and credential pool
         if not _cp_has_creds:
             try:
@@ -2707,7 +2708,7 @@ def list_authenticated_providers(
             api_key = str(ep_cfg.get("api_key", "") or "").strip()
             if not api_key:
                 key_env = str(ep_cfg.get("key_env", "") or "").strip()
-                api_key = os.environ.get(key_env, "").strip() if key_env else ""
+                api_key = str(get_secret(key_env, "") or "").strip() if key_env else ""
             discover = ep_cfg.get("discover_models", True)
             if isinstance(discover, str):
                 discover = discover.lower() not in {"false", "no", "0"}
@@ -2882,7 +2883,7 @@ def list_authenticated_providers(
             inline_api_key = (entry.get("api_key") or "").strip()
             key_env = (entry.get("key_env") or "").strip()
             api_key = inline_api_key or (
-                os.environ.get(key_env, "").strip() if key_env else ""
+                str(get_secret(key_env, "") or "").strip() if key_env else ""
             )
             api_mode = str(
                 entry.get("api_mode")
