@@ -1736,11 +1736,13 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             "0.3.80",
             "sha256:11225c611b86551574636a1331adb6320217c62d11b7a6992ed15d4b0cc37760",
             "redistribution-blocked");
-        CadParameterDefinition PositiveLength(string id, string label, bool required = true) => new(
+        CadParameterDefinition PositiveLength(string id, string label, bool required = true, double? defaultValue = null) => new(
             id, label, $"Finite positive {label.ToLowerInvariant()} in millimeters.",
             CadParameterKind.Number, required, CadParameterUnit.Length,
             minimum: 0.000001, maximum: 1_000_000, step: null,
-            defaultValue: required ? new CadNumberInputValue(10) : new CadNullInputValue(CadParameterKind.Number));
+            defaultValue: defaultValue is { } value
+                ? new CadNumberInputValue(value)
+                : required ? new CadNumberInputValue(10) : new CadNullInputValue(CadParameterKind.Number));
         CadParameterDefinition SignedLength(string id, string label) => new(
             id, label, $"Finite signed {label.ToLowerInvariant()} in millimeters.",
             CadParameterKind.Number, required: true, CadParameterUnit.Length,
@@ -1757,8 +1759,8 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                     CadParameterKind.Choice, required: true,
                     choices: [new CadChoice("xy", "XY")],
                     defaultValue: new CadTextInputValue("xy", CadParameterKind.Choice)),
-                PositiveLength("profileWidthMm", "Profile width", required: false),
-                PositiveLength("profileHeightMm", "Profile height", required: false),
+                PositiveLength("profileWidthMm", "Profile width", required: false, defaultValue: 10),
+                PositiveLength("profileHeightMm", "Profile height", required: false, defaultValue: 10),
                 PositiveLength("profileRadiusMm", "Profile radius", required: false),
                 PositiveLength("extrusionDepthMm", "Extrusion depth"),
             ],

@@ -13,6 +13,9 @@ import {
   PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID,
   PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID,
   PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID,
+  PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID,
+  PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID,
+  PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID,
   PhotonCadWorkspace,
   photonCadAcceptedPersistedScratchCommit,
   photonCadAcceptedAssemblySnapshot,
@@ -92,6 +95,51 @@ function industrialRuntime(capability: PhotonCadCapability, catalogRevision = 'c
       capabilities: [capability],
       coverage: { discovered: 1, available: 1, unavailable: 0, unavailableReasons: [] },
     },
+  }
+}
+
+function manualCapability(
+  id: typeof PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID | typeof PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID | typeof PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID,
+): PhotonCadCapability {
+  const base = {
+    id,
+    backend: 'geometry' as const,
+    category: 'Build123d design',
+    title: id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID ? 'Sketch + extrude' : id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID ? 'Sketch cut' : 'Hole',
+    description: 'Persist an exact manual solid operation.',
+    operation: id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID ? 'create' as const : 'modify' as const,
+    source: { package: 'build123d', version: '0.3.80', digest: industrialDigest, license: 'redistribution-blocked' },
+    previewSupported: true,
+    experimental: false,
+  }
+  const positive = (parameterId: string, required = true, defaultValue: PhotonCadInputValue = required ? 10 : null) => ({
+    id: parameterId, label: parameterId, description: '', kind: 'number' as const, required, unit: 'length' as const,
+    minimum: 0.000001, maximum: 1_000_000, defaultValue,
+  })
+  if (id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID) return {
+    ...base,
+    parameters: [
+      { id: 'profileKind', label: 'Profile', description: '', kind: 'choice', required: true, defaultValue: 'rectangle', choices: [{ value: 'rectangle', label: 'Rectangle' }, { value: 'circle', label: 'Circle' }] },
+      { id: 'sketchPlane', label: 'Sketch plane', description: '', kind: 'choice', required: true, defaultValue: 'xy', choices: [{ value: 'xy', label: 'XY' }] },
+      positive('profileWidthMm', false, 10), positive('profileHeightMm', false, 10), positive('profileRadiusMm', false), positive('extrusionDepthMm'),
+    ],
+  }
+  if (id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID) return {
+    ...base,
+    parameters: [
+      { id: 'sketchPlane', label: 'Sketch plane', description: '', kind: 'choice', required: true, defaultValue: 'xy', choices: [{ value: 'xy', label: 'XY' }] },
+      positive('profileWidthMm'), positive('profileHeightMm'), positive('cutDepthMm'),
+    ],
+  }
+  return {
+    ...base,
+    parameters: [
+      positive('diameterMm'), positive('depthMm'),
+      ...['xMm', 'yMm', 'zMm'].map((parameterId) => ({
+        id: parameterId, label: parameterId, description: '', kind: 'number' as const, required: true, unit: 'length' as const,
+        minimum: -1_000_000, maximum: 1_000_000, defaultValue: 0,
+      })),
+    ],
   }
 }
 
@@ -241,6 +289,58 @@ describe('PhotonCadWorkspace', () => {
       industrialRuntime(bearing), project, operationRequest(bearing.id, bearingInputs),
     )).not.toBeNull()
     expect(photonCadCapabilityInputsMatch(bearing, { size: 'not-in-host-catalog' }, project)).toBe(false)
+  })
+
+  it('authorizes exact manual add, cut, and hole transactions with body-bound modification targets', () => {
+    const empty = persistedProject()
+    const add = manualCapability(PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID)
+    const rectangleInputs = photonCadInitialCapabilityInputs(add)
+    const addRequest = operationRequest(add.id, rectangleInputs)
+    expect(rectangleInputs).toMatchObject({
+      profileKind: 'rectangle', profileWidthMm: 10, profileHeightMm: 10,
+      profileRadiusMm: null, extrusionDepthMm: 10,
+    })
+    expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(add), empty, addRequest)).not.toBeNull()
+    expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(add), empty, {
+      ...addRequest,
+      inputs: { ...rectangleInputs, profileKind: 'circle', profileWidthMm: null, profileHeightMm: null, profileRadiusMm: 5 },
+    })).not.toBeNull()
+    expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(add), empty, {
+      ...addRequest,
+      inputs: { ...rectangleInputs, profileRadiusMm: 5 },
+    })).toBeNull()
+
+    const body = { id: 'body:manual', parentId: null, kind: 'body' as const, name: 'Manual body', visible: true, suppressed: false }
+    const project = { ...empty, revision: 2, entities: [body] }
+    for (const capability of [manualCapability(PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID), manualCapability(PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID)]) {
+      const request: PhotonCadOperationRequest = {
+        ...operationRequest(capability.id, photonCadInitialCapabilityInputs(capability)),
+        baseRevision: project.revision,
+        targetEntityIds: [body.id],
+      }
+      expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(capability), project, request)).not.toBeNull()
+      expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(capability), project, { ...request, targetEntityIds: [] })).toBeNull()
+      expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(capability), project, { ...request, targetEntityIds: ['body:foreign'] })).toBeNull()
+      const accepted = {
+        contractVersion: 1 as const,
+        requestId: request.requestId,
+        projectId: request.projectId,
+        baseRevision: request.baseRevision,
+        resultingRevision: request.baseRevision + 2,
+        status: 'accepted' as const,
+        stale: false,
+        reason: 'accepted-and-saved',
+        snapshot: { ...project, revision: request.baseRevision + 2 },
+        preview: {
+          previewId: 'preview:manual', projectId: request.projectId, revision: request.baseRevision + 2,
+          contentDigest: 'b'.repeat(64), units: 'millimeter' as const,
+          bounds: { minimum: { x: 0, y: 0, z: 0 }, maximum: { x: 10, y: 10, z: 10 } }, entityCount: 1,
+        },
+        issues: [],
+      }
+      expect(photonCadAcceptedPersistedScratchCommit(request, accepted, true)?.snapshot.revision).toBe(request.baseRevision + 2)
+      expect(photonCadAcceptedPersistedScratchCommit({ ...request, targetEntityIds: [] }, accepted, true)).toBeNull()
+    }
   })
 
   it('rejects arbitrary capabilities, unsafe schemas, hostile values, and non-persisted contexts', () => {
@@ -651,11 +751,25 @@ describe('PhotonCadWorkspace', () => {
   })
 
   it('presents verified Build123d constructors directly in the Design drawer', () => {
-    const markup = renderToStaticMarkup(<PhotonCadWorkspaceFixture initialStage="design" />)
+    const add = manualCapability(PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID)
+    const cut = manualCapability(PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID)
+    const hole = manualCapability(PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID)
+    const runtime: PhotonCadRuntimeDescription = {
+      ...industrialRuntime(add),
+      catalog: {
+        ...industrialRuntime(add).catalog!,
+        capabilities: [add, cut, hole],
+        coverage: { discovered: 3, available: 3, unavailable: 0, unavailableReasons: [] },
+      },
+    }
+    const markup = renderToStaticMarkup(<PhotonCadWorkspace runtime={runtime} project={persistedProject()} initialStage="design" />)
 
     expect(markup).toContain('Manual solid tools')
     expect(markup).toContain('Build123d solid constructors')
-    expect(markup).toContain('Create an exact parametric B-rep solid')
+    expect(markup).toContain('Create or modify an exact parametric B-rep solid')
+    expect(markup).toContain('Sketch + extrude')
+    expect(markup).toContain('Sketch cut')
+    expect(markup).toContain('Hole')
   })
 
   it('enters Design on a verified manual constructor instead of retaining a library part', () => {
@@ -672,6 +786,8 @@ describe('PhotonCadWorkspace', () => {
 
     expect(photonCadManualDesignCapabilityId([gear, box, cylinder], gear.id)).toBe(box.id)
     expect(photonCadManualDesignCapabilityId([gear, box, cylinder], cylinder.id)).toBe(cylinder.id)
+    const cut = manualCapability(PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID)
+    expect(photonCadManualDesignCapabilityId([gear, box, cut], cut.id)).toBe(cut.id)
     expect(photonCadManualDesignCapabilityId([gear], gear.id)).toBe('')
   })
 

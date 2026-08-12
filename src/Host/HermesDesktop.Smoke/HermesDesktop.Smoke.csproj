@@ -15,6 +15,7 @@
     <ProjectReference Include="..\HermesRoslynLanguageServer\HermesRoslynLanguageServer.csproj" />
     <ProjectReference Include="..\HermesCredentialBroker\HermesCredentialBroker.csproj" />
     <ProjectReference Include="..\PhotonCadRuntime\PhotonCadRuntime.csproj" />
+    <ProjectReference Include="..\PhotonCadRuntime.ManualProvider\PhotonCadRuntime.ManualProvider.csproj" />
     <ProjectReference Include="..\PhotonCadVerification\PhotonCadVerification.csproj" />
   </ItemGroup>
 </Project>

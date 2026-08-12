@@ -146,6 +146,9 @@ const releaseFormats: Array<{ id: PhotonCadReleaseFormat; label: string; detail:
 export const PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID = 'assembly.occurrence.place.v1'
 export const PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID = 'assembly.occurrence.transform.v1'
 export const PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID = 'assembly.occurrence.remove.v1'
+export const PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID = 'manual.solid.extrude.add.v1'
+export const PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID = 'manual.solid.extrude.cut.v1'
+export const PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID = 'manual.solid.hole.cut.v1'
 
 export type PhotonCadCatalogSection = {
   id: string
@@ -190,8 +193,8 @@ function normalizedCatalogSection(value: string) {
 }
 
 function catalogSectionId(capability: PhotonCadCapability): PhotonCadCatalogSection['id'] {
-  if (capability.operation !== 'create') return 'assembly-tools'
   if (capability.backend === 'geometry' || capability.source.package.toLocaleLowerCase().includes('build123d')) return 'build123d-design'
+  if (capability.operation !== 'create') return 'assembly-tools'
   if (capability.source.package.toLocaleLowerCase().includes('bd-warehouse')) return normalizedCatalogSection(capability.category)
   return normalizedCatalogSection(capability.category || 'other-parts')
 }
@@ -235,10 +238,20 @@ export function photonCadManualDesignCapabilityId(
   selectedCapabilityId: string,
 ) {
   const selected = capabilities.find((capability) => capability.id === selectedCapabilityId)
-  if (selected && selected.operation === 'create' && catalogSectionId(selected) === 'build123d-design') {
+  if (selected && photonCadManualDesignCapability(selected)) {
     return selected.id
   }
-  return capabilities.find((capability) => capability.operation === 'create' && catalogSectionId(capability) === 'build123d-design')?.id ?? ''
+  return capabilities.find(photonCadManualDesignCapability)?.id ?? ''
+}
+
+function photonCadManualDesignCapability(capability: PhotonCadCapability) {
+  return catalogSectionId(capability) === 'build123d-design'
+    && (capability.operation === 'create' || capability.operation === 'modify')
+}
+
+function photonCadManualModifyCapabilityId(capabilityId: string) {
+  return capabilityId === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+    || capabilityId === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
 }
 
 export function photonCadProjectParts(project: PhotonCadProjectSnapshot | null, query = ''): PhotonCadProjectPart[] {
@@ -530,6 +543,7 @@ export function photonCadCapabilityInputsMatch(
   return expected.length === supplied.length
     && expected.every((id, index) => id === supplied[index])
     && capability.parameters.every((parameter) => validCapabilityInput(parameter, inputs[parameter.id], project))
+    && photonCadManualInputCombinationMatches(capability, inputs)
 }
 
 function photonCadAssemblyPlaceSchemaMatches(capability: PhotonCadCapability) {
@@ -566,6 +580,67 @@ function photonCadAssemblyTransformSchemaMatches(capability: PhotonCadCapability
     && rotation.minimum === -360 && rotation.maximum === 360 && zeroVector(rotation.defaultValue)
 }
 
+function photonCadManualNumberParameterMatches(
+  parameter: PhotonCadParameterDefinition | undefined,
+  required: boolean,
+  signed = false,
+) {
+  return parameter?.kind === 'number'
+    && parameter.required === required
+    && parameter.unit === 'length'
+    && parameter.minimum === (signed ? -1_000_000 : 0.000001)
+    && parameter.maximum === 1_000_000
+}
+
+function photonCadManualChoiceParameterMatches(
+  parameter: PhotonCadParameterDefinition | undefined,
+  values: readonly string[],
+) {
+  return parameter?.kind === 'choice' && parameter.required
+    && parameter.choices?.length === values.length
+    && parameter.choices.every((choice, index) => choice.value === values[index])
+}
+
+function photonCadManualSchemaMatches(capability: PhotonCadCapability) {
+  const parameters = new Map(capability.parameters.map((parameter) => [parameter.id, parameter]))
+  if (capability.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID) {
+    return capability.operation === 'create' && capability.parameters.length === 6
+      && photonCadManualChoiceParameterMatches(parameters.get('profileKind'), ['rectangle', 'circle'])
+      && photonCadManualChoiceParameterMatches(parameters.get('sketchPlane'), ['xy'])
+      && photonCadManualNumberParameterMatches(parameters.get('profileWidthMm'), false)
+      && photonCadManualNumberParameterMatches(parameters.get('profileHeightMm'), false)
+      && photonCadManualNumberParameterMatches(parameters.get('profileRadiusMm'), false)
+      && photonCadManualNumberParameterMatches(parameters.get('extrusionDepthMm'), true)
+  }
+  if (capability.id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID) {
+    return capability.operation === 'modify' && capability.parameters.length === 4
+      && photonCadManualChoiceParameterMatches(parameters.get('sketchPlane'), ['xy'])
+      && photonCadManualNumberParameterMatches(parameters.get('profileWidthMm'), true)
+      && photonCadManualNumberParameterMatches(parameters.get('profileHeightMm'), true)
+      && photonCadManualNumberParameterMatches(parameters.get('cutDepthMm'), true)
+  }
+  if (capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID) {
+    return capability.operation === 'modify' && capability.parameters.length === 5
+      && photonCadManualNumberParameterMatches(parameters.get('diameterMm'), true)
+      && photonCadManualNumberParameterMatches(parameters.get('depthMm'), true)
+      && photonCadManualNumberParameterMatches(parameters.get('xMm'), true, true)
+      && photonCadManualNumberParameterMatches(parameters.get('yMm'), true, true)
+      && photonCadManualNumberParameterMatches(parameters.get('zMm'), true, true)
+  }
+  return false
+}
+
+function photonCadManualInputCombinationMatches(
+  capability: PhotonCadCapability,
+  inputs: Record<string, PhotonCadInputValue>,
+) {
+  if (capability.id !== PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID) return true
+  return inputs.profileKind === 'rectangle'
+    ? typeof inputs.profileWidthMm === 'number' && typeof inputs.profileHeightMm === 'number' && inputs.profileRadiusMm === null
+    : inputs.profileKind === 'circle'
+      && inputs.profileWidthMm === null && inputs.profileHeightMm === null && typeof inputs.profileRadiusMm === 'number'
+}
+
 export function photonCadCapabilityRunnable(capability: PhotonCadCapability) {
   if (capability.experimental || !capability.previewSupported) return false
   if (capability.id === PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID) {
@@ -576,6 +651,11 @@ export function photonCadCapabilityRunnable(capability: PhotonCadCapability) {
   }
   if (capability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID) {
     return capability.operation === 'assemble' && photonCadAssemblyRemoveSchemaMatches(capability)
+  }
+  if (capability.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID
+    || capability.id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+    || capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID) {
+    return photonCadManualSchemaMatches(capability)
   }
   return capability.operation === 'create'
 }
@@ -655,6 +735,12 @@ export function photonCadAuthorizePersistedScratchRequest(
     const removed = request.targetEntityIds.length === 1 ? photonCadRemovedOccurrenceIds(occurrences, target) : null
     if (!removed || removed.size >= occurrences.length
       || !project.entities.some((entity) => entity.id === target && entity.kind === 'occurrence')) return null
+  } else if (capability.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID) {
+    if (request.targetEntityIds.length !== 0) return null
+  } else if (photonCadManualModifyCapabilityId(capability.id)) {
+    const target = request.targetEntityIds[0]
+    if (request.targetEntityIds.length !== 1
+      || !project.entities.some((entity) => entity.id === target && (entity.kind === 'body' || entity.kind === 'part'))) return null
   } else if (request.targetEntityIds.length !== 0) {
     return null
   }
@@ -667,7 +753,11 @@ export function photonCadAcceptedPersistedScratchSnapshot(
   authorizationCurrent: boolean,
 ): PhotonCadProjectSnapshot | null {
   const snapshot = result.snapshot
-  if (!authorizationCurrent || request.mode !== 'scratch' || request.targetEntityIds.length !== 0
+  const targetsMatch = photonCadManualModifyCapabilityId(request.capabilityId)
+    ? request.targetEntityIds.length === 1 && Boolean(snapshot?.entities.some((entity) =>
+      entity.id === request.targetEntityIds[0] && (entity.kind === 'body' || entity.kind === 'part')))
+    : request.targetEntityIds.length === 0
+  if (!authorizationCurrent || request.mode !== 'scratch' || !targetsMatch
     || result.status !== 'accepted' || result.stale || !snapshot
     || result.requestId !== request.requestId || result.projectId !== request.projectId
     || result.baseRevision !== request.baseRevision || result.resultingRevision !== request.baseRevision + 2
@@ -1071,7 +1161,10 @@ export function PhotonCadWorkspace({
     || selectedCapability?.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
     ? selectedEntityIds.length === 1 && Boolean(currentProject?.entities.some((entity) =>
         entity.id === selectedEntityIds[0] && entity.kind === 'occurrence'))
-    : true
+    : selectedCapability && photonCadManualModifyCapabilityId(selectedCapability.id)
+      ? selectedEntityIds.length === 1 && Boolean(currentProject?.entities.some((entity) =>
+          entity.id === selectedEntityIds[0] && (entity.kind === 'body' || entity.kind === 'part')))
+      : true
   const requiredInputsReady = Boolean(selectedCapability && currentProject
     && photonCadCapabilityInputsMatch(selectedCapability, inputs, currentProject) && selectedTargetsReady)
   const catalogReady = effectiveRuntime.status === 'available' && Boolean(catalog)
@@ -1130,7 +1223,25 @@ export function PhotonCadWorkspace({
   }
 
   function updateInput(id: string, value: PhotonCadInputValue) {
-    setInputs((current) => ({ ...current, [id]: value }))
+    setInputs((current) => {
+      if (selectedCapability?.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID && id === 'profileKind') {
+        if (value === 'rectangle') return {
+          ...current,
+          profileKind: value,
+          profileWidthMm: 10,
+          profileHeightMm: 10,
+          profileRadiusMm: null,
+        }
+        if (value === 'circle') return {
+          ...current,
+          profileKind: value,
+          profileWidthMm: null,
+          profileHeightMm: null,
+          profileRadiusMm: 5,
+        }
+      }
+      return { ...current, [id]: value }
+    })
     setNotice(null)
   }
 
@@ -1202,6 +1313,7 @@ export function PhotonCadWorkspace({
       inputs,
       targetEntityIds: selectedCapability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
         || selectedCapability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+        || photonCadManualModifyCapabilityId(selectedCapability.id)
         ? [...selectedEntityIds]
         : [],
     }
@@ -1841,8 +1953,7 @@ export function PhotonCadWorkspace({
               requiredInputsReady={requiredInputsReady}
               manualDesign={activeStage === 'design'
                 && selectedCapability !== null
-                && selectedCapability.operation === 'create'
-                && catalogSectionId(selectedCapability) === 'build123d-design'}
+                && photonCadManualDesignCapability(selectedCapability)}
               onInput={updateInput}
               onRun={() => void runOperation()}
             />
@@ -2056,14 +2167,14 @@ function ManualDesignTools({
   selectedCapabilityId: string
   onSelectCapability: (id: string) => void
 }) {
-  const tools = capabilities.filter((capability) => catalogSectionId(capability) === 'build123d-design' && capability.operation === 'create')
+  const tools = capabilities.filter(photonCadManualDesignCapability)
   return (
     <section className="pcad-manual-design" aria-label="Manual solid tools">
       <header className="pcad-pane-header">
         <span><Wrench size={14} /><strong>Manual solid tools</strong></span>
         <small>{tools.length} available</small>
       </header>
-      <p>Create an exact parametric B-rep solid, then inspect the persisted body in the model tree.</p>
+      <p>Create or modify an exact parametric B-rep solid, then inspect the persisted body in the model tree.</p>
       <div role="group" aria-label="Build123d solid constructors">
         {tools.map((capability) => (
           <button
@@ -2072,7 +2183,7 @@ function ManualDesignTools({
             className={selectedCapabilityId === capability.id ? 'selected' : ''}
             key={capability.id}
             onClick={() => onSelectCapability(capability.id)}
-          ><Plus size={12} /><span><strong>{safeText(capability.title, 80)}</strong><small>{capability.parameters.length} dimensions</small></span></button>
+          >{capability.operation === 'create' ? <Plus size={12} /> : <Wrench size={12} />}<span><strong>{safeText(capability.title, 80)}</strong><small>{capability.parameters.length} dimensions</small></span></button>
         ))}
       </div>
       {!tools.length ? <small>No verified manual solid constructor is mounted.</small> : null}
@@ -2226,6 +2337,8 @@ function CapabilityInspector({
             <div><dt>Operation</dt><dd>{safeText(capability.operation, 40)}</dd></div>
             <div><dt>Targets</dt><dd>{capability.operation === 'create'
               ? 'New part'
+              : photonCadManualModifyCapabilityId(capability.id)
+                ? selectedEntityIds.length === 1 ? '1 solid selected' : 'Select one solid'
               : capability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
                 || capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
                 ? selectedEntityIds.length === 1 ? '1 occurrence selected' : 'Select one occurrence'
@@ -2263,7 +2376,11 @@ function CapabilityInspector({
             : capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
               ? 'Select one occurrence in Assemble. Translation and rotation replace only that occurrence transform and reseal the complete preview.'
             : manualDesign
-              ? 'Add one exact parametric solid to this project. Its canonical STEP and preview are persisted before the operation is accepted.'
+              ? capability.id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+                ? 'Select one body or part in Design. The exact rectangular cut replaces its canonical STEP and reseals the complete preview.'
+                : capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
+                  ? 'Select one body or part in Design. The exact cylindrical hole replaces its canonical STEP and reseals the complete preview.'
+                  : 'Add one exact parametric solid to this project. Its canonical STEP and preview are persisted before the operation is accepted.'
             : 'This exact host-described scratch operation will be persisted to the attached project. Verification and release remain separate human actions.'
           : mode === 'scratch'
             ? 'Catalog parameters are read-only until model operations can be committed to the authoritative project file. Autonomy stays inside scratch drafting.'
@@ -2275,7 +2392,11 @@ function CapabilityInspector({
               ? 'Remove selected occurrence'
               : capability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
                 ? 'Move selected occurrence'
-              : manualDesign ? 'Add solid to project' : 'Run persisted scratch operation'
+              : capability.id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+                ? 'Cut selected solid'
+                : capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
+                  ? 'Cut hole in selected solid'
+                  : manualDesign ? 'Add solid to project' : 'Run persisted scratch operation'
             : mode === 'scratch' ? 'Run scratch draft' : 'Prepare suggestion'}
         </button>
       </footer>
