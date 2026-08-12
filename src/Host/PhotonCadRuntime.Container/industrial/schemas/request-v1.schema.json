@@ -155,6 +155,30 @@
       },
       "required": ["schema", "operation", "source", "hole"],
       "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "manualLinearPattern" },
+        "source": { "$ref": "#/$defs/manualSource" },
+        "seed": { "$ref": "#/$defs/manualSeed" },
+        "count": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "spacingMm": { "$ref": "#/$defs/positiveDimension" }
+      },
+      "required": ["schema", "operation", "source", "seed", "count", "spacingMm"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "manualCircularPattern" },
+        "source": { "$ref": "#/$defs/manualSource" },
+        "seed": { "$ref": "#/$defs/manualHoleSeed" },
+        "count": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "angleDegrees": { "type": "number", "exclusiveMinimum": 0, "maximum": 360 }
+      },
+      "required": ["schema", "operation", "source", "seed", "count", "angleDegrees"],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -195,6 +219,34 @@
           "required": ["kind", "plane", "radiusMm"],
           "additionalProperties": false
         }
+      ]
+    },
+    "manualHoleSeed": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "holeCut" },
+        "radiusMm": { "$ref": "#/$defs/positiveDimension" },
+        "depthMm": { "$ref": "#/$defs/positiveDimension" },
+        "xMm": { "$ref": "#/$defs/signedDimension" },
+        "yMm": { "$ref": "#/$defs/signedDimension" },
+        "zMm": { "$ref": "#/$defs/signedDimension" }
+      },
+      "required": ["kind", "radiusMm", "depthMm", "xMm", "yMm", "zMm"],
+      "additionalProperties": false
+    },
+    "manualSeed": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "sketchExtrudeCut" },
+            "profile": { "$ref": "#/$defs/manualProfile" },
+            "depthMm": { "$ref": "#/$defs/positiveDimension" }
+          },
+          "required": ["kind", "profile", "depthMm"],
+          "additionalProperties": false
+        },
+        { "$ref": "#/$defs/manualHoleSeed" }
       ]
     },
     "source": {

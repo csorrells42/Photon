@@ -368,8 +368,10 @@ internal static class PhotonCadBridgeSmoke
                 .ToHashSet(StringComparer.Ordinal);
             if (!capabilityIds.Contains(PhotonCadManualCapabilityIds.SketchExtrudeAdd)
                 || !capabilityIds.Contains(PhotonCadManualCapabilityIds.SketchExtrudeCut)
-                || !capabilityIds.Contains(PhotonCadManualCapabilityIds.HoleCut))
-                return Fail("Live manual runtime did not advertise its three installed operations.");
+                || !capabilityIds.Contains(PhotonCadManualCapabilityIds.HoleCut)
+                || !capabilityIds.Contains(PhotonCadManualCapabilityIds.LinearPattern)
+                || !capabilityIds.Contains(PhotonCadManualCapabilityIds.CircularPattern))
+                return Fail("Live manual runtime did not advertise its five installed operations.");
 
             var identity = await LivePhaseAsync("manual-create-project",
                 () => CreateCanonicalProjectAsync(bridge, frames, "live-manual"), LiveControlPhaseTimeout);
@@ -392,7 +394,7 @@ internal static class PhotonCadBridgeSmoke
                 .Single(value => Text(value, "kind") == "body" && Text(value, "sourceCapabilityId") == PhotonCadManualCapabilityIds.SketchExtrudeAdd)
                 .GetProperty("id").GetString()!;
 
-            await LivePhaseAsync("manual-sketch-cut", () => ExecuteLiveCatalogAsync(
+            var cut = await LivePhaseAsync("manual-sketch-cut", () => ExecuteLiveCatalogAsync(
                     bridge, frames, "live-manual-cut", identity.SessionId, identity.ProjectId, 2,
                     PhotonCadManualCapabilityIds.SketchExtrudeCut,
                     new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -402,6 +404,11 @@ internal static class PhotonCadBridgeSmoke
                         ["profileHeightMm"] = 8d,
                         ["cutDepthMm"] = 6d,
                     }, expectedRevision: 4, expectedPreviewEntities: 1, [bodyId]), LiveCadPhaseTimeout);
+            var cutFeatureId = cut.GetProperty("snapshot").GetProperty("entities").EnumerateArray()
+                .Single(value => Text(value, "kind") == "datum"
+                    && Text(value, "parentId") == bodyId
+                    && Text(value, "sourceCapabilityId") == PhotonCadManualCapabilityIds.SketchExtrudeCut)
+                .GetProperty("id").GetString()!;
 
             var hole = await LivePhaseAsync("manual-hole-cut", () => ExecuteLiveCatalogAsync(
                     bridge, frames, "live-manual-hole", identity.SessionId, identity.ProjectId, 4,
@@ -414,9 +421,42 @@ internal static class PhotonCadBridgeSmoke
                         ["yMm"] = 8d,
                         ["zMm"] = 0d,
                     }, expectedRevision: 6, expectedPreviewEntities: 1, [bodyId]), LiveCadPhaseTimeout);
-            var manualOccurrences = SnapshotOccurrenceIds(hole);
+            var holeFeatureId = hole.GetProperty("snapshot").GetProperty("entities").EnumerateArray()
+                .Single(value => Text(value, "kind") == "datum"
+                    && Text(value, "parentId") == bodyId
+                    && Text(value, "sourceCapabilityId") == PhotonCadManualCapabilityIds.HoleCut)
+                .GetProperty("id").GetString()!;
+            var linear = await LivePhaseAsync("manual-linear-pattern", () => ExecuteLiveCatalogAsync(
+                    bridge, frames, "live-manual-linear", identity.SessionId, identity.ProjectId, 6,
+                    PhotonCadManualCapabilityIds.LinearPattern,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["seedFeatureId"] = cutFeatureId,
+                        ["count"] = 3L,
+                        ["spacingMm"] = 8d,
+                    }, expectedRevision: 8, expectedPreviewEntities: 1, [bodyId]), LiveCadPhaseTimeout);
+            var linearFeatureId = linear.GetProperty("snapshot").GetProperty("entities").EnumerateArray()
+                .Single(value => Text(value, "kind") == "datum"
+                    && Text(value, "parentId") == bodyId
+                    && Text(value, "sourceCapabilityId") == PhotonCadManualCapabilityIds.LinearPattern)
+                .GetProperty("id").GetString()!;
+            var circular = await LivePhaseAsync("manual-circular-pattern", () => ExecuteLiveCatalogAsync(
+                    bridge, frames, "live-manual-circular", identity.SessionId, identity.ProjectId, 8,
+                    PhotonCadManualCapabilityIds.CircularPattern,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["seedFeatureId"] = holeFeatureId,
+                        ["count"] = 4L,
+                        ["angleDegrees"] = 360d,
+                    }, expectedRevision: 10, expectedPreviewEntities: 1, [bodyId]), LiveCadPhaseTimeout);
+            var circularFeatureId = circular.GetProperty("snapshot").GetProperty("entities").EnumerateArray()
+                .Single(value => Text(value, "kind") == "datum"
+                    && Text(value, "parentId") == bodyId
+                    && Text(value, "sourceCapabilityId") == PhotonCadManualCapabilityIds.CircularPattern)
+                .GetProperty("id").GetString()!;
+            var manualOccurrences = SnapshotOccurrenceIds(circular);
             var manualPreview = await LivePhaseAsync("manual-preview-resolve-read", () => ReadLivePreviewAsync(
-                    bridge, frames, identity, hole.GetProperty("preview"), manualOccurrences, "live-manual-preview"),
+                    bridge, frames, identity, circular.GetProperty("preview"), manualOccurrences, "live-manual-preview"),
                 LiveControlPhaseTimeout);
             if (manualPreview is null) return false;
 
@@ -425,7 +465,7 @@ internal static class PhotonCadBridgeSmoke
             {
                 type = "photonCad.project.refresh", version = 1, contractVersion = 1,
                 requestId = "live-manual-refresh", projectHandle,
-                sessionId = identity.SessionId, projectId = identity.ProjectId, knownRevision = 6,
+                sessionId = identity.SessionId, projectId = identity.ProjectId, knownRevision = 10,
             });
             var refreshed = Frame(frames, "photonCad.project.refresh.result", "live-manual-refresh")
                 .GetProperty("value").GetProperty("document").Clone();
@@ -433,7 +473,7 @@ internal static class PhotonCadBridgeSmoke
             {
                 type = "photonCad.project.close", version = 1, contractVersion = 1,
                 requestId = "live-manual-close", projectHandle,
-                sessionId = identity.SessionId, projectId = identity.ProjectId, revision = 6,
+                sessionId = identity.SessionId, projectId = identity.ProjectId, revision = 10,
                 lastSavedRevision = refreshed.GetProperty("lastSavedRevision").GetInt64(),
                 contentDigest = Text(refreshed, "contentDigest"),
                 lastSavedContentDigest = Text(refreshed, "lastSavedContentDigest"),
@@ -447,27 +487,37 @@ internal static class PhotonCadBridgeSmoke
             });
             var reopened = Frame(frames, "photonCad.project.reopen.result", "live-manual-reopen")
                 .GetProperty("value").GetProperty("document").GetProperty("snapshot");
-            if (reopened.GetProperty("revision").GetInt64() != 6 || reopened.GetProperty("dirty").GetBoolean())
-                return Fail("Live manual project did not reopen at exact clean revision six.");
+            if (reopened.GetProperty("revision").GetInt64() != 10 || reopened.GetProperty("dirty").GetBoolean())
+                return Fail("Live manual project did not reopen at exact clean revision ten.");
 
             var codec = new PhotonCadCanonicalProjectCodecV1();
             var canonical = codec.Decode(await File.ReadAllBytesAsync(projectPath));
             var state = codec.Inspect(canonical);
             var geometry = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry);
             var preview = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.ProjectPreview);
-            if (canonical.Revision != 6 || canonical.Dirty
-                || state.Entities.Count != 1 || state.Occurrences.Count != 1 || state.Bom.Count != 1
-                || state.Operations.Count != 6
+            if (canonical.Revision != 10 || canonical.Dirty
+                || state.Entities.Count != 5 || state.Occurrences.Count != 1 || state.Bom.Count != 1
+                || state.Operations.Count != 10
                 || !state.Operations.Select(value => value.CapabilityId).SequenceEqual([
                     PhotonCadManualCapabilityIds.SketchExtrudeAdd, "industrial.preview.glb.v1",
                     PhotonCadManualCapabilityIds.SketchExtrudeCut, "industrial.preview.glb.v1",
-                    PhotonCadManualCapabilityIds.HoleCut, "industrial.preview.glb.v1"], StringComparer.Ordinal)
-                || geometry.OwnerEntityId != bodyId || geometry.Revision != 5 || geometry.Bounds is not null
+                    PhotonCadManualCapabilityIds.HoleCut, "industrial.preview.glb.v1",
+                    PhotonCadManualCapabilityIds.LinearPattern, "industrial.preview.glb.v1",
+                    PhotonCadManualCapabilityIds.CircularPattern, "industrial.preview.glb.v1"], StringComparer.Ordinal)
+                || !state.Entities.Where(value => value.Kind == PhotonCadEntityKindV1.Datum)
+                    .Select(value => (value.Id, value.ParentId, value.SourceCapabilityId))
+                    .ToHashSet()
+                    .SetEquals([
+                        (cutFeatureId, bodyId, PhotonCadManualCapabilityIds.SketchExtrudeCut),
+                        (holeFeatureId, bodyId, PhotonCadManualCapabilityIds.HoleCut),
+                        (linearFeatureId, bodyId, PhotonCadManualCapabilityIds.LinearPattern),
+                        (circularFeatureId, bodyId, PhotonCadManualCapabilityIds.CircularPattern)])
+                || geometry.OwnerEntityId != bodyId || geometry.Revision != 9 || geometry.Bounds is not null
                 || !ValidPart21Envelope(geometry.Content.Span)
-                || preview.Revision != 6 || !preview.Content.Span.SequenceEqual(manualPreview.Content))
-                return Fail("Live manual extrude/cut/hole project lost its canonical geometry, preview, or operation chain.");
+                || preview.Revision != 10 || !preview.Content.Span.SequenceEqual(manualPreview.Content))
+                return Fail("Live manual extrude/cut/hole/pattern project lost its canonical geometry, preview, feature history, or operation chain.");
 
-            Console.WriteLine("Desktop Photon CAD LIVE manual sketch/extrude, sketch cut, and hole 0-to-2-to-4-to-6 persistence, preview, and reopen passed.");
+            Console.WriteLine("Desktop Photon CAD LIVE manual sketch/extrude, sketch cut, hole, linear pattern, and circular pattern 0-to-2-to-4-to-6-to-8-to-10 persistence, preview, and reopen passed.");
             return true;
         }
         finally

@@ -19,6 +19,7 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
     private readonly Dictionary<ulong, BrowserNavigationContext> _navigations = new();
     private readonly Queue<BrowserNavigationContext> _navigationQueue = new();
     private readonly BrowserSurfaceRequestGate _surfaceRequests = new();
+    private bool _disposed;
     private BrowserNavigationContext? _startingNavigation;
     private string _displayedTabId = string.Empty;
     private readonly Dictionary<string, (Uri Uri, DateTimeOffset ExpiresAt)> _pendingOpenRequests = new();
@@ -32,9 +33,10 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
 
     internal async Task ShowAsync(int x, int y, int width, int height, string? tabId, string? address)
     {
+        if (_disposed) return;
         var surfaceRequest = _surfaceRequests.Begin();
         if (!await EnsureInitializedAsync()) return;
-        if (!_surfaceRequests.IsCurrent(surfaceRequest)) return;
+        if (_disposed || !_surfaceRequests.IsCurrent(surfaceRequest)) return;
         if (width < 80 || height < 80 || x < 0 || y < 0) return;
         var availableWidth = Math.Max(0, _window.ActualWidth - x);
         var availableHeight = Math.Max(0, _window.ActualHeight - y);
@@ -64,6 +66,7 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
     internal void Hide()
     {
         _surfaceRequests.Invalidate();
+        if (_disposed) return;
         _view.Visibility = Visibility.Collapsed;
     }
 
@@ -127,13 +130,16 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
     {
         try
         {
+            if (_disposed) return false;
             if (_view.CoreWebView2 is null)
             {
                 var dataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PhotosAgapeAphthartos", "BrowserWebView2");
                 Directory.CreateDirectory(dataFolder);
                 var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: dataFolder);
+                if (_disposed) return false;
                 await _view.EnsureCoreWebView2Async(environment);
             }
+            if (_disposed) return false;
             var core = _view.CoreWebView2
                 ?? throw new InvalidOperationException("The native browser did not initialize.");
             core.Settings.AreHostObjectsAllowed = false;
@@ -234,15 +240,19 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
 
     private void PostError(string message) => _postMessage(new { type = "browser.error", version = ProtocolVersion, tabId = _tabId, message });
 
-    private static bool TryNormalizeAddress(string? address, out Uri uri)
+    internal static bool TryNormalizeAddress(string? address, out Uri uri)
     {
         uri = null!;
-        if (string.Equals(address?.Trim(), "about:blank", StringComparison.OrdinalIgnoreCase))
+        var text = address?.Trim();
+        if (string.Equals(text, "about:blank", StringComparison.OrdinalIgnoreCase))
         {
             uri = new Uri("about:blank");
             return true;
         }
-        return Uri.TryCreate(address?.Trim(), UriKind.Absolute, out uri!) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
+        if (string.IsNullOrEmpty(text) || text.Length > 4_096 || text.Any(char.IsControl)) return false;
+        return Uri.TryCreate(text, UriKind.Absolute, out uri!)
+            && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+            && string.IsNullOrEmpty(uri.UserInfo);
     }
 
     private void PurgeOpenRequests()
@@ -343,15 +353,23 @@ internal sealed class BrowserSurfaceBridge : IAsyncDisposable
         return $"{uri.Scheme}://{authority}/";
     }
 
-    internal static string RendererSafeTitle(Uri? uri) => uri is null || uri.AbsoluteUri == "about:blank"
-        ? "New tab"
-        : Bounded(uri.IdnHost, 256);
+    internal static string RendererSafeTitle(Uri? uri)
+    {
+        if (uri is null || uri.AbsoluteUri == "about:blank") return "New tab";
+        if (uri.Scheme == Uri.UriSchemeHttps
+            && string.Equals(uri.IdnHost, "www.google.com", StringComparison.OrdinalIgnoreCase)
+            && uri.AbsolutePath.StartsWith("/maps/", StringComparison.Ordinal)) return "Google Maps";
+        return Bounded(uri.IdnHost, 256);
+    }
 
     private static string Bounded(string? value, int maximum) => string.IsNullOrEmpty(value) ? string.Empty : value[..Math.Min(value.Length, maximum)];
 
     public ValueTask DisposeAsync()
     {
+        if (_disposed) return ValueTask.CompletedTask;
+        _disposed = true;
         _surfaceRequests.Invalidate();
+        _view.Visibility = Visibility.Collapsed;
         _view.Dispose();
         return ValueTask.CompletedTask;
     }

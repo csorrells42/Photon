@@ -67,6 +67,21 @@
 .developer-debug-variables code { color: #79d1ba; overflow-wrap: anywhere; }
 .developer-debug-output { max-height: 150px; overflow: auto; margin: 0; padding: 7px; border-radius: 5px; background: #090c13; color: #a9dbc9; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.developer-raspberry-setup {
+  width: fit-content;
+  margin-top: 6px;
+  color: #bceee2;
+  border: 1px solid rgba(83, 196, 168, .55);
+  border-radius: 5px;
+  background: rgba(32, 91, 78, .34);
+  padding: 4px 7px;
+  font: inherit;
+  font-size: 11px;
+}
+.developer-raspberry-setup:hover:not(:disabled) { border-color: #79e5ca; color: #fff; }
+.developer-raspberry-setup:focus-visible { outline: 2px solid #79e5ca; outline-offset: 2px; }
+.developer-provider-catalog small.error { color: #ff9ea8; }
+
 @media (prefers-reduced-motion: reduce) {
   .developer-debugger * { scroll-behavior: auto !important; }
 }

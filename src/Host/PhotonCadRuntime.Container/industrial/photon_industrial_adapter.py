@@ -1051,7 +1051,9 @@ def _manual_hole_cut(request: dict[str, object]) -> dict[str, object]:
     z = _finite_number(hole["zMm"], -1_000_000.0, 1_000_000.0)
     try:
         cutter = build123d.Cylinder(radius, depth)
-        cutter.translate((x, y, z))
+        translated = cutter.translate((x, y, z))
+        if translated is not None:
+            cutter = translated
         result = base.cut(cutter)
     except Exception as exception:
         raise ProtocolFailure("operation-failed") from exception
@@ -1062,6 +1064,91 @@ def _manual_hole_cut(request: dict[str, object]) -> dict[str, object]:
             "generator": "manual",
             "kind": "holeCut",
             "hole": {"depthMm": depth, "radiusMm": radius, "xMm": x, "yMm": y, "zMm": z},
+            "sourceVolumeMm3": base_receipt["volumeMm3"],
+        },
+    )
+
+
+def _manual_seed_cutter(seed_request: object, offset: tuple[float, float, float], angle_degrees: float) -> tuple[object, str]:
+    seed = _require_object(seed_request)
+    kind = seed.get("kind")
+    if kind == "sketchExtrudeCut":
+        _exact_keys(seed, {"kind", "profile", "depthMm"})
+        cutter, _profile, _depth = _manual_profile_solid(seed["profile"], seed["depthMm"])
+        if angle_degrees != 0.0:
+            try:
+                rotated = cutter.rotate(build123d.Axis.Z, angle_degrees)
+                if rotated is not None:
+                    cutter = rotated
+            except Exception as exception:
+                raise ProtocolFailure("operation-failed") from exception
+        translated = cutter.translate(offset)
+        if translated is not None:
+            cutter = translated
+        return cutter, kind
+    if kind == "holeCut":
+        _exact_keys(seed, {"kind", "radiusMm", "depthMm", "xMm", "yMm", "zMm"})
+        radius = _finite_number(seed["radiusMm"], 0.000001, 1_000_000.0)
+        depth = _finite_number(seed["depthMm"], 0.000001, 1_000_000.0)
+        x = _finite_number(seed["xMm"], -1_000_000.0, 1_000_000.0)
+        y = _finite_number(seed["yMm"], -1_000_000.0, 1_000_000.0)
+        z = _finite_number(seed["zMm"], -1_000_000.0, 1_000_000.0)
+        radians = math.radians(angle_degrees)
+        rotated_x = x * math.cos(radians) - y * math.sin(radians)
+        rotated_y = x * math.sin(radians) + y * math.cos(radians)
+        try:
+            cutter = build123d.Cylinder(radius, depth)
+            translated = cutter.translate((rotated_x + offset[0], rotated_y + offset[1], z + offset[2]))
+            if translated is not None:
+                cutter = translated
+        except Exception as exception:
+            raise ProtocolFailure("operation-failed") from exception
+        return cutter, kind
+    raise ProtocolFailure("invalid-parameter")
+
+
+def _manual_pattern(request: dict[str, object], circular: bool) -> dict[str, object]:
+    expected = {"schema", "operation", "source", "seed", "count", "angleDegrees" if circular else "spacingMm"}
+    _exact_keys(request, expected)
+    base, base_receipt = _manual_source(request)
+    count_value = request["count"]
+    if isinstance(count_value, bool) or not isinstance(count_value, int) or count_value < 2 or count_value > 256:
+        raise ProtocolFailure("invalid-parameter")
+    count = count_value
+    distance_name = "angleDegrees" if circular else "spacingMm"
+    distance = _finite_number(request[distance_name], 0.000001, 360.0 if circular else 1_000_000.0)
+    seed = _require_object(request["seed"])
+    if circular:
+        if seed.get("kind") != "holeCut":
+            raise ProtocolFailure("invalid-parameter")
+        x = _finite_number(seed.get("xMm"), -1_000_000.0, 1_000_000.0)
+        y = _finite_number(seed.get("yMm"), -1_000_000.0, 1_000_000.0)
+        if x == 0.0 and y == 0.0:
+            raise ProtocolFailure("invalid-parameter")
+    result = base
+    seed_kind = ""
+    try:
+        for index in range(1, count):
+            angle_divisor = count if distance == 360.0 else count - 1
+            angle = distance * index / angle_divisor if circular else 0.0
+            offset = (0.0, 0.0, 0.0) if circular else (distance * index, 0.0, 0.0)
+            cutter, seed_kind = _manual_seed_cutter(request["seed"], offset, angle)
+            result = result.cut(cutter)
+    except ProtocolFailure:
+        raise
+    except Exception as exception:
+        raise ProtocolFailure("operation-failed") from exception
+    operation = "manualCircularPattern" if circular else "manualLinearPattern"
+    kind = "circularPattern" if circular else "linearPattern"
+    return _manual_response(
+        operation,
+        result,
+        {
+            "generator": "manual",
+            "kind": kind,
+            "seedKind": seed_kind,
+            "count": count,
+            distance_name: distance,
             "sourceVolumeMm3": base_receipt["volumeMm3"],
         },
     )
@@ -1823,6 +1910,10 @@ def _dispatch(request: dict[str, object]) -> dict[str, object]:
         return _manual_sketch_extrude_cut(request)
     if operation == "manualHoleCut":
         return _manual_hole_cut(request)
+    if operation == "manualLinearPattern":
+        return _manual_pattern(request, False)
+    if operation == "manualCircularPattern":
+        return _manual_pattern(request, True)
     raise ProtocolFailure("unsupported-operation")
 
 

@@ -68,6 +68,7 @@ public sealed class PhotonCadManualCommand
         PhotonCadManualOperationKind kind,
         string capabilityId,
         string targetEntityId,
+        string? featureEntityId,
         bool createsEntity,
         ManualExecutionParameters execution,
         IEnumerable<PhotonCadSyncOperationInput> inputs)
@@ -75,6 +76,7 @@ public sealed class PhotonCadManualCommand
         Kind = kind;
         CapabilityId = capabilityId;
         TargetEntityId = targetEntityId;
+        FeatureEntityId = featureEntityId;
         CreatesEntity = createsEntity;
         Execution = execution ?? throw new ArgumentNullException(nameof(execution));
         Inputs = inputs.ToArray();
@@ -85,6 +87,7 @@ public sealed class PhotonCadManualCommand
     public PhotonCadManualOperationKind Kind { get; }
     public string CapabilityId { get; }
     public string TargetEntityId { get; }
+    public string? FeatureEntityId { get; }
     public bool CreatesEntity { get; }
     public IReadOnlyList<PhotonCadSyncOperationInput> Inputs { get; }
     internal ManualExecutionParameters Execution { get; }
@@ -107,7 +110,15 @@ internal sealed record ManualHoleParameters(
     double YMm,
     double ZMm) : ManualExecutionParameters;
 
-internal sealed record ManualUnsupportedParameters(string Operation) : ManualExecutionParameters;
+internal sealed record ManualPatternParameters(
+    string SeedFeatureId,
+    long Count,
+    double SpacingMm,
+    double AngleDegrees) : ManualExecutionParameters;
+
+internal sealed record ManualReplayFeature(
+    PhotonCadManualOperationKind Kind,
+    ManualExecutionParameters Parameters);
 
 /// <summary>
 /// The only manual-geometry execution boundary. A future pinned container implementation must

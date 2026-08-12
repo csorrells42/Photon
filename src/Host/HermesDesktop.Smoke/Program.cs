@@ -146,6 +146,20 @@ if (displayUrl != "https://example.test/"
 }
 Console.WriteLine("Desktop browser callback URL and title projection passed.");
 
+var exactMapsUri = new Uri("https://www.google.com/maps/dir/?api=1&origin=Plant+A&destination=Plant+B&travelmode=driving");
+if (BrowserSurfaceBridge.RendererSafeTitle(exactMapsUri) != "Google Maps"
+    || BrowserSurfaceBridge.RendererSafeDisplayUrl(exactMapsUri) != "https://www.google.com/"
+    || BrowserSurfaceBridge.RendererSafeDisplayUrl(exactMapsUri).Contains("Plant", StringComparison.Ordinal)
+    || BrowserSurfaceBridge.TryNormalizeAddress("https://user:password@example.test/", out _)
+    || BrowserSurfaceBridge.TryNormalizeAddress($"https://example.test/{new string('x', 4_096)}", out _)
+    || !BrowserSurfaceBridge.TryNormalizeAddress(exactMapsUri.AbsoluteUri, out var acceptedMapsUri)
+    || acceptedMapsUri.AbsoluteUri != exactMapsUri.AbsoluteUri)
+{
+    Console.Error.WriteLine("Desktop browser address validation or Google Maps projection failed.");
+    return 939;
+}
+Console.WriteLine("Desktop browser strict address validation and Google Maps projection passed.");
+
 var browserTabState = new BrowserTabState(new Uri("https://www.google.com/maps/dir/?api=1&destination=Drug+Store"));
 browserTabState.Capture(new Uri("https://www.google.com/maps/dir/route-a?api=1"));
 browserTabState.Capture(new Uri("https://www.google.com/maps/dir/route-b?api=1"));
@@ -193,6 +207,14 @@ if (!BrowserSurfaceBridge.IsEquivalentNavigationPendingOrDisplayed("tab-map", pl
     Console.Error.WriteLine("Desktop browser placement-only navigation deduplication failed.");
     return 935;
 }
+for (var resize = 0; resize < 10; resize++)
+{
+    if (!BrowserSurfaceBridge.IsEquivalentNavigationPendingOrDisplayed("tab-map", placedRoute, null, [], [], "tab-map", placedRoute))
+    {
+        Console.Error.WriteLine("Desktop browser repeated placement attempted to navigate.");
+        return 940;
+    }
+}
 Console.WriteLine("Desktop browser placement-only navigation deduplication passed.");
 
 Task<bool>? browserInitialization = null;
@@ -233,6 +255,20 @@ if (!browserSurfaceRequests.IsCurrent(currentShowRequest))
 {
     Console.Error.WriteLine("Desktop browser current show request was rejected.");
     return 938;
+}
+var showA = browserSurfaceRequests.Begin();
+browserSurfaceRequests.Invalidate();
+var showB = browserSurfaceRequests.Begin();
+if (browserSurfaceRequests.IsCurrent(showA) || !browserSurfaceRequests.IsCurrent(showB))
+{
+    Console.Error.WriteLine("Desktop browser out-of-order show requests were not generation-bound.");
+    return 941;
+}
+browserSurfaceRequests.Invalidate();
+if (browserSurfaceRequests.IsCurrent(showB))
+{
+    Console.Error.WriteLine("Desktop browser disposal/reset invalidation retained a stale show.");
+    return 942;
 }
 Console.WriteLine("Desktop browser deferred show/hide ordering passed.");
 
@@ -421,6 +457,69 @@ try
         Console.Error.WriteLine("Developer-services did not preserve a provisioned bundle-root Roslyn layout.");
         return 19;
     }
+    var binaryArduinoRoot = Path.Combine(assetBinaryRoot, "toolchains", "arduino");
+    Directory.CreateDirectory(binaryArduinoRoot);
+    File.WriteAllText(Path.Combine(binaryArduinoRoot, "hermes-toolchain-receipt.json"), "{}");
+    if (!DeveloperServicesBridge.ResolveArduinoWorkbenchRoot(assetBundleRoot, assetBinaryRoot)
+        .Equals(assetBinaryRoot, StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Developer-services did not resolve executable-adjacent Arduino assets for the source-tree launcher layout.");
+        return 19;
+    }
+    var configuredArduinoRoot = Path.Combine(assetBundleRoot, "toolchains", "arduino");
+    Directory.CreateDirectory(configuredArduinoRoot);
+    File.WriteAllText(Path.Combine(configuredArduinoRoot, "hermes-toolchain-receipt.json"), "{}");
+    if (!DeveloperServicesBridge.ResolveArduinoWorkbenchRoot(assetBundleRoot, assetBinaryRoot)
+        .Equals(assetBundleRoot, StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Developer-services did not preserve a provisioned bundle-root Arduino layout.");
+        return 19;
+    }
+
+    var debugDiscoveryRoot = Path.Combine(developerWorkspace, "debug-discovery");
+    var debugRuntimeRoot = Path.Combine(debugDiscoveryRoot, "src", "Probe", "bin", "Debug", "net10.0");
+    var inaccessibleRoot = Path.Combine(debugDiscoveryRoot, "locked-zone");
+    var skippedDataRoot = Path.Combine(debugDiscoveryRoot, "data");
+    Directory.CreateDirectory(debugRuntimeRoot);
+    Directory.CreateDirectory(inaccessibleRoot);
+    Directory.CreateDirectory(skippedDataRoot);
+    File.WriteAllText(Path.Combine(debugRuntimeRoot, "Probe.runtimeconfig.json"), "{}");
+    File.WriteAllBytes(Path.Combine(debugRuntimeRoot, "Probe.exe"), [0x4d, 0x5a]);
+    var inaccessibleVisited = false;
+    var skippedDataVisited = false;
+    string[] EnumerateDebugFiles(string directory)
+    {
+        if (directory.Equals(skippedDataRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            skippedDataVisited = true;
+            throw new IOException("The skipped data root must not be enumerated.");
+        }
+        if (directory.Equals(inaccessibleRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            inaccessibleVisited = true;
+            throw new IOException("Simulated inaccessible workspace directory.");
+        }
+        return Directory.GetFiles(directory, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly);
+    }
+    string[] EnumerateDebugDirectories(string directory)
+    {
+        if (directory.Equals(inaccessibleRoot, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Simulated inaccessible workspace directory.");
+        return Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly);
+    }
+    var debugTargets = DeveloperServicesBridge.DiscoverDebugTargetsCore(
+        debugDiscoveryRoot,
+        BuildConfiguration.Debug,
+        CancellationToken.None,
+        EnumerateDebugFiles,
+        EnumerateDebugDirectories);
+    if (!inaccessibleVisited
+        || skippedDataVisited
+        || !debugTargets.SequenceEqual(["src/Probe/bin/Debug/net10.0/Probe.exe"], StringComparer.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Developer-services debugger discovery did not skip metadata roots, tolerate an inaccessible directory, and preserve valid targets.");
+        return 19;
+    }
     var developerFrames = new List<JsonElement>();
     await using (var developerBridge = new DeveloperServicesBridge(
                      developerWorkspace,
@@ -451,6 +550,11 @@ try
                 && item.GetProperty("capabilities").EnumerateArray().Any(capability =>
                     GetString(capability, "capabilityId") == "dotnet.tests"
                     && GetString(capability, "availability") == "available"))
+            || !description.GetProperty("languageTooling").EnumerateArray().Any(item =>
+                GetString(item, "providerId") == "raspberry-pi"
+                && item.GetProperty("capabilities").EnumerateArray().All(capability =>
+                    GetString(capability, "availability") == "unavailable"
+                    && GetString(capability, "code") == "trusted-target-not-configured"))
             || GetString(description.GetProperty("availability"), "state") != "available")
         {
             Console.Error.WriteLine("Developer-services description did not advertise the guarded .NET target.");

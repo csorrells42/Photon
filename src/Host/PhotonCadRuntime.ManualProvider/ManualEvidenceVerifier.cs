@@ -15,6 +15,7 @@ internal sealed record VerifiedManualEvidence(
 internal static class ManualEvidenceVerifier
 {
     internal const string AcceptedSelectionSha256 = "sha256:bc66e112c2b9f9b404ce156a596c2d898a33901a93ee557f9eceb5c5f72d34e8";
+    private const string AcceptedNormalizedSelectionSha256 = "sha256:beecd99d33b73aee00a4ff65e2b5b53fb61546c93ed731364af7e633f20f1fe6";
     internal const string AcceptedReceiptSha256 = "sha256:8efb4c11381c5a5daef860d88e0b0ebfc876a608d503181cbbf0045bb3833884";
     internal const string AcceptedDerivedImageId = "sha256:11225c611b86551574636a1331adb6320217c62d11b7a6992ed15d4b0cc37760";
     internal const string AcceptedBaseImageId = "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703";
@@ -29,7 +30,7 @@ internal static class ManualEvidenceVerifier
     {
         var fullSelection = RequireRegularFile(selectionPath);
         var selectionBytes = await ReadBoundedAsync(fullSelection, cancellationToken).ConfigureAwait(false);
-        RequireDigest(Sha256(selectionBytes), AcceptedSelectionSha256, "manual_selection_not_accepted");
+        RequireAcceptedSelection(selectionBytes);
         using var selection = StrictDocument(selectionBytes);
         var root = selection.RootElement;
         RequireString(root, "schema", "photon.cad.industrial.evidence-selection/v1");
@@ -190,6 +191,34 @@ internal static class ManualEvidenceVerifier
     private static void RequireDigest(string actual, string expected, string code)
     {
         if (!ProtocolV1.FixedDigestEquals(actual, expected)) throw Failure(code);
+    }
+
+    private static void RequireAcceptedSelection(ReadOnlySpan<byte> bytes)
+    {
+        if (ProtocolV1.FixedDigestEquals(Sha256(bytes), AcceptedSelectionSha256)) return;
+        RequireDigest(Sha256(NormalizeSelectionLineEndings(bytes)), AcceptedNormalizedSelectionSha256,
+            "manual_selection_not_accepted");
+    }
+
+    private static byte[] NormalizeSelectionLineEndings(ReadOnlySpan<byte> bytes)
+    {
+        var normalized = new byte[bytes.Length];
+        var write = 0;
+        for (var read = 0; read < bytes.Length; read++)
+        {
+            var value = bytes[read];
+            if (value != (byte)'\r')
+            {
+                normalized[write++] = value;
+                continue;
+            }
+
+            if (++read >= bytes.Length || bytes[read] != (byte)'\n')
+                throw Failure("manual_selection_line_endings_invalid");
+            normalized[write++] = (byte)'\n';
+        }
+
+        return write == normalized.Length ? normalized : normalized[..write];
     }
 
     private static string Sha256(ReadOnlySpan<byte> bytes) =>

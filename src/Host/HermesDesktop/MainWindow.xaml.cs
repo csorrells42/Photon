@@ -10,6 +10,7 @@ using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using PhotonCadProjects.Windows;
 using HermesDeveloperServices;
+using HermesDeveloperServices.LanguageTooling;
 
 namespace HermesDesktop;
 
@@ -32,6 +33,7 @@ public partial class MainWindow : Window
     private readonly SourceControlBridge _sourceControlBridge;
     private readonly DocumentBridge _documentBridge;
     private readonly BrowserSurfaceBridge _browserSurfaceBridge;
+    private readonly RaspberryPiDesktopTooling _raspberryPiTooling;
     private readonly AccountLinkBridge _accountLinkBridge;
     private readonly HermesConversationBridge _conversationBridge;
     private readonly HermesConnectionsBridge? _connectionsBridge;
@@ -58,6 +60,7 @@ public partial class MainWindow : Window
             options.WorkspacePath,
             options.ApplicationInstallRoot,
             PostHostMessage);
+        _raspberryPiTooling = new RaspberryPiDesktopTooling(options.ApplicationInstallRoot, _credentialVault);
         _workspaceSearchBridge = new WorkspaceSearchBridge(options.WorkspacePath, PostHostMessage);
         _dockerControlBridge = new DockerControlBridge(options.ApplicationInstallRoot, PostHostMessage);
         _photonCadBridge = new PhotonCadBridge(
@@ -659,6 +662,11 @@ public partial class MainWindow : Window
                         GetString(document.RootElement, "requestId"),
                         GetString(document.RootElement, "targetRequestId"));
                     break;
+                case "developerServices.raspberryPi.configure":
+                    ConfigureRaspberryPi(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"));
+                    break;
                 case "workspaceSearch.literal":
                     await _workspaceSearchBridge.SearchLiteralAsync(
                         GetInteger(document.RootElement, "version", 0),
@@ -942,6 +950,37 @@ public partial class MainWindow : Window
             DesktopLog.Write($"Credential metadata could not be listed: {exception.GetType().Name}");
             PostCredentialError("Windows Credential Manager could not list provider connections.");
         }
+    }
+
+    private void ConfigureRaspberryPi(int version, string? requestId)
+    {
+        var id = requestId?.Trim() ?? string.Empty;
+        if (version != LanguageToolingProtocol.Version || id.Length is 0 or > 128
+            || !id.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or ':' or '-'))
+        {
+            PostHostMessage(new
+            {
+                type = "developerServices.raspberryPi.configure.result",
+                version = LanguageToolingProtocol.Version,
+                requestId = id,
+                succeeded = false,
+                code = "invalid-envelope",
+                message = "The Raspberry Pi setup request is invalid.",
+            });
+            return;
+        }
+
+        var result = _raspberryPiTooling.Configure(this);
+        PostHostMessage(new
+        {
+            type = "developerServices.raspberryPi.configure.result",
+            version = LanguageToolingProtocol.Version,
+            requestId = id,
+            succeeded = result.Succeeded,
+            code = result.Code,
+            message = result.Message,
+            targetId = result.TargetId,
+        });
     }
 
     private void OpenCredentialDialog(string? provider, string? credentialId)

@@ -1,4 +1,25 @@
-import { useEffect, useId, useMemo, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { useEffect, useId, useMemo, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  Activity,
+  Bot,
+  Box,
+  Boxes,
+  CheckCircle2,
+  CircleAlert,
+  Cpu,
+  Database,
+  HardDrive,
+  MemoryStick,
+  Network,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Server,
+  ShieldCheck,
+  Square,
+  TerminalSquare,
+  Workflow,
+} from 'lucide-react'
 import { DockerControlController } from './DockerControlController'
 import type {
   DockerControlAdapter,
@@ -37,6 +58,13 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
   const confirmationId = useId()
   const mutationBusy = state.mutationStatus !== 'idle'
   const canMutate = state.status === 'ready' && state.snapshot !== null && !mutationBusy
+  const loadedModels = state.snapshot?.modelRunner?.models.filter((model) => model.loaded).length ?? 0
+  const runningServices = state.snapshot?.services.filter((service) => service.state === 'running').length ?? 0
+  const serviceRollupState: DockerObservedState = !state.snapshot?.services.length
+    ? 'unknown'
+    : runningServices === state.snapshot.services.length
+      ? 'running'
+      : 'degraded'
 
   useEffect(() => {
     if (state.status === 'idle') void ownedController.refresh()
@@ -61,14 +89,21 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
   return (
     <section className="docker-control" aria-label="Docker Control Center" aria-busy={state.status === 'refreshing' || mutationBusy}>
       <header className="docker-control__header">
-        <div>
-          <p className="docker-control__eyebrow">Photon runtime</p>
-          <h2>Docker Control Center</h2>
-          <p>Verified product services only. No generic Docker command surface is exposed to the renderer.</p>
+        <div className="docker-control__title-group">
+          <span className="docker-control__title-icon" aria-hidden="true"><Boxes size={24} /></span>
+          <div>
+            <p className="docker-control__eyebrow">Docker status</p>
+            <h2>Docker Control Center</h2>
+            <p>Health, resources, local models, and reviewed lifecycle controls for Photon services.</p>
+          </div>
         </div>
-        <button type="button" onClick={() => void ownedController.refresh()} disabled={state.status === 'refreshing' || state.mutationStatus === 'committing'}>
+        <div className="docker-control__header-actions">
+          {state.snapshot ? <div className="docker-control__snapshot"><span>Revision {state.snapshot.revision}</span><time dateTime={state.snapshot.observedAtUtc}>{state.snapshot.observedAtUtc}</time></div> : null}
+          <button className="docker-control__icon-button" type="button" onClick={() => void ownedController.refresh()} disabled={state.status === 'refreshing' || state.mutationStatus === 'committing'}>
+            <RefreshCw size={15} aria-hidden="true" className={state.status === 'refreshing' ? 'docker-control__spin' : undefined} />
           {state.status === 'refreshing' ? 'Refreshing…' : 'Refresh'}
-        </button>
+          </button>
+        </div>
       </header>
 
       <p className={`docker-control__notice docker-control__notice--${state.status}`} role={state.status === 'error' ? 'alert' : 'status'} aria-live="polite">
@@ -84,25 +119,22 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
       ) : (
         <>
           <section className="docker-control__overview" aria-label="Stack identity">
-            <StatusCard title="Docker engine" state={state.snapshot.engine.state} detail={state.snapshot.engine.version ?? 'Version not reported'} />
-            <StatusCard title="Compose stack" state={state.snapshot.compose.state} detail={state.snapshot.compose.runtimeProtocol ?? 'Runtime protocol not reported'} />
-            <article className="docker-control__status-card">
-              <span>Snapshot</span>
-              <strong>Revision {state.snapshot.revision}</strong>
-              <small>{state.snapshot.observedAtUtc}</small>
-            </article>
+            <StatusCard icon={<Server size={18} />} title="Docker engine" state={state.snapshot.engine.state} detail={state.snapshot.engine.version ?? 'Version not reported'} />
+            <StatusCard icon={<Workflow size={18} />} title="Compose stack" state={state.snapshot.compose.state} detail={state.snapshot.compose.runtimeProtocol ?? 'Runtime protocol not reported'} />
+            <StatusCard icon={<Activity size={18} />} title="Approved services" state={serviceRollupState} detail={`${runningServices} of ${state.snapshot.services.length} running`} />
+            <StatusCard icon={<Bot size={18} />} title="Local inference" state={state.snapshot.modelRunner?.state ?? 'unavailable'} detail={`${loadedModels} model${loadedModels === 1 ? '' : 's'} loaded`} />
           </section>
 
           <section className="docker-control__actions" aria-label="Reviewed stack operations">
-            <button type="button" disabled={!canMutate || !state.operations.startStack} onClick={() => request({ kind: 'start-stack' })}>Review stack start</button>
-            <button type="button" disabled={!canMutate || !state.operations.stopStack} onClick={() => request({ kind: 'stop-stack' })}>Review stack stop</button>
+            <button type="button" disabled={!canMutate || !state.operations.startStack} onClick={() => request({ kind: 'start-stack' })}><Play size={14} aria-hidden="true" />Review stack start</button>
+            <button type="button" disabled={!canMutate || !state.operations.stopStack} onClick={() => request({ kind: 'stop-stack' })}><Square size={13} aria-hidden="true" />Review stack stop</button>
             <button
               type="button"
               disabled={!canMutate || !state.operations.update}
               title={!state.operations.update && state.updateReason === 'derived-runtime-updater-not-integrated' ? 'The trusted Docker updater is not integrated.' : undefined}
               onClick={() => request({ kind: 'request-update' })}
             >
-              {state.operations.update ? 'Review update workflow' : 'Update workflow unavailable'}
+              <Workflow size={14} aria-hidden="true" />{state.operations.update ? 'Review update workflow' : 'Update workflow unavailable'}
             </button>
           </section>
 
@@ -123,7 +155,7 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
                       onClick={() => ownedController.selectService(service.id)}
                       onKeyDown={(event) => handleServiceKey(event, index, services, ownedController)}
                     >
-                      <span>{serviceLabels[service.id]}</span>
+                      <span className="docker-control__service-label"><ServiceIcon service={service.id} /><span><strong>{serviceLabels[service.id]}</strong><small>{service.health}</small></span></span>
                       <StatePill state={service.state} />
                     </button>
                   ))}
@@ -219,18 +251,24 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
       )}
 
       <footer className="docker-control__boundary">
-        Environment values, Docker credentials, mounted secret contents, arbitrary commands, and unrestricted logs never enter this surface.
+        No generic Docker command surface is exposed. Environment values, Docker credentials, mounted secret contents, arbitrary commands, and unrestricted logs never enter this view.
       </footer>
     </section>
   )
 }
 
-function StatusCard({ title, state, detail }: { title: string; state: DockerObservedState; detail: string }) {
-  return <article className="docker-control__status-card"><span>{title}</span><strong>{stateLabels[state]}</strong><small>{detail}</small></article>
+function StatusCard({ icon, title, state, detail }: { icon: ReactNode; title: string; state: DockerObservedState; detail: string }) {
+  return <article className="docker-control__status-card"><span className="docker-control__status-icon" aria-hidden="true">{icon}</span><span>{title}</span><strong>{stateLabels[state]}</strong><small>{detail}</small></article>
 }
 
 function StatePill({ state }: { state: DockerObservedState }) {
-  return <span className={`docker-control__pill docker-control__pill--${state}`}>{stateLabels[state]}</span>
+  const Icon = state === 'running' ? CheckCircle2 : state === 'degraded' || state === 'unknown' ? CircleAlert : Square
+  return <span className={`docker-control__pill docker-control__pill--${state}`}><Icon size={11} aria-hidden="true" />{stateLabels[state]}</span>
+}
+
+function ServiceIcon({ service }: { service: DockerProductService }) {
+  const Icon = service === 'hermes' ? Box : service === 'memory-vector' ? Database : service === 'serena' ? ShieldCheck : Bot
+  return <span className="docker-control__service-icon" aria-hidden="true"><Icon size={17} /></span>
 }
 
 function ServiceDetail({
@@ -253,11 +291,11 @@ function ServiceDetail({
   return (
     <>
       <div className="docker-control__section-heading">
-        <div><p className="docker-control__eyebrow">Approved service</p><h3>{serviceLabels[service.id]}</h3></div>
+        <div className="docker-control__detail-title"><ServiceIcon service={service.id} /><div><p className="docker-control__eyebrow">Approved service</p><h3>{serviceLabels[service.id]}</h3></div></div>
         <div className="docker-control__service-actions">
-          <button type="button" disabled={!canStart || service.state === 'running'} onClick={onStart}>Review start</button>
-          <button type="button" disabled={!canStop || service.state === 'stopped' || service.state === 'unavailable'} onClick={onStop}>Review stop</button>
-          <button type="button" disabled={!canRestart || (service.state !== 'running' && service.state !== 'degraded')} onClick={onRestart}>Review restart</button>
+          <button type="button" disabled={!canStart || service.state === 'running'} onClick={onStart}><Play size={13} aria-hidden="true" />Review start</button>
+          <button type="button" disabled={!canStop || service.state === 'stopped' || service.state === 'unavailable'} onClick={onStop}><Square size={12} aria-hidden="true" />Review stop</button>
+          <button type="button" disabled={!canRestart || (service.state !== 'running' && service.state !== 'degraded')} onClick={onRestart}><RotateCw size={13} aria-hidden="true" />Review restart</button>
         </div>
       </div>
       <dl className="docker-control__facts">
@@ -276,16 +314,20 @@ function ServiceDetail({
       <h4>Current resources</h4>
       {service.resources ? (
         <dl className="docker-control__facts docker-control__facts--resources">
-          <div><dt>CPU</dt><dd>{service.resources.cpuPercent === undefined ? 'Not reported' : `${service.resources.cpuPercent.toFixed(2)}%`}</dd></div>
-          <div><dt>Memory</dt><dd>{service.resources.memoryUsage ?? 'Not reported'}{service.resources.memoryLimit ? ` / ${service.resources.memoryLimit}` : ''}</dd></div>
-          <div><dt>Memory %</dt><dd>{service.resources.memoryPercent === undefined ? 'Not reported' : `${service.resources.memoryPercent.toFixed(2)}%`}</dd></div>
-          <div><dt>Network I/O</dt><dd>{service.resources.networkIo ?? 'Not reported'}</dd></div>
-          <div><dt>Block I/O</dt><dd>{service.resources.blockIo ?? 'Not reported'}</dd></div>
+          <ResourceFact icon={<Cpu size={14} />} label="CPU" value={service.resources.cpuPercent === undefined ? 'Not reported' : `${service.resources.cpuPercent.toFixed(2)}%`} percent={service.resources.cpuPercent} />
+          <ResourceFact icon={<MemoryStick size={14} />} label="Memory" value={`${service.resources.memoryUsage ?? 'Not reported'}${service.resources.memoryLimit ? ` / ${service.resources.memoryLimit}` : ''}`} percent={service.resources.memoryPercent} />
+          <div><dt><Network size={12} aria-hidden="true" />Network I/O</dt><dd>{service.resources.networkIo ?? 'Not reported'}</dd></div>
+          <div><dt><HardDrive size={12} aria-hidden="true" />Block I/O</dt><dd>{service.resources.blockIo ?? 'Not reported'}</dd></div>
           <div><dt>PIDs</dt><dd>{service.resources.pids ?? 'Not reported'}</dd></div>
         </dl>
       ) : <p className="docker-control__missing">Resource telemetry is unavailable for this service.</p>}
     </>
   )
+}
+
+function ResourceFact({ icon, label, value, percent }: { icon: ReactNode; label: string; value: string; percent?: number }) {
+  const bounded = percent === undefined ? 0 : Math.min(100, Math.max(0, percent))
+  return <div className="docker-control__resource-fact"><dt>{icon}{label}</dt><dd>{value}</dd>{percent === undefined ? null : <div className="docker-control__meter" aria-label={`${label} utilization ${percent.toFixed(2)} percent`} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={bounded}><span style={{ width: `${bounded}%` }} /></div>}</div>
 }
 
 function ModelRunnerPanel({
@@ -317,7 +359,7 @@ function ModelRunnerPanel({
           </dl>
           <div className="docker-control__model-authority">
             <button type="button" disabled title="This Docker CLI exposes pull/run, not a bounded load-only command. Loading remains unavailable here.">Load model unavailable</button>
-            <span>{snapshot.models.filter((model) => model.loaded).length} loaded / {snapshot.models.length} local</span>
+            <span><Bot size={14} aria-hidden="true" />{snapshot.models.filter((model) => model.loaded).length} loaded / {snapshot.models.length} local</span>
           </div>
           {snapshot.models.length ? (
             <div className="docker-control__models">

@@ -1,0 +1,20 @@
+{
+  "schema": "photon.cad.industrial.evidence-selection/v1",
+  "selectedUtc": "2026-08-11T23:41:35.5919554\u002B00:00",
+  "runId": "8dbb4721528345a18188f141ce3df0db",
+  "receipt": {
+    "path": "runs/receipt-8dbb4721528345a18188f141ce3df0db.json",
+    "sha256": "sha256:8efb4c11381c5a5daef860d88e0b0ebfc876a608d503181cbbf0045bb3833884",
+    "immutable": true
+  },
+  "report": {
+    "path": "IMPLEMENTATION-REPORT.md",
+    "sha256": "sha256:a99ec19833fa70b9a31417a2d178c197b14ab4c630b3d20307401d8a509fa9ea"
+  },
+  "baseImageId": "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703",
+  "derivedImageId": "sha256:11225c611b86551574636a1331adb6320217c62d11b7a6992ed15d4b0cc37760",
+  "friendlyTag": "photon-cad-industrial:0.1.0-b123dmcp-0.3.80-bdw0.2.0",
+  "friendlyTagVerified": true,
+  "previousFriendlyImageId": "sha256:dead193ab98599da4ebf79d22b6c5570fa0fcd0a1291bed4028a5630d896ead4",
+  "scenarioCount": 22
+}

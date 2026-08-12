@@ -16,6 +16,8 @@ import {
   PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID,
   PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID,
   PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID,
+  PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID,
+  PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID,
   PhotonCadWorkspace,
   photonCadAcceptedPersistedScratchCommit,
   photonCadAcceptedAssemblySnapshot,
@@ -99,13 +101,17 @@ function industrialRuntime(capability: PhotonCadCapability, catalogRevision = 'c
 }
 
 function manualCapability(
-  id: typeof PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID | typeof PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID | typeof PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID,
+  id: typeof PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID | typeof PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID | typeof PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
+    | typeof PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID | typeof PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID,
 ): PhotonCadCapability {
   const base = {
     id,
     backend: 'geometry' as const,
     category: 'Build123d design',
-    title: id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID ? 'Sketch + extrude' : id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID ? 'Sketch cut' : 'Hole',
+    title: id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID ? 'Sketch + extrude'
+      : id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID ? 'Sketch cut'
+        : id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID ? 'Hole'
+          : id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID ? 'Linear pattern' : 'Circular pattern',
     description: 'Persist an exact manual solid operation.',
     operation: id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID ? 'create' as const : 'modify' as const,
     source: { package: 'build123d', version: '0.3.80', digest: industrialDigest, license: 'redistribution-blocked' },
@@ -129,6 +135,16 @@ function manualCapability(
     parameters: [
       { id: 'sketchPlane', label: 'Sketch plane', description: '', kind: 'choice', required: true, defaultValue: 'xy', choices: [{ value: 'xy', label: 'XY' }] },
       positive('profileWidthMm'), positive('profileHeightMm'), positive('cutDepthMm'),
+    ],
+  }
+  if (id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID || id === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID) return {
+    ...base,
+    parameters: [
+      { id: 'seedFeatureId', label: 'Seed feature', description: '', kind: 'entity', required: true, defaultValue: null },
+      { id: 'count', label: 'Pattern count', description: '', kind: 'integer', required: true, unit: 'count', minimum: 2, maximum: 256, step: 1, defaultValue: 2 },
+      id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
+        ? positive('spacingMm')
+        : { id: 'angleDegrees', label: 'Sweep angle', description: '', kind: 'number' as const, required: true, unit: 'angle' as const, minimum: 0.000001, maximum: 360, defaultValue: 360 },
     ],
   }
   return {
@@ -340,6 +356,34 @@ describe('PhotonCadWorkspace', () => {
       }
       expect(photonCadAcceptedPersistedScratchCommit(request, accepted, true)?.snapshot.revision).toBe(request.baseRevision + 2)
       expect(photonCadAcceptedPersistedScratchCommit({ ...request, targetEntityIds: [] }, accepted, true)).toBeNull()
+    }
+  })
+
+  it('authorizes exact manual patterns only from a durable cut or hole seed on the selected solid', () => {
+    const body = { id: 'body:manual', parentId: null, kind: 'body' as const, name: 'Manual body', visible: true, suppressed: false }
+    const cut = { id: 'feature:cut', parentId: body.id, kind: 'datum' as const, name: 'Sketch cut feature', visible: true, suppressed: false, sourceCapabilityId: PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID }
+    const hole = { id: 'feature:hole', parentId: body.id, kind: 'datum' as const, name: 'Hole feature', visible: true, suppressed: false, sourceCapabilityId: PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID }
+    const project = { ...persistedProject(), revision: 6, entities: [body, cut, hole] }
+    for (const [capabilityId, seedFeatureId] of [
+      [PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID, cut.id],
+      [PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID, hole.id],
+    ] as const) {
+      const capability = manualCapability(capabilityId)
+      const request: PhotonCadOperationRequest = {
+        ...operationRequest(capability.id, { ...photonCadInitialCapabilityInputs(capability), seedFeatureId }),
+        baseRevision: project.revision,
+        targetEntityIds: [body.id],
+      }
+      expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(capability), project, request)).not.toBeNull()
+      expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(capability), project, {
+        ...request, inputs: { ...request.inputs, seedFeatureId: body.id },
+      })).toBeNull()
+      expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(capability), project, {
+        ...request, inputs: { ...request.inputs, seedFeatureId: 'feature:foreign' },
+      })).toBeNull()
+      expect(photonCadAuthorizePersistedScratchRequest(industrialRuntime(capability), project, {
+        ...request, targetEntityIds: [],
+      })).toBeNull()
     }
   })
 

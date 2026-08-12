@@ -405,9 +405,11 @@ internal sealed class AssemblySmoke
             .ToDictionary(value => value.EntityId, value => value.index, StringComparer.Ordinal);
         var nodes = command.Occurrences.Select(occurrence =>
         {
+            var sourcePartId = occurrence.SourcePartId
+                ?? throw new InvalidOperationException("assembly_smoke_preview_source_missing");
             var node = new Dictionary<string, object?>
             {
-                ["mesh"] = sourceIndexes[occurrence.SourcePartId],
+                ["mesh"] = sourceIndexes[sourcePartId],
                 ["matrix"] = ColumnMajor(occurrence.Transform),
                 ["extras"] = new { photonEntityId = occurrence.EntityId },
             };

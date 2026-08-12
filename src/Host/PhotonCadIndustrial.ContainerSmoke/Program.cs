@@ -269,10 +269,10 @@ internal static class Program
                     harness!,
                     derivedImageId!,
                     rectangleJob,
-                    ManualSketchExtrudeAddRequest("rectangle", 10, 20, depthMm: 30));
+                    ManualSketchExtrudeAddRequest("rectangle", 40, 40, depthMm: 30));
                 RequireSuccess(rectangle.Process, "manual rectangle add");
                 RequireSuccessResponse(rectangle.Response, "manualSketchExtrudeAdd");
-                RequireApproximately(rectangle.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble(), 6000.0, 1e-9, "manual rectangle volume");
+                RequireApproximately(rectangle.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble(), 48000.0, 1e-9, "manual rectangle volume");
                 ValidateManualProvenance(rectangle.Response, "sketchExtrudeAdd", "rectangle");
                 var (rectangleBytes, rectangleDigest) = ValidateArtifact(rectangle.Response, Path.Combine(rectangleJob, "output", "model.step"), "step");
 
@@ -288,39 +288,70 @@ internal static class Program
                 ValidateManualProvenance(circle.Response, "sketchExtrudeAdd", "circle");
 
                 var cutJob = NewJob(tempRoot, "manual-rectangle-cut");
-                File.WriteAllBytes(Path.Combine(cutJob, "input", "base.step"), boxBytes);
+                File.WriteAllBytes(Path.Combine(cutJob, "input", "base.step"), rectangleBytes);
                 var cut = await InvokeAdapterAsync(
                     harness!,
                     derivedImageId!,
                     cutJob,
-                    ManualSketchExtrudeCutRequest("base", boxDigest!, "rectangle", 4, 5, depthMm: 30));
+                    ManualSketchExtrudeCutRequest("base", rectangleDigest, "rectangle", 4, 5, depthMm: 30));
                 RequireSuccess(cut.Process, "manual rectangle cut");
                 RequireSuccessResponse(cut.Response, "manualSketchExtrudeCut");
                 var cutVolume = cut.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
-                Require(cutVolume > 0 && cutVolume < 6000, "manual cut did not subtract real solid volume");
+                Require(cutVolume > 0 && cutVolume < 48000, "manual cut did not subtract real solid volume");
                 ValidateManualProvenance(cut.Response, "sketchExtrudeCut", "rectangle");
                 var (cutBytes, cutDigest) = ValidateArtifact(cut.Response, Path.Combine(cutJob, "output", "model.step"), "step");
 
                 var holeJob = NewJob(tempRoot, "manual-hole-cut");
-                File.WriteAllBytes(Path.Combine(holeJob, "input", "base.step"), boxBytes);
+                File.WriteAllBytes(Path.Combine(holeJob, "input", "base.step"), cutBytes);
                 var hole = await InvokeAdapterAsync(
                     harness!,
                     derivedImageId!,
                     holeJob,
-                    ManualHoleCutRequest("base", boxDigest!, radiusMm: 2, depthMm: 30, xMm: 0, yMm: 0, zMm: 0));
+                    ManualHoleCutRequest("base", cutDigest, radiusMm: 2, depthMm: 30, xMm: 8, yMm: 0, zMm: 0));
                 RequireSuccess(hole.Process, "manual hole cut");
                 RequireSuccessResponse(hole.Response, "manualHoleCut");
                 var holeVolume = hole.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
-                Require(holeVolume > 0 && holeVolume < 6000, "manual hole did not subtract real solid volume");
+                Require(holeVolume > 0 && holeVolume < cutVolume, "manual hole did not subtract real solid volume");
                 ValidateManualProvenance(hole.Response, "holeCut", null);
+                var (holeBytes, holeDigest) = ValidateArtifact(hole.Response, Path.Combine(holeJob, "output", "model.step"), "step");
+
+                var linearJob = NewJob(tempRoot, "manual-linear-pattern");
+                File.WriteAllBytes(Path.Combine(linearJob, "input", "base.step"), holeBytes);
+                var linear = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    linearJob,
+                    ManualLinearPatternRequest("base", holeDigest, count: 3, spacingMm: 8,
+                        seed: new { kind = "sketchExtrudeCut", profile = new { kind = "rectangle", plane = "xy", widthMm = 4, heightMm = 5 }, depthMm = 30 }));
+                RequireSuccess(linear.Process, "manual linear pattern");
+                RequireSuccessResponse(linear.Response, "manualLinearPattern");
+                var linearVolume = linear.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
+                Require(linearVolume > 0 && linearVolume < holeVolume, "manual linear pattern did not cut repeated real geometry");
+                ValidateManualPatternProvenance(linear.Response, "linearPattern", "sketchExtrudeCut", 3, "spacingMm", 8);
+                var (linearBytes, linearDigest) = ValidateArtifact(linear.Response, Path.Combine(linearJob, "output", "model.step"), "step");
+
+                var circularJob = NewJob(tempRoot, "manual-circular-pattern");
+                File.WriteAllBytes(Path.Combine(circularJob, "input", "base.step"), linearBytes);
+                var circular = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    circularJob,
+                    ManualCircularPatternRequest("base", linearDigest, count: 4, angleDegrees: 360,
+                        seed: new { kind = "holeCut", radiusMm = 2, depthMm = 30, xMm = 8, yMm = 0, zMm = 0 }));
+                RequireSuccess(circular.Process, "manual circular pattern");
+                RequireSuccessResponse(circular.Response, "manualCircularPattern");
+                var circularVolume = circular.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
+                Require(circularVolume > 0 && circularVolume < linearVolume, "manual circular pattern did not cut repeated real geometry");
+                ValidateManualPatternProvenance(circular.Response, "circularPattern", "holeCut", 4, "angleDegrees", 360);
+                var (circularBytes, circularDigest) = ValidateArtifact(circular.Response, Path.Combine(circularJob, "output", "model.step"), "step");
 
                 var previewJob = NewJob(tempRoot, "manual-complete-preview");
-                File.WriteAllBytes(Path.Combine(previewJob, "input", "cut.step"), cutBytes);
+                File.WriteAllBytes(Path.Combine(previewJob, "input", "cut.step"), circularBytes);
                 var preview = await InvokeAdapterAsync(
                     harness!,
                     derivedImageId!,
                     previewJob,
-                    SingleSourcePreviewRequest("cut", cutDigest, IdentityTransform()));
+                    SingleSourcePreviewRequest("cut", circularDigest, IdentityTransform()));
                 RequireSuccess(preview.Process, "manual preview");
                 RequireSuccessResponse(preview.Response, "createPreview");
                 ValidateArtifact(preview.Response, Path.Combine(previewJob, "output", "preview.glb"), "glb");
@@ -356,6 +387,14 @@ internal static class Program
                     NewJob(tempRoot, "manual-bad-source"),
                     ManualHoleCutRequest("../base", "sha256:" + new string('0', 64), 1, 1, 0, 0, 0));
                 RequireErrorResponse(badSource, "invalid-parameter");
+
+                var badCircularSeed = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    NewJob(tempRoot, "manual-circular-seed"),
+                    ManualCircularPatternRequest("base", "sha256:" + new string('0', 64), 4, 360,
+                        new { kind = "sketchExtrudeCut", profile = new { kind = "rectangle", plane = "xy", widthMm = 1, heightMm = 1 }, depthMm = 1 }));
+                RequireErrorResponse(badCircularSeed, "artifact-invalid");
 
                 var fillet = await InvokeAdapterAsync(
                     harness!,
@@ -1339,6 +1378,30 @@ if not writer.Transfer(document) or writer.Write("/photon-output/assembly.step")
             hole = new { radiusMm, depthMm, xMm, yMm, zMm },
         }, JsonOptions);
 
+    private static string ManualLinearPatternRequest(
+        string inputSlot, string digest, int count, double spacingMm, object seed) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualLinearPattern",
+            source = new { inputSlot, expectedDigest = digest },
+            seed,
+            count,
+            spacingMm,
+        }, JsonOptions);
+
+    private static string ManualCircularPatternRequest(
+        string inputSlot, string digest, int count, double angleDegrees, object seed) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualCircularPattern",
+            source = new { inputSlot, expectedDigest = digest },
+            seed,
+            count,
+            angleDegrees,
+        }, JsonOptions);
+
     private static string CatalogItemRequest(string digest, CatalogItem item) =>
         JsonSerializer.Serialize(new
         {
@@ -1539,6 +1602,23 @@ if not writer.Transfer(document) or writer.Write("/photon-output/assembly.step")
         var profile = provenance.GetProperty("profile");
         Require(profile.GetProperty("kind").GetString() == expectedProfileKind, "manual profile kind drifted");
         Require(profile.GetProperty("plane").GetString() == "xy", "manual profile plane drifted");
+    }
+
+    private static void ValidateManualPatternProvenance(
+        JsonElement response,
+        string expectedKind,
+        string expectedSeedKind,
+        int expectedCount,
+        string distanceName,
+        double expectedDistance)
+    {
+        var provenance = response.GetProperty("provenance");
+        RequireExactKeys(provenance, "generator", "kind", "seedKind", "count", distanceName, "sourceVolumeMm3");
+        Require(provenance.GetProperty("generator").GetString() == "manual", "manual pattern provenance generator drifted");
+        Require(provenance.GetProperty("kind").GetString() == expectedKind, "manual pattern provenance kind drifted");
+        Require(provenance.GetProperty("seedKind").GetString() == expectedSeedKind, "manual pattern seed kind drifted");
+        Require(provenance.GetProperty("count").GetInt32() == expectedCount, "manual pattern count drifted");
+        RequireApproximately(provenance.GetProperty(distanceName).GetDouble(), expectedDistance, 0, "manual pattern distance drifted");
     }
 
     private static void ValidateCatalogProvenance(JsonElement response, string expectedDigest, CatalogItem item)

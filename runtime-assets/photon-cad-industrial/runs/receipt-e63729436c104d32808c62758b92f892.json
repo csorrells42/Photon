@@ -1,0 +1,182 @@
+{
+  "schema": "photon.cad.industrial.smoke-receipt/v2",
+  "runId": "e63729436c104d32808c62758b92f892",
+  "passed": true,
+  "startedUtc": "2026-08-12T03:58:42.6695932\u002B00:00",
+  "completedUtc": "2026-08-12T04:03:29.7003495\u002B00:00",
+  "durationMilliseconds": 287030,
+  "sourceHashes": {
+    "src/Host/PhotonCadIndustrial.ContainerSmoke/HardenedDockerHarness.cs": "sha256:97c02fec729c2a306470b8ea73807ca05ddbdb0d0a05d44a3ee777cfafb5ccc4",
+    "src/Host/PhotonCadIndustrial.ContainerSmoke/PhotonCadIndustrial.ContainerSmoke.csproj": "sha256:5076da3ac7d88d021a193ba1e2557a3c934f57e0f161cbc45d87ea9c5920e401",
+    "src/Host/PhotonCadIndustrial.ContainerSmoke/Program.cs": "sha256:13f844ee3839c41d38cc7031ba47214cc203ae726d4b8c850c107f8b3722a6ae",
+    "src/Host/PhotonCadRuntime.Container/industrial/Dockerfile": "sha256:fae78fb2fc6bb033c33f19ec8571a5cc2ae4c619d38050a969cf4d0323353c7f",
+    "src/Host/PhotonCadRuntime.Container/industrial/README.md": "sha256:154321a9447066fe35fc454f49dd89a0176ccd8ae148504d13aa109ff89f30bd",
+    "src/Host/PhotonCadRuntime.Container/industrial/fixtures/catalog.request.json": "sha256:3ebcc7a2f425157442db35d6bd0915ecfd9d99b6658dad59c494cb0952a503d9",
+    "src/Host/PhotonCadRuntime.Container/industrial/fixtures/protocol-golden-v1.json": "sha256:a3e2551b78c641c462145e9a1d53f36bc2d3ed1184bdf2df6a2c74d49c11ad1a",
+    "src/Host/PhotonCadRuntime.Container/industrial/photon_industrial_adapter.py": "sha256:d7a70bf9b83973b202bb66ad520b2e6bdb5c03b6c408ade394e6309d0a95b196",
+    "src/Host/PhotonCadRuntime.Container/industrial/schemas/catalog-v1.schema.json": "sha256:2bfab3a6e0f78969a2a7d266228f56cced5d01869bf487f12329574674d187c3",
+    "src/Host/PhotonCadRuntime.Container/industrial/schemas/request-v1.schema.json": "sha256:becfd1e830d8bc37324c67cd3b9c65d81fd41717512dde6a18ef01ef062cbd44",
+    "src/Host/PhotonCadRuntime.Container/industrial/schemas/response-v1.schema.json": "sha256:a528e14a01c0a8c9f59fda00e71136cc2e9724e7da124d91bb45417a34ce31de"
+  },
+  "baseImage": {
+    "lookupTag": "photon-cad-geometry:0.1.0-b123dmcp-0.3.80-8fb7cefb",
+    "exactId": "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703"
+  },
+  "derivedImage": {
+    "exactId": "sha256:4ad3200ff457b11e1b3f1b115e28927cf376930660919a5295417352112354fc",
+    "plannedFriendlyTag": "photon-cad-industrial:0.1.0-b123dmcp-0.3.80-bdw0.2.0",
+    "runsUsedExactIdOnly": true
+  },
+  "catalog": {
+    "digest": "sha256:aae5554ce9e57133f508e3343663704d35c82e6a31e5201f6224a9b299ddf6b6",
+    "byteLength": 50474,
+    "packageDigest": "sha256:2e1b8d0a41f0562071c3fdc5cbe803871e3c94fdf8927b0238550b6844aea5b9"
+  },
+  "artifacts": {
+    "boxDigest": "sha256:9c21a5e0dc3f47e17ae61a8900403d7ea8b104e0fbb049002341905ea980a6c8",
+    "cylinderDigest": "sha256:4d2c3487052a2172b76390a7b2995b53e2835a31c3c19093b8f8c0d08ffd0171",
+    "bearingDigest": "sha256:8778524393f91d0e273944f9b583c49851f9a56b945015f5261af8639c098480",
+    "gearDigest": "sha256:3cd437e4710ba7a040d764b6d24b54ae7ca8812c45181705d372ff4ba5e9759b",
+    "previewDigest": "sha256:986bda476bca2a812b24068ebc86e7c11a2c223b5db37394d0793b17d3a176bc"
+  },
+  "runtimePolicy": {
+    "network": "none",
+    "readOnlyRoot": true,
+    "user": "65532:65532",
+    "capabilities": "ALL dropped",
+    "noNewPrivileges": true,
+    "pidsLimit": 64,
+    "memory": "2g",
+    "cpus": 2,
+    "inputMount": "/photon-input:read-only",
+    "outputMount": "/photon-output:read-write",
+    "exactContainerCleanup": true
+  },
+  "commands": [
+    "docker image tag sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703 photon-cad-geometry-staging:\u003Crun-id\u003E",
+    "docker build --pull=false --network=none --build-arg PHOTON_CAD_GEOMETRY_BASE=photon-cad-geometry-staging:\u003Crun-id\u003E --tag photon-cad-industrial-staging:\u003Crun-id\u003E --file industrial/Dockerfile industrial",
+    "docker run [hardened policy and unique name/CID] sha256:4ad3200ff457b11e1b3f1b115e28927cf376930660919a5295417352112354fc",
+    "docker image tag sha256:4ad3200ff457b11e1b3f1b115e28927cf376930660919a5295417352112354fc photon-cad-industrial:0.1.0-b123dmcp-0.3.80-bdw0.2.0 [only after immutable receipt]"
+  ],
+  "redistribution": {
+    "status": "blocked-pending-license-review",
+    "aggregateLicenseClaim": false
+  },
+  "scenarios": [
+    {
+      "Name": "exact-base-image-identity",
+      "DurationMilliseconds": 133,
+      "Passed": true
+    },
+    {
+      "Name": "immutable-base-staging-binding",
+      "DurationMilliseconds": 155,
+      "Passed": true
+    },
+    {
+      "Name": "offline-derived-image-build",
+      "DurationMilliseconds": 859,
+      "Passed": true
+    },
+    {
+      "Name": "strict-json-hostile-inputs",
+      "DurationMilliseconds": 62091,
+      "Passed": true
+    },
+    {
+      "Name": "mutable-tag-drift-detection-simulation",
+      "DurationMilliseconds": 0,
+      "Passed": true
+    },
+    {
+      "Name": "host-deadline-kills-exact-container",
+      "DurationMilliseconds": 1401,
+      "Passed": true
+    },
+    {
+      "Name": "stdout-cap-kills-exact-container",
+      "DurationMilliseconds": 617,
+      "Passed": true
+    },
+    {
+      "Name": "deterministic-catalog-bytes-and-identity",
+      "DurationMilliseconds": 12848,
+      "Passed": true
+    },
+    {
+      "Name": "box-6000-and-new-only-output",
+      "DurationMilliseconds": 12619,
+      "Passed": true
+    },
+    {
+      "Name": "cylinder-formula",
+      "DurationMilliseconds": 6306,
+      "Passed": true
+    },
+    {
+      "Name": "manual-rectangle-circle-extrude-cut-hole-and-preview",
+      "DurationMilliseconds": 32128,
+      "Passed": true
+    },
+    {
+      "Name": "manual-protocol-hostiles-and-unimplemented-edit-operations",
+      "DurationMilliseconds": 24786,
+      "Passed": true
+    },
+    {
+      "Name": "named-transformed-step-assembly-inspection-and-preview",
+      "DurationMilliseconds": 13329,
+      "Passed": true
+    },
+    {
+      "Name": "dynamic-bearing-creation",
+      "DurationMilliseconds": 7070,
+      "Passed": true
+    },
+    {
+      "Name": "dynamic-spur-gear-creation",
+      "DurationMilliseconds": 6578,
+      "Passed": true
+    },
+    {
+      "Name": "catalog-digest-and-parameter-fail-closed",
+      "DurationMilliseconds": 12424,
+      "Passed": true
+    },
+    {
+      "Name": "two-part-hierarchical-self-contained-glb",
+      "DurationMilliseconds": 6126,
+      "Passed": true
+    },
+    {
+      "Name": "sealed-input-digest-and-rigid-transform",
+      "DurationMilliseconds": 18444,
+      "Passed": true
+    },
+    {
+      "Name": "path-ads-traversal-and-sealed-step-fail-closed",
+      "DurationMilliseconds": 50115,
+      "Passed": true
+    },
+    {
+      "Name": "dag-cycle-and-depth-bounds",
+      "DurationMilliseconds": 12496,
+      "Passed": true
+    },
+    {
+      "Name": "atomic-output-race-has-one-winner",
+      "DurationMilliseconds": 6425,
+      "Passed": true
+    },
+    {
+      "Name": "host-reparse-and-hardlink-rejection",
+      "DurationMilliseconds": 11,
+      "Passed": true
+    },
+    {
+      "Name": "no-residual-smoke-containers",
+      "DurationMilliseconds": 43,
+      "Passed": true
+    }
+  ]
+}

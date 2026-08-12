@@ -149,6 +149,8 @@ export const PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID = 'assembly.occurrence.rem
 export const PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID = 'manual.solid.extrude.add.v1'
 export const PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID = 'manual.solid.extrude.cut.v1'
 export const PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID = 'manual.solid.hole.cut.v1'
+export const PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID = 'manual.feature.pattern.linear.v1'
+export const PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID = 'manual.feature.pattern.circular.v1'
 
 export type PhotonCadCatalogSection = {
   id: string
@@ -252,6 +254,8 @@ function photonCadManualDesignCapability(capability: PhotonCadCapability) {
 function photonCadManualModifyCapabilityId(capabilityId: string) {
   return capabilityId === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
     || capabilityId === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
+    || capabilityId === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
+    || capabilityId === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID
 }
 
 export function photonCadProjectParts(project: PhotonCadProjectSnapshot | null, query = ''): PhotonCadProjectPart[] {
@@ -627,6 +631,23 @@ function photonCadManualSchemaMatches(capability: PhotonCadCapability) {
       && photonCadManualNumberParameterMatches(parameters.get('yMm'), true, true)
       && photonCadManualNumberParameterMatches(parameters.get('zMm'), true, true)
   }
+  const patternSeed = parameters.get('seedFeatureId')
+  const patternCount = parameters.get('count')
+  const patternCountMatches = patternCount?.kind === 'integer' && patternCount.required
+    && patternCount.unit === 'count' && patternCount.minimum === 2 && patternCount.maximum === 256
+    && patternCount.defaultValue === 2
+  if (capability.id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID) {
+    return capability.operation === 'modify' && capability.parameters.length === 3
+      && patternSeed?.kind === 'entity' && patternSeed.required && patternSeed.defaultValue === null
+      && patternCountMatches && photonCadManualNumberParameterMatches(parameters.get('spacingMm'), true)
+  }
+  if (capability.id === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID) {
+    const angle = parameters.get('angleDegrees')
+    return capability.operation === 'modify' && capability.parameters.length === 3
+      && patternSeed?.kind === 'entity' && patternSeed.required && patternSeed.defaultValue === null
+      && patternCountMatches && angle?.kind === 'number' && angle.required && angle.unit === 'angle'
+      && angle.minimum === 0.000001 && angle.maximum === 360 && angle.defaultValue === 360
+  }
   return false
 }
 
@@ -654,7 +675,9 @@ export function photonCadCapabilityRunnable(capability: PhotonCadCapability) {
   }
   if (capability.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID
     || capability.id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
-    || capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID) {
+    || capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
+    || capability.id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
+    || capability.id === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID) {
     return photonCadManualSchemaMatches(capability)
   }
   return capability.operation === 'create'
@@ -740,7 +763,16 @@ export function photonCadAuthorizePersistedScratchRequest(
   } else if (photonCadManualModifyCapabilityId(capability.id)) {
     const target = request.targetEntityIds[0]
     if (request.targetEntityIds.length !== 1
-      || !project.entities.some((entity) => entity.id === target && (entity.kind === 'body' || entity.kind === 'part'))) return null
+        || !project.entities.some((entity) => entity.id === target && (entity.kind === 'body' || entity.kind === 'part'))) return null
+    if (capability.id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
+      || capability.id === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID) {
+      const seedFeatureId = request.inputs.seedFeatureId
+      if (typeof seedFeatureId !== 'string'
+        || !project.entities.some((entity) => entity.id === seedFeatureId && entity.kind === 'datum'
+          && entity.parentId === target
+          && (entity.sourceCapabilityId === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+            || entity.sourceCapabilityId === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID))) return null
+    }
   } else if (request.targetEntityIds.length !== 0) {
     return null
   }
@@ -2380,6 +2412,10 @@ function CapabilityInspector({
                 ? 'Select one body or part in Design. The exact rectangular cut replaces its canonical STEP and reseals the complete preview.'
                 : capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
                   ? 'Select one body or part in Design. The exact cylindrical hole replaces its canonical STEP and reseals the complete preview.'
+                  : capability.id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
+                    ? 'Select one body or part and a durable cut or hole feature. The linear pattern replaces canonical STEP and reseals the complete preview.'
+                    : capability.id === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID
+                      ? 'Select one body or part and a durable cut or hole feature. The circular pattern replaces canonical STEP and reseals the complete preview.'
                   : 'Add one exact parametric solid to this project. Its canonical STEP and preview are persisted before the operation is accepted.'
             : 'This exact host-described scratch operation will be persisted to the attached project. Verification and release remain separate human actions.'
           : mode === 'scratch'
@@ -2396,6 +2432,10 @@ function CapabilityInspector({
                 ? 'Cut selected solid'
                 : capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
                   ? 'Cut hole in selected solid'
+                  : capability.id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
+                    ? 'Create linear feature pattern'
+                    : capability.id === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID
+                      ? 'Create circular feature pattern'
                   : manualDesign ? 'Add solid to project' : 'Run persisted scratch operation'
             : mode === 'scratch' ? 'Run scratch draft' : 'Prepare suggestion'}
         </button>
@@ -2431,7 +2471,14 @@ function ParameterField({
       </select>
     )
   } else if (parameter.kind === 'entity') {
-    const entities = (project?.entities ?? []).filter((entity) => parameter.id !== 'sourceEntityId' || entity.kind !== 'occurrence')
+    const entities = (project?.entities ?? []).filter((entity) => {
+      if (parameter.id === 'seedFeatureId') {
+        return entity.kind === 'datum'
+          && (entity.sourceCapabilityId === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+            || entity.sourceCapabilityId === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID)
+      }
+      return parameter.id !== 'sourceEntityId' || entity.kind !== 'occurrence'
+    })
     control = (
       <select {...common} value={typeof value === 'string' ? value : ''} onChange={(event) => onChange(event.target.value || null)}>
         <option value="">Select an entity…</option>

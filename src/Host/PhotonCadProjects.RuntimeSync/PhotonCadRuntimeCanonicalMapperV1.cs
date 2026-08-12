@@ -46,6 +46,7 @@ public sealed class PhotonCadRuntimeCanonicalMapperV1
             state.Units,
             binding.Current.ContentDigest,
             state.Entities.Select(value => new PhotonCadProviderBaseEntity(value)),
+            state.Operations.Select(value => new PhotonCadProviderBaseOperation(value)),
             state.Artifacts.Select(value => new PhotonCadProviderBaseArtifact(value)),
             state.Occurrences.Select(value => new PhotonCadProviderBaseOccurrence(value)),
             state.Bom.Select(value => new PhotonCadProviderBaseBomRow(value)));

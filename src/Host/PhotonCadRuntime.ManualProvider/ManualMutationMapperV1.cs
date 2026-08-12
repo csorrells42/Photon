@@ -109,7 +109,16 @@ internal static class ManualMutationMapperV1
                     visible: true,
                     suppressed: false,
                     request.CapabilityId)]
-                : [],
+                : command.FeatureEntityId is not null
+                    ? [new PhotonCadEntityV1(
+                        command.FeatureEntityId,
+                        command.TargetEntityId,
+                        PhotonCadEntityKindV1.Datum,
+                        FeatureName(command.Kind),
+                        visible: true,
+                        suppressed: false,
+                        request.CapabilityId)]
+                    : [],
             occurrences: createdOccurrence is null ? [] : [createdOccurrence],
             bom: createdBom is null ? [] : [createdBom],
             artifacts: [stepArtifact, previewArtifact]);
@@ -120,7 +129,20 @@ internal static class ManualMutationMapperV1
         PhotonCadManualOperationKind.SketchExtrudeAdd => "Sketch and extrude solid",
         PhotonCadManualOperationKind.SketchExtrudeCut => "Sketch cut solid",
         PhotonCadManualOperationKind.HoleCut => "Cut hole",
+        PhotonCadManualOperationKind.LinearPattern => "Linear feature pattern",
+        PhotonCadManualOperationKind.CircularPattern => "Circular feature pattern",
         _ => throw Failure("manual_operation_not_installed"),
+    };
+
+    private static string FeatureName(PhotonCadManualOperationKind kind) => kind switch
+    {
+        PhotonCadManualOperationKind.SketchExtrudeCut => "Sketch cut feature",
+        PhotonCadManualOperationKind.HoleCut => "Hole feature",
+        PhotonCadManualOperationKind.LinearPattern => "Linear pattern feature",
+        PhotonCadManualOperationKind.CircularPattern => "Circular pattern feature",
+        PhotonCadManualOperationKind.Fillet => "Fillet feature",
+        PhotonCadManualOperationKind.Chamfer => "Chamfer feature",
+        _ => throw Failure("manual_feature_kind_invalid"),
     };
 
     private static PhotonCadBoundsV1 Bounds(IndustrialBounds value) => new(

@@ -51,10 +51,13 @@ internal sealed class PhotonCadManualContainerAuthority : IPhotonCadManualGeomet
         ArgumentNullException.ThrowIfNull(request);
         if (request.Command.Kind is not (PhotonCadManualOperationKind.SketchExtrudeAdd
             or PhotonCadManualOperationKind.SketchExtrudeCut
-            or PhotonCadManualOperationKind.HoleCut))
+            or PhotonCadManualOperationKind.HoleCut
+            or PhotonCadManualOperationKind.LinearPattern
+            or PhotonCadManualOperationKind.CircularPattern))
             throw Failure("manual_operation_not_installed");
         var providerRequest = request.ProviderRequest;
         var baseState = ValidateBase(providerRequest, request.Command);
+        var replay = ResolveReplayFeature(providerRequest, request.Command);
         var source = request.Command.CreatesEntity
             ? null
             : new IndustrialPreviewSource(
@@ -69,7 +72,7 @@ internal sealed class PhotonCadManualContainerAuthority : IPhotonCadManualGeomet
         IndustrialPrimitiveResponse geometry;
         byte[] step;
         await using (var invocation = await _runner.ExecuteAsync(
-            ManualProtocolV1.Serialize(request.Command, source),
+            ManualProtocolV1.Serialize(request.Command, source, replay),
             manualInputs,
             cancellationToken).ConfigureAwait(false))
         {
@@ -112,6 +115,91 @@ internal sealed class PhotonCadManualContainerAuthority : IPhotonCadManualGeomet
             _evidence.ProviderEvidence,
             previewPlan.CreatedOccurrence,
             previewPlan.CreatedBom);
+    }
+
+    private static ManualReplayFeature? ResolveReplayFeature(
+        PhotonCadSealedMutationProviderRequest request,
+        PhotonCadManualCommand command)
+    {
+        if (command.Kind is not (PhotonCadManualOperationKind.LinearPattern or PhotonCadManualOperationKind.CircularPattern))
+            return null;
+        var pattern = command.Execution as ManualPatternParameters
+            ?? throw Failure("manual_pattern_parameters_missing");
+        var feature = request.BaseEntities.SingleOrDefault(value =>
+            StringComparer.Ordinal.Equals(value.Id, pattern.SeedFeatureId));
+        if (feature is null
+            || feature.Kind != PhotonCadEntityKindV1.Datum
+            || !StringComparer.Ordinal.Equals(feature.ParentId, command.TargetEntityId))
+            throw Failure("manual_pattern_seed_feature_invalid");
+        var operations = request.BaseOperations.Where(value =>
+            StringComparer.Ordinal.Equals(value.CapabilityId, feature.SourceCapabilityId)
+            && value.TargetEntityIds.Contains(pattern.SeedFeatureId, StringComparer.Ordinal)).Take(2).ToArray();
+        if (operations.Length != 1)
+            throw Failure("manual_pattern_seed_operation_count_invalid");
+        if (operations[0].TargetEntityIds.Count != 2)
+            throw Failure("manual_pattern_seed_target_count_invalid");
+        if (!operations[0].TargetEntityIds.Contains(command.TargetEntityId, StringComparer.Ordinal))
+            throw Failure("manual_pattern_seed_body_target_invalid");
+        if (!operations[0].TargetEntityIds.Contains(pattern.SeedFeatureId, StringComparer.Ordinal))
+            throw Failure("manual_pattern_seed_feature_target_invalid");
+        if (!StringComparer.Ordinal.Equals(feature.SourceCapabilityId, operations[0].CapabilityId))
+            throw Failure("manual_pattern_seed_capability_invalid");
+        var operation = operations[0];
+        var replay = operation.CapabilityId switch
+        {
+            PhotonCadManualCapabilityIds.SketchExtrudeCut => new ManualReplayFeature(
+                PhotonCadManualOperationKind.SketchExtrudeCut,
+                new ManualSketchParameters(
+                    RequireText(operation, "profileKind", PhotonCadInputKindV1.Choice),
+                    RequireText(operation, "sketchPlane", PhotonCadInputKindV1.Choice),
+                    RequireNumber(operation, "profileWidthMm"),
+                    RequireNumber(operation, "profileHeightMm"),
+                    0,
+                    RequireNumber(operation, "cutDepthMm"))),
+            PhotonCadManualCapabilityIds.HoleCut => new ManualReplayFeature(
+                PhotonCadManualOperationKind.HoleCut,
+                new ManualHoleParameters(
+                    RequireNumber(operation, "diameterMm") / 2,
+                    RequireNumber(operation, "depthMm"),
+                    RequireNumber(operation, "xMm"),
+                    RequireNumber(operation, "yMm"),
+                    RequireNumber(operation, "zMm"))),
+            _ => throw Failure("manual_pattern_seed_kind_unsupported"),
+        };
+        if (command.Kind == PhotonCadManualOperationKind.CircularPattern)
+        {
+            if (replay.Kind != PhotonCadManualOperationKind.HoleCut
+                || replay.Parameters is not ManualHoleParameters hole
+                || (BitConverter.DoubleToInt64Bits(hole.XMm) == 0
+                    && BitConverter.DoubleToInt64Bits(hole.YMm) == 0))
+                throw Failure("manual_circular_pattern_seed_invalid");
+        }
+        return replay;
+    }
+
+    private static PhotonCadSyncOperationInput RequireInput(PhotonCadProviderBaseOperation operation, string id)
+    {
+        var matches = operation.Inputs.Where(value => StringComparer.Ordinal.Equals(value.Id, id)).Take(2).ToArray();
+        return matches.Length == 1 ? matches[0] : throw Failure("manual_pattern_seed_input_invalid");
+    }
+
+    private static double RequireNumber(PhotonCadProviderBaseOperation operation, string id)
+    {
+        var value = RequireInput(operation, id).Value;
+        return value.Kind == PhotonCadInputKindV1.Number && value.TryGetNumber(out var number) && double.IsFinite(number)
+            ? number
+            : throw Failure("manual_pattern_seed_input_invalid");
+    }
+
+    private static string RequireText(
+        PhotonCadProviderBaseOperation operation,
+        string id,
+        PhotonCadInputKindV1 kind)
+    {
+        var value = RequireInput(operation, id).Value;
+        return value.Kind == kind && value.TryGetText(out var text)
+            ? text
+            : throw Failure("manual_pattern_seed_input_invalid");
     }
 
     public ValueTask CompensateAsync(

@@ -8,7 +8,10 @@ internal static class ManualProtocolV1
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
-    internal static byte[] Serialize(PhotonCadManualCommand command, IndustrialPreviewSource? source)
+    internal static byte[] Serialize(
+        PhotonCadManualCommand command,
+        IndustrialPreviewSource? source,
+        ManualReplayFeature? replay = null)
     {
         ArgumentNullException.ThrowIfNull(command);
         using var stream = new MemoryStream();
@@ -42,6 +45,20 @@ internal static class ManualProtocolV1
                     writer.WriteNumber("zMm", hole.ZMm);
                     writer.WriteEndObject();
                     break;
+                case PhotonCadManualOperationKind.LinearPattern:
+                case PhotonCadManualOperationKind.CircularPattern:
+                    WriteSource(writer, source);
+                    var pattern = command.Execution as ManualPatternParameters
+                        ?? throw Failure("manual_pattern_parameters_missing");
+                    writer.WriteString("operation", command.Kind == PhotonCadManualOperationKind.LinearPattern
+                        ? "manualLinearPattern" : "manualCircularPattern");
+                    WriteReplayFeature(writer, replay);
+                    writer.WriteNumber("count", pattern.Count);
+                    if (command.Kind == PhotonCadManualOperationKind.LinearPattern)
+                        writer.WriteNumber("spacingMm", pattern.SpacingMm);
+                    else
+                        writer.WriteNumber("angleDegrees", pattern.AngleDegrees);
+                    break;
                 default:
                     throw Failure("manual_operation_not_installed");
             }
@@ -51,6 +68,34 @@ internal static class ManualProtocolV1
         if (bytes.Length is <= 0 or > ProtocolV1.MaximumRequestBytes)
             throw Failure("manual_request_size_rejected");
         return bytes;
+    }
+
+    private static void WriteReplayFeature(Utf8JsonWriter writer, ManualReplayFeature? replay)
+    {
+        if (replay is null) throw Failure("manual_pattern_seed_missing");
+        writer.WriteStartObject("seed");
+        switch (replay.Kind)
+        {
+            case PhotonCadManualOperationKind.SketchExtrudeCut:
+                writer.WriteString("kind", "sketchExtrudeCut");
+                WriteProfile(writer, replay.Parameters as ManualSketchParameters
+                    ?? throw Failure("manual_pattern_seed_invalid"));
+                writer.WriteNumber("depthMm", ((ManualSketchParameters)replay.Parameters).DepthMm);
+                break;
+            case PhotonCadManualOperationKind.HoleCut:
+                writer.WriteString("kind", "holeCut");
+                var hole = replay.Parameters as ManualHoleParameters
+                    ?? throw Failure("manual_pattern_seed_invalid");
+                writer.WriteNumber("radiusMm", hole.RadiusMm);
+                writer.WriteNumber("depthMm", hole.DepthMm);
+                writer.WriteNumber("xMm", hole.XMm);
+                writer.WriteNumber("yMm", hole.YMm);
+                writer.WriteNumber("zMm", hole.ZMm);
+                break;
+            default:
+                throw Failure("manual_pattern_seed_kind_unsupported");
+        }
+        writer.WriteEndObject();
     }
 
     internal static IndustrialPrimitiveResponse ParseResponse(
@@ -149,7 +194,32 @@ internal static class ManualProtocolV1
                 RequireExactNumber(hole, "zMm", expected.ZMm);
                 _ = Number(provenance, "sourceVolumeMm3", double.Epsilon, double.MaxValue);
                 break;
+            case PhotonCadManualOperationKind.LinearPattern:
+                Exact(provenance, "generator", "kind", "seedKind", "count", "spacingMm", "sourceVolumeMm3");
+                RequirePatternProvenance(provenance, command, "linearPattern", "spacingMm");
+                break;
+            case PhotonCadManualOperationKind.CircularPattern:
+                Exact(provenance, "generator", "kind", "seedKind", "count", "angleDegrees", "sourceVolumeMm3");
+                RequirePatternProvenance(provenance, command, "circularPattern", "angleDegrees");
+                break;
         }
+    }
+
+    private static void RequirePatternProvenance(
+        JsonElement provenance,
+        PhotonCadManualCommand command,
+        string kind,
+        string distanceField)
+    {
+        var pattern = command.Execution as ManualPatternParameters
+            ?? throw Failure("manual_pattern_parameters_missing");
+        RequireString(provenance, "kind", kind);
+        _ = String(provenance, "seedKind");
+        if (Integer(provenance, "count", 2, 256) != pattern.Count)
+            throw Failure("manual_response_parameter_mismatch");
+        RequireExactNumber(provenance, distanceField,
+            command.Kind == PhotonCadManualOperationKind.LinearPattern ? pattern.SpacingMm : pattern.AngleDegrees);
+        _ = Number(provenance, "sourceVolumeMm3", double.Epsilon, double.MaxValue);
     }
 
     private static void ValidateProfile(JsonElement value, ManualSketchParameters expected)
@@ -217,6 +287,8 @@ internal static class ManualProtocolV1
         PhotonCadManualOperationKind.SketchExtrudeAdd => "manualSketchExtrudeAdd",
         PhotonCadManualOperationKind.SketchExtrudeCut => "manualSketchExtrudeCut",
         PhotonCadManualOperationKind.HoleCut => "manualHoleCut",
+        PhotonCadManualOperationKind.LinearPattern => "manualLinearPattern",
+        PhotonCadManualOperationKind.CircularPattern => "manualCircularPattern",
         _ => throw Failure("manual_operation_not_installed"),
     };
 

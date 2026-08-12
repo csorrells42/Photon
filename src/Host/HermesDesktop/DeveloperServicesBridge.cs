@@ -24,6 +24,8 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
     private const int MaximumRoslynReceiptBytes = 16 * 1024;
     private const int MaximumLanguageDocuments = 32;
     private const int MaximumDebugTargets = 128;
+    private const int MaximumDebugDirectories = 8_192;
+    private const int MaximumDebugRuntimeConfigs = 4_096;
 
     private readonly string _workspaceRoot;
     private readonly Action<object> _postMessage;
@@ -74,8 +76,9 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         _roslynHost.DiagnosticsPublished += HandleRoslynDiagnostics;
         _debugHost = debugHost ?? new DeveloperDotNetDebugHost(_workspaceRoot, debugger, debugAuthorization);
         _debugHost.EventReceived += HandleDebugEvent;
+        var arduinoRoot = ResolveArduinoWorkbenchRoot(installRoot, AppContext.BaseDirectory);
         var arduinoOptions = new ArduinoProviderOptions(
-            installRoot,
+            arduinoRoot,
             "toolchains/arduino",
             "hermes-toolchain-receipt.json",
             "arduino-config.json",
@@ -85,6 +88,7 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         var pythonLanguage = new SerenaPythonLanguageToolingProvider(_workspaceRoot);
         var gccTooling = CreateGccProvider(_workspaceRoot, gcc);
         var dotnetTooling = DotnetLanguageToolingProvider.Create(dotnet, _workspaceRoot);
+        var raspberryPi = new RaspberryPiDesktopTooling(installRoot, new WindowsCredentialVault());
         _languageTooling = LanguageToolingRegistryFactory.Create(
             _workspaceRoot,
             [
@@ -93,6 +97,7 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
                 KnownPinnedToolchainEvidenceSource.Create(debugger, ownsProvider: false),
                 gccTooling.EvidenceSource,
                 new ArduinoPinnedEvidenceSource(arduinoOptions),
+                raspberryPi,
                 java,
                 python.EvidenceSource,
                 pythonLanguage,
@@ -101,6 +106,7 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
                 dotnetTooling.OperationHandler,
                 gccTooling.OperationHandler,
                 new ArduinoLanguageToolingOperationHandler(arduinoOptions, _workspaceRoot),
+                raspberryPi,
                 java,
                 python.OperationHandler,
                 pythonLanguage,
@@ -991,22 +997,118 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         }
     }
 
-    private IReadOnlyList<string> DiscoverDebugTargets(BuildConfiguration configuration, CancellationToken cancellationToken)
+    private IReadOnlyList<string> DiscoverDebugTargets(BuildConfiguration configuration, CancellationToken cancellationToken) =>
+        DiscoverDebugTargetsCore(_workspaceRoot, configuration, cancellationToken);
+
+    internal static IReadOnlyList<string> DiscoverDebugTargetsCore(
+        string workspaceRoot,
+        BuildConfiguration configuration,
+        CancellationToken cancellationToken,
+        Func<string, string[]>? enumerateFiles = null,
+        Func<string, string[]>? enumerateDirectories = null,
+        Func<string, FileAttributes>? getAttributes = null)
     {
+        var root = Path.GetFullPath(workspaceRoot);
         var marker = $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}{configuration}{Path.DirectorySeparatorChar}";
         var targets = new List<string>();
-        foreach (var runtimeConfig in Directory.EnumerateFiles(_workspaceRoot, "*.runtimeconfig.json", SearchOption.AllDirectories).Take(4_096))
+        var pending = new Stack<string>();
+        pending.Push(root);
+        var visitedDirectories = 0;
+        var visitedRuntimeConfigs = 0;
+        enumerateFiles ??= directory => Directory.EnumerateFiles(directory, "*.runtimeconfig.json", SearchOption.TopDirectoryOnly)
+            .Take(MaximumDebugRuntimeConfigs)
+            .ToArray();
+        enumerateDirectories ??= directory => Directory.EnumerateDirectories(directory, "*", SearchOption.TopDirectoryOnly)
+            .Take(MaximumDebugDirectories)
+            .ToArray();
+        getAttributes ??= File.GetAttributes;
+
+        while (pending.Count > 0
+               && visitedDirectories < MaximumDebugDirectories
+               && visitedRuntimeConfigs < MaximumDebugRuntimeConfigs
+               && targets.Count < MaximumDebugTargets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!runtimeConfig.Contains(marker, StringComparison.OrdinalIgnoreCase)) continue;
-            var stem = runtimeConfig[..^".runtimeconfig.json".Length];
-            var candidate = File.Exists(stem + ".exe") ? stem + ".exe" : stem + ".dll";
-            if (!File.Exists(candidate) || TraversesDebugReparsePoint(candidate)) continue;
-            var relative = Path.GetRelativePath(_workspaceRoot, candidate).Replace(Path.DirectorySeparatorChar, '/');
-            if (TryValidateWorkspaceRelativeTarget(relative, out _)) targets.Add(relative);
-            if (targets.Count >= MaximumDebugTargets) break;
+            var directory = pending.Pop();
+            visitedDirectories++;
+            if (!directory.Equals(root, StringComparison.OrdinalIgnoreCase)
+                && IsSkippedDebugDiscoveryDirectory(Path.GetFileName(directory))) continue;
+
+            try
+            {
+                if ((getAttributes(directory) & FileAttributes.ReparsePoint) != 0) continue;
+            }
+            catch (Exception exception) when (IsDebugDiscoveryFileSystemFailure(exception))
+            {
+                continue;
+            }
+
+            string[] runtimeConfigs;
+            try
+            {
+                runtimeConfigs = enumerateFiles(directory);
+            }
+            catch (Exception exception) when (IsDebugDiscoveryFileSystemFailure(exception))
+            {
+                runtimeConfigs = [];
+            }
+            foreach (var runtimeConfig in runtimeConfigs.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (++visitedRuntimeConfigs > MaximumDebugRuntimeConfigs) break;
+                if (!runtimeConfig.Contains(marker, StringComparison.OrdinalIgnoreCase)) continue;
+                var stem = runtimeConfig[..^".runtimeconfig.json".Length];
+                var candidate = File.Exists(stem + ".exe") ? stem + ".exe" : stem + ".dll";
+                if (!File.Exists(candidate) || TraversesReparsePoint(root, candidate)) continue;
+                var relative = Path.GetRelativePath(root, candidate).Replace(Path.DirectorySeparatorChar, '/');
+                if (TryValidateWorkspaceRelativeTarget(relative, out _)) targets.Add(relative);
+                if (targets.Count >= MaximumDebugTargets) break;
+            }
+
+            string[] children;
+            try
+            {
+                children = enumerateDirectories(directory);
+            }
+            catch (Exception exception) when (IsDebugDiscoveryFileSystemFailure(exception))
+            {
+                children = [];
+            }
+            foreach (var child in children.OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                if (pending.Count + visitedDirectories >= MaximumDebugDirectories) break;
+                pending.Push(child);
+            }
         }
-        return targets.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+
+        return targets.Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool IsSkippedDebugDiscoveryDirectory(string name) => name.ToLowerInvariant() is
+        ".git" or ".pnpm-store" or ".serena" or ".vscode" or "data" or "logs" or "node_modules" or "runtime-assets";
+
+    private static bool IsDebugDiscoveryFileSystemFailure(Exception exception) => exception is
+        IOException or UnauthorizedAccessException or SecurityException or ArgumentException or NotSupportedException;
+
+    private static bool TraversesReparsePoint(string root, string fullPath)
+    {
+        var relative = Path.GetRelativePath(root, fullPath);
+        var current = root;
+        foreach (var component in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            current = Path.Combine(current, component);
+            try
+            {
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
+            }
+            catch (Exception exception) when (IsDebugDiscoveryFileSystemFailure(exception))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private string ResolveDebugFile(string? path, params string[] allowedExtensions)
@@ -1567,6 +1669,21 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
         return File.Exists(Path.Combine(besideExecutable, "provider.json"))
             ? besideExecutable
             : configured;
+    }
+
+    internal static string ResolveArduinoWorkbenchRoot(string applicationInstallRoot, string binaryRoot)
+    {
+        static bool HasReceipt(string root) => File.Exists(Path.Combine(
+            root,
+            "toolchains",
+            "arduino",
+            "hermes-toolchain-receipt.json"));
+
+        var configured = Path.GetFullPath(applicationInstallRoot);
+        if (HasReceipt(configured)) return configured;
+
+        var besideExecutable = Path.GetFullPath(binaryRoot);
+        return HasReceipt(besideExecutable) ? besideExecutable : configured;
     }
 
     private void PostError(string requestId, string code, string message, bool retryable) =>

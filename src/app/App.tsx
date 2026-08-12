@@ -12,6 +12,7 @@ import {
   GitBranch,
   Globe2,
   LayoutPanelLeft,
+  LifeBuoy,
   Maximize2,
   MessageSquare,
   PanelLeftClose,
@@ -41,7 +42,7 @@ import { useDeveloperBuild } from '../Modules/DeveloperServices/useDeveloperBuil
 import { SourceControlWorkspace } from '../Modules/SourceControl/SourceControlWorkspace'
 import { DEFAULT_ASSISTANT_DISPLAY_NAME, useAssistantDisplayName } from '../Modules/AssistantIdentity/AssistantIdentity'
 import { desktopDocumentClient } from '../Modules/Workspace/DesktopDocumentClient'
-import { BrowserWorkspace } from '../Modules/BrowserWorkspace/BrowserWorkspace'
+import { BrowserWorkspace, HERMES_HELP_BROWSER_REQUEST } from '../Modules/BrowserWorkspace/BrowserWorkspace'
 import type { BrowserOpenRequest } from '../Modules/BrowserWorkspace/BrowserWorkspace'
 import type { HermesDesktopUiAction } from '../Modules/HermesGateway/HermesDesktopUiAdapter'
 import { workbenchFileStatus } from './WorkbenchFileStatus'
@@ -85,7 +86,7 @@ import {
 type Layout = 'code' | 'chat' | 'split'
 type LeftPanel = 'explorer' | 'search' | 'containers' | 'cad' | 'sessions' | 'sourceControl' | 'run' | 'usage' | 'browser' | 'system'
 type AgentPanelId = 'hermes' | 'codex'
-type ShellMenu = 'file' | 'edit' | 'view'
+type ShellMenu = 'file' | 'edit' | 'view' | 'help'
 
 type PhotonCadDesktopHost = Window & {
   __HERMES_DESKTOP_HOST__?: {
@@ -330,6 +331,16 @@ export function App() {
     setLeftPanel('cad')
   }, [])
 
+  const openHermesHelp = useCallback(() => {
+    setLayout('code')
+    setLeftPanel('browser')
+    setBrowserOpenRequests((current) => [...current, {
+      nonce: ++browserOpenNonceRef.current,
+      ...HERMES_HELP_BROWSER_REQUEST,
+    }].slice(-32))
+    setOpenMenu(null)
+  }, [])
+
   const commandItems = useMemo(() => [
     { label: 'Open File…', detail: 'File', run: () => void openFile() },
     { label: 'Save File', detail: 'File', run: () => runFileCommand('save') },
@@ -345,11 +356,12 @@ export function App() {
     { label: 'Show Run and Debug', detail: 'View', run: () => { setLayout('code'); setLeftPanel('run') } },
     { label: 'Show Usage Intelligence', detail: 'View', run: () => { setLayout('code'); setLeftPanel('usage') } },
     { label: 'Open Browser', detail: 'View', run: () => { setLayout('code'); setLeftPanel('browser') } },
+    { label: 'Hermes Help', detail: 'Help', run: openHermesHelp },
     { label: 'Show Settings', detail: 'View', run: () => { setLayout('code'); setLeftPanel('system') } },
     { label: `Focus ${assistantName}`, detail: 'Layout', run: () => setLayout('chat') },
     { label: `Show ${assistantName} and Codex`, detail: 'Layout', run: () => setLayout('split') },
     { label: terminalVisible ? 'Hide Terminal' : 'Show Terminal', detail: 'View', run: toggleTerminal },
-  ], [assistantName, fileCommandsAvailable, openPhotonCad, terminalVisible])
+  ], [assistantName, fileCommandsAvailable, openHermesHelp, openPhotonCad, terminalVisible])
   const filteredCommandItems = commandItems.filter((command) => (
     (fileCommandsAvailable || command.detail !== 'File' || command.label.startsWith('Open File'))
     && `${command.label} ${command.detail}`.toLocaleLowerCase().includes(commandQuery.trim().toLocaleLowerCase())
@@ -581,6 +593,14 @@ export function App() {
             )}
           </div>
           <button onClick={() => { setLayout('code'); setLeftPanel('run') }}>Run</button><button onClick={toggleTerminal}>Terminal</button>
+          <div className="workbench-menu">
+            <button aria-expanded={openMenu === 'help'} aria-haspopup="menu" onClick={() => setOpenMenu((open) => open === 'help' ? null : 'help')}>Help</button>
+            {openMenu === 'help' && (
+              <div className="workbench-menu-popover compact" role="menu" aria-label="Help menu">
+                <button role="menuitem" onClick={openHermesHelp}><LifeBuoy size={13} /><span>Hermes Help</span></button>
+              </div>
+            )}
+          </div>
         </nav>
         {layout !== 'chat' && leftPanel === 'cad' ? (
           <div className="cad-layout-controls" role="group" aria-label="Photon CAD pane visibility">

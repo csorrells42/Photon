@@ -75,7 +75,7 @@ public sealed class PhotonCadManualProviderRuntime
         string plane, double profileWidthMm, double profileHeightMm, double cutDepthMm) => Bind(
             PhotonCadManualOperationKind.SketchExtrudeCut,
             PhotonCadManualCapabilityIds.SketchExtrudeCut,
-            requestId, sessionId, projectId, baseRevision, targetEntityId, createsEntity: false,
+            requestId, sessionId, projectId, baseRevision, targetEntityId, NewFeatureId(), createsEntity: false,
             new ManualSketchParameters("rectangle", "xy", profileWidthMm, profileHeightMm, 0, cutDepthMm),
             [
                 ProfileKind("rectangle"), Choice("sketchPlane", plane), Number("profileWidthMm", profileWidthMm),
@@ -87,7 +87,7 @@ public sealed class PhotonCadManualProviderRuntime
         double diameterMm, double depthMm, double xMm, double yMm, double zMm) => Bind(
             PhotonCadManualOperationKind.HoleCut,
             PhotonCadManualCapabilityIds.HoleCut,
-            requestId, sessionId, projectId, baseRevision, targetEntityId, createsEntity: false,
+            requestId, sessionId, projectId, baseRevision, targetEntityId, NewFeatureId(), createsEntity: false,
             new ManualHoleParameters(diameterMm / 2, depthMm, xMm, yMm, zMm),
             [
                 Number("diameterMm", diameterMm), Number("depthMm", depthMm),
@@ -110,17 +110,17 @@ public sealed class PhotonCadManualProviderRuntime
         string requestId, string sessionId, string projectId, long baseRevision, string targetEntityId,
         string seedEntityId, long count, double spacingMm) => Bind(
             PhotonCadManualOperationKind.LinearPattern, PhotonCadManualCapabilityIds.LinearPattern,
-            requestId, sessionId, projectId, baseRevision, targetEntityId, createsEntity: false,
-            new ManualUnsupportedParameters(nameof(PhotonCadManualOperationKind.LinearPattern)),
-            [Entity("seedEntityId", seedEntityId), Count(count), Number("spacingMm", spacingMm)]);
+            requestId, sessionId, projectId, baseRevision, targetEntityId, NewFeatureId(), createsEntity: false,
+            new ManualPatternParameters(seedEntityId, count, spacingMm, 0),
+            [Entity("seedFeatureId", seedEntityId), Count(count), Number("spacingMm", spacingMm)]);
 
     public PhotonCadManualBoundMutation BindCircularPattern(
         string requestId, string sessionId, string projectId, long baseRevision, string targetEntityId,
         string seedEntityId, long count, double angleDegrees) => Bind(
             PhotonCadManualOperationKind.CircularPattern, PhotonCadManualCapabilityIds.CircularPattern,
-            requestId, sessionId, projectId, baseRevision, targetEntityId, createsEntity: false,
-            new ManualUnsupportedParameters(nameof(PhotonCadManualOperationKind.CircularPattern)),
-            [Entity("seedEntityId", seedEntityId), Count(count), Number("angleDegrees", angleDegrees)]);
+            requestId, sessionId, projectId, baseRevision, targetEntityId, NewFeatureId(), createsEntity: false,
+            new ManualPatternParameters(seedEntityId, count, 0, angleDegrees),
+            [Entity("seedFeatureId", seedEntityId), Count(count), Number("angleDegrees", angleDegrees)]);
 
     private PhotonCadManualBoundMutation BindEdges(
         PhotonCadManualOperationKind kind, string capabilityId,
@@ -130,22 +130,32 @@ public sealed class PhotonCadManualProviderRuntime
         if (edgeIds is null) throw new ArgumentNullException(nameof(edgeIds));
         var copiedEdges = edgeIds.ToArray();
         if (copiedEdges.Length is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(edgeIds));
-        return Bind(kind, capabilityId, requestId, sessionId, projectId, baseRevision, targetEntityId, createsEntity: false,
-            new ManualUnsupportedParameters(kind.ToString()),
+        return Bind(kind, capabilityId, requestId, sessionId, projectId, baseRevision, targetEntityId, NewFeatureId(), createsEntity: false,
+            new ManualPatternParameters(copiedEdges[0], 0, lengthMm, 0),
             [Number(lengthId, lengthMm), new PhotonCadSyncOperationInput("edgeIds", PhotonCadSyncInputValue.EntityList(copiedEdges))]);
     }
 
     private PhotonCadManualBoundMutation Bind(
         PhotonCadManualOperationKind kind, string capabilityId,
         string requestId, string sessionId, string projectId, long baseRevision, string targetEntityId,
-        bool createsEntity, ManualExecutionParameters execution, IReadOnlyList<PhotonCadSyncOperationInput> inputs)
+        bool createsEntity, ManualExecutionParameters execution, IReadOnlyList<PhotonCadSyncOperationInput> inputs) =>
+        Bind(kind, capabilityId, requestId, sessionId, projectId, baseRevision, targetEntityId,
+            featureEntityId: null, createsEntity, execution, inputs);
+
+    private PhotonCadManualBoundMutation Bind(
+        PhotonCadManualOperationKind kind, string capabilityId,
+        string requestId, string sessionId, string projectId, long baseRevision, string targetEntityId,
+        string? featureEntityId, bool createsEntity, ManualExecutionParameters execution, IReadOnlyList<PhotonCadSyncOperationInput> inputs)
     {
-        var command = new PhotonCadManualCommand(kind, capabilityId, targetEntityId, createsEntity, execution, inputs);
+        var command = new PhotonCadManualCommand(kind, capabilityId, targetEntityId, featureEntityId, createsEntity, execution, inputs);
+        var targets = featureEntityId is null ? [targetEntityId] : new[] { targetEntityId, featureEntityId };
         var request = new PhotonCadRuntimeSyncRequest(
-            requestId, sessionId, projectId, baseRevision, capabilityId, PhotonCadOperationModeV1.Scratch, inputs, [targetEntityId]);
+            requestId, sessionId, projectId, baseRevision, capabilityId, PhotonCadOperationModeV1.Scratch, inputs, targets);
         var provider = new ManualProvider(request, command, _authority);
         return new PhotonCadManualBoundMutation(request, provider, new ManualCompensator(provider));
     }
+
+    private static string NewFeatureId() => $"feature-{Guid.NewGuid():N}";
 
     private static PhotonCadSyncOperationInput Number(string id, double value, bool allowZero = false)
     {
@@ -186,12 +196,16 @@ public sealed class PhotonCadManualProviderRuntime
             authorityInstalled && kind is PhotonCadManualOperationKind.SketchExtrudeAdd
                 or PhotonCadManualOperationKind.SketchExtrudeCut
                 or PhotonCadManualOperationKind.HoleCut
+                or PhotonCadManualOperationKind.LinearPattern
+                or PhotonCadManualOperationKind.CircularPattern
                 ? PhotonCadManualAvailability.Available
                 : PhotonCadManualAvailability.Unavailable,
             authorityInstalled
                 ? kind is PhotonCadManualOperationKind.SketchExtrudeAdd
                     or PhotonCadManualOperationKind.SketchExtrudeCut
                     or PhotonCadManualOperationKind.HoleCut
+                    or PhotonCadManualOperationKind.LinearPattern
+                    or PhotonCadManualOperationKind.CircularPattern
                     ? null
                     : operationUnavailable
                 : authorityUnavailable);
@@ -257,11 +271,16 @@ public sealed class PhotonCadManualProviderRuntime
             if (!ReferenceEquals(request.Request, _boundRequest)
                 || request.Units != PhotonCadProjectUnit.Millimeter
                 || request.Request.Mode != PhotonCadOperationModeV1.Scratch
-                || request.Request.TargetEntityIds.Count != 1
-                || !StringComparer.Ordinal.Equals(request.Request.TargetEntityIds[0], _command.TargetEntityId))
+                || request.Request.TargetEntityIds.Count != (_command.FeatureEntityId is null ? 1 : 2)
+                || !StringComparer.Ordinal.Equals(request.Request.TargetEntityIds[0], _command.TargetEntityId)
+                || _command.FeatureEntityId is not null
+                    && !StringComparer.Ordinal.Equals(request.Request.TargetEntityIds[1], _command.FeatureEntityId))
                 throw Failure("manual_provider_request_not_bound");
             var exists = request.ExistingEntityIds.Contains(_command.TargetEntityId, StringComparer.OrdinalIgnoreCase);
             if (exists == _command.CreatesEntity) throw Failure("manual_target_existence_mismatch");
+            if (_command.FeatureEntityId is not null
+                && request.ExistingEntityIds.Contains(_command.FeatureEntityId, StringComparer.OrdinalIgnoreCase))
+                throw Failure("manual_feature_identity_collision");
         }
 
         private void RequireReturnedMutation(PhotonCadSealedMutationDelta mutation)
@@ -275,7 +294,7 @@ public sealed class PhotonCadManualProviderRuntime
                 || mutation.Operations.Count != 2
                 || !StringComparer.Ordinal.Equals(mutation.Operations[0].CapabilityId, _command.CapabilityId)
                 || !StringComparer.Ordinal.Equals(mutation.Operations[1].CapabilityId, "industrial.preview.glb.v1")
-                || !mutation.Operations[0].TargetEntityIds.SequenceEqual([_command.TargetEntityId], StringComparer.Ordinal))
+                || !mutation.Operations[0].TargetEntityIds.SequenceEqual(_boundRequest.TargetEntityIds, StringComparer.Ordinal))
                 throw Failure("manual_authority_mutation_not_bound");
         }
 

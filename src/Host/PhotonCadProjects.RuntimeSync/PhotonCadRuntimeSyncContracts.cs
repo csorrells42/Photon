@@ -135,6 +135,7 @@ public sealed class PhotonCadSealedMutationProviderRequest
         PhotonCadProjectUnit units,
         string baseContentDigest,
         IEnumerable<PhotonCadProviderBaseEntity> baseEntities,
+        IEnumerable<PhotonCadProviderBaseOperation> baseOperations,
         IEnumerable<PhotonCadProviderBaseArtifact> baseArtifacts,
         IEnumerable<PhotonCadProviderBaseOccurrence> baseOccurrences,
         IEnumerable<PhotonCadProviderBaseBomRow> baseBom)
@@ -145,6 +146,8 @@ public sealed class PhotonCadSealedMutationProviderRequest
         BaseEntities = RuntimeSyncGuards.Copy(baseEntities, nameof(baseEntities), PhotonCadProjectFileV1.MaximumEntities);
         RuntimeSyncGuards.RequireUnique(BaseEntities.Select(value => value.Id), nameof(baseEntities));
         ExistingEntityIds = Array.AsReadOnly(BaseEntities.Select(value => value.Id).OrderBy(value => value, StringComparer.Ordinal).ToArray());
+        BaseOperations = RuntimeSyncGuards.Copy(baseOperations, nameof(baseOperations), PhotonCadProjectFileV1.MaximumOperations);
+        RuntimeSyncGuards.RequireUnique(BaseOperations.Select(value => value.Id), nameof(baseOperations));
         BaseArtifacts = RuntimeSyncGuards.Copy(
             baseArtifacts,
             nameof(baseArtifacts),
@@ -175,6 +178,7 @@ public sealed class PhotonCadSealedMutationProviderRequest
     public PhotonCadProjectUnit Units { get; }
     public string BaseContentDigest { get; }
     public IReadOnlyList<PhotonCadProviderBaseEntity> BaseEntities { get; }
+    public IReadOnlyList<PhotonCadProviderBaseOperation> BaseOperations { get; }
     public IReadOnlyList<string> ExistingEntityIds { get; }
     public IReadOnlyList<PhotonCadProviderBaseArtifact> BaseArtifacts { get; }
     public IReadOnlyList<PhotonCadProviderBaseOccurrence> BaseOccurrences { get; }

@@ -35,6 +35,9 @@ internal sealed record IndustrialMutationRequest(
 internal sealed record ManualMutationInputs(
     PhotonCadManualOperationKind Kind,
     string TargetEntityId,
+    string? SeedFeatureId,
+    long PatternCount,
+    double PatternMeasure,
     string ProfileKind,
     string Plane,
     double WidthMm,
@@ -1373,7 +1376,9 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     private static bool IsManualCapability(string capabilityId) => capabilityId is
         PhotonCadManualCapabilityIds.SketchExtrudeAdd
         or PhotonCadManualCapabilityIds.SketchExtrudeCut
-        or PhotonCadManualCapabilityIds.HoleCut;
+        or PhotonCadManualCapabilityIds.HoleCut
+        or PhotonCadManualCapabilityIds.LinearPattern
+        or PhotonCadManualCapabilityIds.CircularPattern;
 
     private async ValueTask<ManualMutationInputs> ParseManualMutationInputsAsync(
         ExternalRuntimeRequest external,
@@ -1403,6 +1408,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             return new ManualMutationInputs(
                 PhotonCadManualOperationKind.SketchExtrudeAdd,
                 $"entity-{Guid.NewGuid():N}",
+                null, 0, 0,
                 profileKind,
                 plane,
                 width ?? 0,
@@ -1419,6 +1425,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             return new ManualMutationInputs(
                 PhotonCadManualOperationKind.SketchExtrudeCut,
                 targetEntityId,
+                null, 0, 0,
                 "rectangle",
                 RequiredToken(inputs, "sketchPlane"),
                 RequiredFiniteNumber(inputs, "profileWidthMm", positive: true),
@@ -1433,6 +1440,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             return new ManualMutationInputs(
                 PhotonCadManualOperationKind.HoleCut,
                 targetEntityId,
+                null, 0, 0,
                 string.Empty,
                 "xy",
                 0, 0,
@@ -1441,6 +1449,26 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 RequiredFiniteNumber(inputs, "xMm", positive: false),
                 RequiredFiniteNumber(inputs, "yMm", positive: false),
                 RequiredFiniteNumber(inputs, "zMm", positive: false));
+        }
+        if (capabilityId == PhotonCadManualCapabilityIds.LinearPattern)
+        {
+            RequireExactProperties(inputs, "count", "seedFeatureId", "spacingMm");
+            var seedFeatureId = await ResolveManualPatternSeedAsync(external, targetEntityId, inputs, cancellationToken).ConfigureAwait(false);
+            return new ManualMutationInputs(
+                PhotonCadManualOperationKind.LinearPattern,
+                targetEntityId, seedFeatureId, RequiredBoundedCount(inputs, "count"),
+                RequiredFiniteNumber(inputs, "spacingMm", positive: true),
+                string.Empty, "xy", 0, 0, 0, 0, 0, 0, 0);
+        }
+        if (capabilityId == PhotonCadManualCapabilityIds.CircularPattern)
+        {
+            RequireExactProperties(inputs, "angleDegrees", "count", "seedFeatureId");
+            var seedFeatureId = await ResolveManualPatternSeedAsync(external, targetEntityId, inputs, cancellationToken).ConfigureAwait(false);
+            return new ManualMutationInputs(
+                PhotonCadManualOperationKind.CircularPattern,
+                targetEntityId, seedFeatureId, RequiredBoundedCount(inputs, "count"),
+                RequiredFiniteNumber(inputs, "angleDegrees", positive: true),
+                string.Empty, "xy", 0, 0, 0, 0, 0, 0, 0);
         }
         throw new ArgumentException("manual_capability_invalid", nameof(capabilityId));
     }
@@ -1468,6 +1496,33 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         return targetEntityId!;
     }
 
+    private async ValueTask<string> ResolveManualPatternSeedAsync(
+        ExternalRuntimeRequest external,
+        string targetEntityId,
+        JsonElement inputs,
+        CancellationToken cancellationToken)
+    {
+        var seedFeatureId = inputs.GetProperty("seedFeatureId").ValueKind == JsonValueKind.String
+            ? inputs.GetProperty("seedFeatureId").GetString()
+            : null;
+        if (!IsIdentifier(seedFeatureId) || _projectHost is null || _projectCodec is null)
+            throw new ArgumentException("manual_pattern_seed_invalid", nameof(inputs));
+        var project = await _projectHost.ResolveCommittedProjectAsync(
+            $"manual-pattern-seed-resolve-{Guid.NewGuid():N}",
+            external.SessionId,
+            external.ProjectId,
+            external.Revision,
+            cancellationToken).ConfigureAwait(false);
+        var seed = _projectCodec.Inspect(project).Entities.SingleOrDefault(value =>
+            StringComparer.Ordinal.Equals(value.Id, seedFeatureId));
+        if (seed is null
+            || seed.Kind != PhotonCadEntityKindV1.Datum
+            || !StringComparer.Ordinal.Equals(seed.ParentId, targetEntityId)
+            || seed.SourceCapabilityId is not (PhotonCadManualCapabilityIds.SketchExtrudeCut or PhotonCadManualCapabilityIds.HoleCut))
+            throw new ArgumentException("manual_pattern_seed_invalid", nameof(inputs));
+        return seedFeatureId!;
+    }
+
     private static void RequireExactProperties(JsonElement value, params string[] expected)
     {
         var actual = value.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray();
@@ -1492,6 +1547,14 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             || !double.IsFinite(number) || Math.Abs(number) > 1_000_000 || positive && number <= 0)
             throw new ArgumentException("manual_input_number_invalid", property);
         return number;
+    }
+
+    private static long RequiredBoundedCount(JsonElement value, string property)
+    {
+        var element = value.GetProperty(property);
+        if (element.ValueKind != JsonValueKind.Number || !element.TryGetInt64(out var count) || count is < 2 or > 256)
+            throw new ArgumentException("manual_input_count_invalid", property);
+        return count;
     }
 
     private static double? OptionalFiniteNumber(JsonElement value, string property, bool positive)
@@ -1527,6 +1590,14 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                     manualRuntime.BindHoleCut(
                         request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
                         manual.RadiusOrDiameterMm, manual.DepthMm, manual.XMm, manual.YMm, manual.ZMm),
+                PhotonCadManualOperationKind.LinearPattern when manual.SeedFeatureId is { } seedFeatureId =>
+                    manualRuntime.BindLinearPattern(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        seedFeatureId, manual.PatternCount, manual.PatternMeasure),
+                PhotonCadManualOperationKind.CircularPattern when manual.SeedFeatureId is { } seedFeatureId =>
+                    manualRuntime.BindCircularPattern(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        seedFeatureId, manual.PatternCount, manual.PatternMeasure),
                 _ => throw new InvalidOperationException("manual_operation_unavailable"),
             };
             return new IndustrialMutationBinding(boundManual.Request, boundManual.Provider, boundManual.Compensator);
@@ -1814,6 +1885,26 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 SignedLength("xMm", "X position"),
                 SignedLength("yMm", "Y position"),
                 SignedLength("zMm", "Z position"),
+            ],
+            PhotonCadManualOperationKind.LinearPattern =>
+            [
+                new CadParameterDefinition("seedFeatureId", "Seed feature", "Existing cut or hole feature on the selected solid.",
+                    CadParameterKind.Entity, required: true),
+                new CadParameterDefinition("count", "Pattern count", "Number of instances including the seed feature.",
+                    CadParameterKind.Integer, required: true, CadParameterUnit.Count, minimum: 2, maximum: 256, step: 1,
+                    defaultValue: new CadNumberInputValue(2)),
+                PositiveLength("spacingMm", "Spacing"),
+            ],
+            PhotonCadManualOperationKind.CircularPattern =>
+            [
+                new CadParameterDefinition("seedFeatureId", "Seed feature", "Existing cut or hole feature on the selected solid.",
+                    CadParameterKind.Entity, required: true),
+                new CadParameterDefinition("count", "Pattern count", "Number of instances including the seed feature.",
+                    CadParameterKind.Integer, required: true, CadParameterUnit.Count, minimum: 2, maximum: 256, step: 1,
+                    defaultValue: new CadNumberInputValue(2)),
+                new CadParameterDefinition("angleDegrees", "Sweep angle", "Finite positive sweep angle in degrees.",
+                    CadParameterKind.Number, required: true, CadParameterUnit.Angle, minimum: 0.000001, maximum: 360,
+                    defaultValue: new CadNumberInputValue(360)),
             ],
             _ => throw new InvalidOperationException("manual_capability_unavailable"),
         };

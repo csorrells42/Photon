@@ -85,6 +85,12 @@ static async Task EvidenceVerificationAsync()
     var evidence = await ManualEvidenceVerifier.VerifyAsync(selection, CancellationToken.None);
     Equal(ManualEvidenceVerifier.AcceptedDerivedImageId, evidence.DerivedImageId, "manual image");
     Equal(ManualEvidenceVerifier.AcceptedReceiptSha256, evidence.ReceiptSha256, "manual receipt");
+
+    var publishedSelection = Path.Combine(root, "artifacts", "desktop", "win-x64", "runtime-assets",
+        "photon-cad-manual", "evidence-selection.json");
+    var published = await ManualEvidenceVerifier.VerifyAsync(publishedSelection, CancellationToken.None);
+    Equal(evidence.DerivedImageId, published.DerivedImageId, "source and published manual image");
+    Equal(evidence.ReceiptSha256, published.ReceiptSha256, "source and published manual receipt");
 }
 
 static async Task RealManualRoundTripAsync()
@@ -127,6 +133,7 @@ static async Task RealManualRoundTripAsync()
         var cutMutation = await cut.Provider.ApplyAsync(mapper.PrepareProviderRequest(cutBinding, cut.Request));
         var afterCut = codec.MarkSaved(mapper.Apply(cutBinding, cut.Request, cutMutation));
         Equal(4L, afterCut.Revision, "cut revision");
+        var cutFeatureId = cut.Request.TargetEntityIds[1];
 
         var hole = runtime.BindHoleCut(
             "manual-hole", sessionId, projectId, 4, entityId, 4, 16, 8, 0, 0);
@@ -134,11 +141,43 @@ static async Task RealManualRoundTripAsync()
         var holeMutation = await hole.Provider.ApplyAsync(mapper.PrepareProviderRequest(holeBinding, hole.Request));
         var afterHole = codec.MarkSaved(mapper.Apply(holeBinding, hole.Request, holeMutation));
         Equal(6L, afterHole.Revision, "hole revision");
+        var holeFeatureId = hole.Request.TargetEntityIds[1];
 
-        var reopened = codec.Inspect(codec.Decode(afterHole.CanonicalBytes));
-        Equal(6L, reopened.Revision, "reopened revision");
-        Equal(1, reopened.Entities.Count, "entity count");
-        Equal(entityId, reopened.Entities.Single().Id, "entity identity");
+        var linear = runtime.BindLinearPattern(
+            "manual-linear", sessionId, projectId, 6, entityId, cutFeatureId, 3, 8);
+        var linearBinding = new PhotonCadCanonicalMutationBinding(handle, afterHole);
+        var linearMutation = await linear.Provider.ApplyAsync(mapper.PrepareProviderRequest(linearBinding, linear.Request));
+        var afterLinear = codec.MarkSaved(mapper.Apply(linearBinding, linear.Request, linearMutation));
+        Equal(8L, afterLinear.Revision, "linear pattern revision");
+        var linearFeatureId = linear.Request.TargetEntityIds[1];
+
+        var circular = runtime.BindCircularPattern(
+            "manual-circular", sessionId, projectId, 8, entityId, holeFeatureId, 4, 360);
+        var circularBinding = new PhotonCadCanonicalMutationBinding(handle, afterLinear);
+        var circularMutation = await circular.Provider.ApplyAsync(mapper.PrepareProviderRequest(circularBinding, circular.Request));
+        var afterCircular = codec.MarkSaved(mapper.Apply(circularBinding, circular.Request, circularMutation));
+        Equal(10L, afterCircular.Revision, "circular pattern revision");
+        var circularFeatureId = circular.Request.TargetEntityIds[1];
+
+        var reopened = codec.Inspect(codec.Decode(afterCircular.CanonicalBytes));
+        Equal(10L, reopened.Revision, "reopened revision");
+        Equal(5, reopened.Entities.Count, "entity count");
+        var body = reopened.Entities.Single(value => StringComparer.Ordinal.Equals(value.Id, entityId));
+        True(body.Kind == PhotonCadEntityKindV1.Body, "body kind");
+        var expectedFeatures = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [cutFeatureId] = PhotonCadManualCapabilityIds.SketchExtrudeCut,
+            [holeFeatureId] = PhotonCadManualCapabilityIds.HoleCut,
+            [linearFeatureId] = PhotonCadManualCapabilityIds.LinearPattern,
+            [circularFeatureId] = PhotonCadManualCapabilityIds.CircularPattern,
+        };
+        foreach (var (featureId, capabilityId) in expectedFeatures)
+        {
+            var feature = reopened.Entities.Single(value => StringComparer.Ordinal.Equals(value.Id, featureId));
+            True(feature.Kind == PhotonCadEntityKindV1.Datum, $"{capabilityId} kind");
+            Equal(entityId, feature.ParentId!, $"{capabilityId} parent");
+            Equal(capabilityId, feature.SourceCapabilityId!, $"{capabilityId} source capability");
+        }
         Equal(1, reopened.Occurrences.Count, "occurrence count");
         Equal(1, reopened.Bom.Count, "BOM count");
         Equal(1, reopened.Artifacts.Count(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry), "STEP count");
@@ -147,6 +186,8 @@ static async Task RealManualRoundTripAsync()
             PhotonCadManualCapabilityIds.SketchExtrudeAdd, "industrial.preview.glb.v1",
             PhotonCadManualCapabilityIds.SketchExtrudeCut, "industrial.preview.glb.v1",
             PhotonCadManualCapabilityIds.HoleCut, "industrial.preview.glb.v1",
+            PhotonCadManualCapabilityIds.LinearPattern, "industrial.preview.glb.v1",
+            PhotonCadManualCapabilityIds.CircularPattern, "industrial.preview.glb.v1",
         ], StringComparer.Ordinal), "operation history");
     }
     finally

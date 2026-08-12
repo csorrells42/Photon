@@ -158,6 +158,32 @@
       },
       "required": ["schema", "ok", "operation", "artifact", "measurement", "provenance"],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.response/v1" },
+        "ok": { "const": true },
+        "operation": { "const": "manualLinearPattern" },
+        "artifact": { "$ref": "#/$defs/stepArtifact" },
+        "measurement": { "$ref": "#/$defs/measurement" },
+        "provenance": { "$ref": "#/$defs/manualLinearPatternProvenance" }
+      },
+      "required": ["schema", "ok", "operation", "artifact", "measurement", "provenance"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.response/v1" },
+        "ok": { "const": true },
+        "operation": { "const": "manualCircularPattern" },
+        "artifact": { "$ref": "#/$defs/stepArtifact" },
+        "measurement": { "$ref": "#/$defs/measurement" },
+        "provenance": { "$ref": "#/$defs/manualCircularPatternProvenance" }
+      },
+      "required": ["schema", "ok", "operation", "artifact", "measurement", "provenance"],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -366,6 +392,32 @@
         "sourceVolumeMm3": { "type": "number", "exclusiveMinimum": 0 }
       },
       "required": ["generator", "kind", "hole", "sourceVolumeMm3"],
+      "additionalProperties": false
+    },
+    "manualLinearPatternProvenance": {
+      "type": "object",
+      "properties": {
+        "generator": { "const": "manual" },
+        "kind": { "const": "linearPattern" },
+        "seedKind": { "enum": ["sketchExtrudeCut", "holeCut"] },
+        "count": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "spacingMm": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 },
+        "sourceVolumeMm3": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "required": ["generator", "kind", "seedKind", "count", "spacingMm", "sourceVolumeMm3"],
+      "additionalProperties": false
+    },
+    "manualCircularPatternProvenance": {
+      "type": "object",
+      "properties": {
+        "generator": { "const": "manual" },
+        "kind": { "const": "circularPattern" },
+        "seedKind": { "const": "holeCut" },
+        "count": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "angleDegrees": { "type": "number", "exclusiveMinimum": 0, "maximum": 360 },
+        "sourceVolumeMm3": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "required": ["generator", "kind", "seedKind", "count", "angleDegrees", "sourceVolumeMm3"],
       "additionalProperties": false
     },
     "previewProvenance": {

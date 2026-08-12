@@ -71,6 +71,57 @@ public sealed class PhotonCadSyncInputValue
         _ => throw RuntimeSyncGuards.Failure("input_value_kind_mismatch", nameof(Kind)),
     };
 
+    internal static PhotonCadSyncInputValue FromCanonical(PhotonCadInputValueV1 value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return value.Kind switch
+        {
+            PhotonCadInputKindV1.Number when value.Value is double number => Number(number),
+            PhotonCadInputKindV1.Integer when value.Value is long integer => Integer(integer),
+            PhotonCadInputKindV1.Boolean when value.Value is bool boolean => Boolean(boolean),
+            PhotonCadInputKindV1.Text when value.Value is string text => Text(text),
+            PhotonCadInputKindV1.Choice when value.Value is string choice => Choice(choice),
+            PhotonCadInputKindV1.Entity when value.Value is string entity => Entity(entity),
+            PhotonCadInputKindV1.Vector3 when value.Value is PhotonCadVector3V1 vector =>
+                Vector3(new PhotonCadSyncVector3(vector.X, vector.Y, vector.Z)),
+            PhotonCadInputKindV1.EntityList when value.Value is IReadOnlyList<string> entities => EntityList(entities),
+            _ when value.Value is null => Null(value.Kind),
+            _ => throw RuntimeSyncGuards.Failure("input_value_kind_mismatch", nameof(value)),
+        };
+    }
+
+    public bool TryGetNumber(out double value) => TryGet(_value, out value);
+    public bool TryGetInteger(out long value) => TryGet(_value, out value);
+    public bool TryGetBoolean(out bool value) => TryGet(_value, out value);
+    public bool TryGetText(out string value)
+    {
+        value = _value as string ?? string.Empty;
+        return _value is string;
+    }
+
+    public bool TryGetVector3(out PhotonCadSyncVector3? value)
+    {
+        value = _value as PhotonCadSyncVector3;
+        return value is not null;
+    }
+
+    public bool TryGetEntityList(out IReadOnlyList<string>? value)
+    {
+        value = _value as IReadOnlyList<string>;
+        return value is not null;
+    }
+
+    private static bool TryGet<T>(object? candidate, out T value) where T : struct
+    {
+        if (candidate is T typed)
+        {
+            value = typed;
+            return true;
+        }
+        value = default;
+        return false;
+    }
+
     internal bool Equivalent(PhotonCadSyncInputValue other)
     {
         if (other is null || Kind != other.Kind) return false;
@@ -240,6 +291,33 @@ public sealed class PhotonCadProviderBaseEntity
     public bool Visible { get; }
     public bool Suppressed { get; }
     public string? SourceCapabilityId { get; }
+}
+
+/// <summary>
+/// Immutable, pathless copy of one trusted canonical operation. Providers may use this history to
+/// replay an explicitly selected feature, but cannot mutate it or recover host/storage handles.
+/// </summary>
+public sealed class PhotonCadProviderBaseOperation
+{
+    internal PhotonCadProviderBaseOperation(PhotonCadOperationV1 value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        Id = value.Id;
+        CapabilityId = value.CapabilityId;
+        Label = value.Label;
+        Mode = value.Mode;
+        Inputs = Array.AsReadOnly(value.Inputs
+            .Select(input => new PhotonCadSyncOperationInput(input.Id, PhotonCadSyncInputValue.FromCanonical(input.Value)))
+            .ToArray());
+        TargetEntityIds = Array.AsReadOnly(value.TargetEntityIds.ToArray());
+    }
+
+    public string Id { get; }
+    public string CapabilityId { get; }
+    public string Label { get; }
+    public PhotonCadOperationModeV1 Mode { get; }
+    public IReadOnlyList<PhotonCadSyncOperationInput> Inputs { get; }
+    public IReadOnlyList<string> TargetEntityIds { get; }
 }
 
 public sealed class PhotonCadProviderBaseBomRow

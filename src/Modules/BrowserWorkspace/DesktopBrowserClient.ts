@@ -18,15 +18,27 @@ type Bridge = {
 function bridge() { return (window as Window & { chrome?: { webview?: Bridge } }).chrome?.webview ?? null }
 function bounded(value: unknown, maximum: number) { return typeof value === 'string' ? value.slice(0, maximum) : '' }
 
-export function normalizeBrowserAddress(value: string): string {
+export function tryNormalizeBrowserAddress(value: string): string | null {
   const trimmed = value.trim()
   if (!trimmed) return 'about:blank'
+  if (trimmed.length > 4_096 || /[\u0000-\u001f\u007f]/u.test(trimmed)) return null
   try {
     const explicit = new URL(trimmed)
-    if (explicit.protocol === 'http:' || explicit.protocol === 'https:') return explicit.href
+    if ((explicit.protocol === 'http:' || explicit.protocol === 'https:') && !explicit.username && !explicit.password) return explicit.href
+    return null
   } catch { /* Treat it as a hostname or search below. */ }
-  if (/^[\w.-]+\.[a-z]{2,}(?:[/:?#].*)?$/i.test(trimmed)) return new URL(`https://${trimmed}`).href
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(trimmed)) return null
+  if (/^[\w.-]+\.[a-z]{2,}(?:[/:?#].*)?$/i.test(trimmed)) {
+    try {
+      const hostname = new URL(`https://${trimmed}`)
+      return hostname.username || hostname.password ? null : hostname.href
+    } catch { return null }
+  }
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
+}
+
+export function normalizeBrowserAddress(value: string): string {
+  return tryNormalizeBrowserAddress(value) ?? 'about:blank'
 }
 
 export class DesktopBrowserClient {

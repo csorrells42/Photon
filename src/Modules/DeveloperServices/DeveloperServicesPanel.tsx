@@ -4,6 +4,7 @@ import { buildLanguageToolingReports, createLanguageToolingRequestId, DesktopLan
 import { canRunDeveloperOperation } from './DeveloperOperationGate'
 import type { DeveloperBuildController } from './useDeveloperBuild'
 import { desktopDotNetDebuggerController } from './DesktopDotNetDebuggerClient'
+import { configureRaspberryPiTarget, type RaspberryPiSetupResult } from './DesktopRaspberryPiSetupClient'
 import './DeveloperServicesPanel.css'
 
 const languageToolingHost = new DesktopLanguageToolingHostAdapter()
@@ -18,6 +19,19 @@ export function DeveloperServicesPanel({ controller, selectedWorkspacePath, onLa
   const languageTooling = buildLanguageToolingReports(controller.description?.languageTooling)
   const dotnetTestsReady = Boolean(languageTooling.find((item) => item.id === 'dotnet')?.capabilities
     .some((capability) => capability.id === 'dotnet.tests' && capability.availability === 'available'))
+  const [raspberryPiSetup, setRaspberryPiSetup] = useState<RaspberryPiSetupResult | null>(null)
+  const [raspberryPiSetupBusy, setRaspberryPiSetupBusy] = useState(false)
+  const configureRaspberryPi = async () => {
+    if (raspberryPiSetupBusy) return
+    setRaspberryPiSetupBusy(true)
+    try {
+      const result = await configureRaspberryPiTarget()
+      setRaspberryPiSetup(result)
+      if (result.succeeded) controller.refresh()
+    } finally {
+      setRaspberryPiSetupBusy(false)
+    }
+  }
   return <aside className="explorer developer-services-panel" aria-label="Build and analyze">
     <div className="panel-label">BUILD &amp; ANALYZE <button type="button" aria-label="Refresh developer tools" onClick={controller.refresh} disabled={controller.describing || controller.busy}><RefreshCw className={controller.describing ? 'spin' : undefined} size={12} /></button></div>
     <div className="developer-services-content">
@@ -57,8 +71,17 @@ export function DeveloperServicesPanel({ controller, selectedWorkspacePath, onLa
           const known = item.capabilities.filter((capability) => capability.availability !== 'unknown').length
           const ready = available === item.capabilities.length
           const partial = available > 0 && !ready
-          const status = ready ? 'Host verified' : partial ? `${available}/${item.capabilities.length} host verified` : known > 0 ? 'Not installed' : 'Adapter pending'
-          return <div key={item.id}><span><b>{item.label}</b><small>{item.capabilities.map((capability) => capability.label).join(' · ')}</small></span><em className={ready || partial ? 'ready' : ''}>{status}</em></div>
+          const setupRequired = item.capabilities.some((capability) => capability.code === 'trusted-target-not-configured')
+          const status = ready ? 'Host verified' : partial ? `${available}/${item.capabilities.length} host verified` : setupRequired ? 'Setup required' : known > 0 ? 'Not installed' : 'Adapter pending'
+          return <div key={item.id}>
+            <span>
+              <b>{item.label}</b>
+              <small>{item.capabilities.map((capability) => capability.label).join(' · ')}</small>
+              {item.id === 'raspberry-pi' && <button type="button" className="developer-raspberry-setup" onClick={() => void configureRaspberryPi()} disabled={raspberryPiSetupBusy || controller.busy}>{raspberryPiSetupBusy ? 'Opening setup…' : 'Configure trusted target'}</button>}
+              {item.id === 'raspberry-pi' && raspberryPiSetup && <small role="status" className={raspberryPiSetup.succeeded ? '' : 'error'}>{raspberryPiSetup.message}</small>}
+            </span>
+            <em className={ready || partial ? 'ready' : ''}>{status}</em>
+          </div>
         })}
       </section>
       <CurrentFileTooling selectedWorkspacePath={selectedWorkspacePath} reports={languageTooling} onResult={onLanguageToolingResult} />

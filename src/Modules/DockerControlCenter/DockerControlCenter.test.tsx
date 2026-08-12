@@ -61,6 +61,7 @@ describe('DockerControlCenter', () => {
       'Hermes', 'Serena', 'Model Runner', 'Revision 9', 'sha256:', '127.0.0.1:9119',
       'Data:', 'Workspace:', 'Previous verified image restored.', 'Review stack start', 'Update workflow unavailable',
       'Container ID', 'Current resources', '512MiB / 8GiB', 'Docker Model Runner', 'docker.io/ai/qwen3:4b', 'Review unload', 'Load model unavailable',
+      'Docker status', 'Approved services', 'Local inference', 'role="meter"',
       'Environment values, Docker credentials, mounted secret contents',
     ]) expect(markup).toContain(expected)
     expect(markup).toContain('tabindex="0"')

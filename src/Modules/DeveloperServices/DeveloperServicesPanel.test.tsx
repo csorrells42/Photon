@@ -113,7 +113,21 @@ describe('DeveloperServicesPanel', () => {
   })
 
   it('renders capability readiness from trusted evidence instead of raw provider IDs', () => {
-    const markup = renderToStaticMarkup(<DeveloperServicesPanel controller={controller()} />)
+    const raspberryPiDescription = {
+      ...description,
+      languageTooling: [...description.languageTooling, {
+        contract: LANGUAGE_TOOLING_CONTRACT,
+        source: 'trusted-host' as const,
+        evidenceId: 'desktop:raspberry-pi:setup',
+        providerId: 'raspberry-pi' as const,
+        checkedAt: '2026-08-12T12:00:00.000Z',
+        capabilities: [
+          { capabilityId: 'raspberry-pi.inspect', availability: 'unavailable' as const, code: 'trusted-target-not-configured', detail: 'Configure a trusted target.' },
+          { capabilityId: 'raspberry-pi.deploy', availability: 'unavailable' as const, code: 'trusted-target-not-configured', detail: 'Configure a trusted target.' },
+        ],
+      }],
+    }
+    const markup = renderToStaticMarkup(<DeveloperServicesPanel controller={controller({ description: raspberryPiDescription })} />)
     expect(markup).toContain('.NET / Roslyn')
     expect(markup).toContain('Host verified')
     expect(markup).not.toContain('2/4 host verified')
@@ -121,6 +135,8 @@ describe('DeveloperServicesPanel', () => {
     expect(markup).toContain('Adapter pending')
     expect(markup).toContain('GNU C / C++')
     expect(markup).toContain('Raspberry Pi')
+    expect(markup).toContain('Setup required')
+    expect(markup).toContain('Configure trusted target')
   })
 
   it('keeps current-file tool actions honest when the pinned payload is unavailable', () => {
