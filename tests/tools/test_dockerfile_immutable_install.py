@@ -115,3 +115,19 @@ def test_dockerfile_bakes_photon_sidecar_deps() -> None:
     assert not re.search(
         r"chown\s+-R\s+hermes:hermes\s+/opt/hermes/plugins", text
     )
+
+
+def test_dockerfile_bakes_local_kokoro_voice_engine() -> None:
+    """The mounted Speech & Voice page must work before a runtime install.
+
+    Model assets live on the durable data volume, but the immutable image must
+    carry the renderer package itself.  Otherwise a fresh install can display
+    a valid voice profile while every preview fails until an implicit PyPI
+    install succeeds.
+    """
+    text = _dockerfile_text()
+    sync_instruction = next(
+        line for line in text.splitlines()
+        if line.startswith("RUN uv sync --frozen --no-install-project")
+    )
+    assert "--extra kokoro-tts" in sync_instruction
