@@ -9,6 +9,7 @@ internal static class Program
     {
         CatalogMatchesRenderer();
         await DefaultRegistryFailsClosedAsync();
+        await CorruptReceiptInspectionFailsClosedAsync();
         await KnownPinnedProvidersMapWithoutPathDisclosureAsync();
         await DotnetSdkEvidenceMapsCompilerAndTestsAsync();
         RegistrationRejectsAmbiguityAndPathBasedDotnet();
@@ -73,6 +74,21 @@ internal static class Program
         var serialized = JsonSerializer.Serialize(report);
         Require(!serialized.Contains(provider.ExecutablePath, StringComparison.OrdinalIgnoreCase),
             "A trusted executable path crossed the evidence boundary.");
+    }
+
+    private static async Task CorruptReceiptInspectionFailsClosedAsync()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        await using var registry = LanguageToolingRegistryFactory.Create(
+            workspace.Path,
+            [new CorruptJavaReceiptEvidenceSource()]);
+
+        var reports = await registry.DescribeAllAsync();
+        var capability = reports.Single(item => item.ProviderId == "java-jdt").Capabilities.Single();
+        Require(capability.Availability == LanguageToolingCapabilityState.Error,
+            "Corrupt Java receipt evidence did not fail closed.");
+        Require(capability.Code == "trusted-inspection-failed",
+            "Corrupt Java receipt evidence leaked its internal validation code.");
     }
 
     private static async Task DotnetSdkEvidenceMapsCompilerAndTestsAsync()
@@ -177,6 +193,22 @@ internal static class Program
                 [new("native/main.c", "WARNING", "W1", "warning\r\ntext", 2, 3, 2, 5)],
                 ["build/app.exe", "build\\app.exe"]));
         }
+    }
+
+    private sealed class CorruptJavaReceiptEvidenceSource : ILanguageToolingEvidenceSource
+    {
+        public string ProviderId => "java-jdt";
+        public IReadOnlyCollection<string> CapabilityIds { get; } = ["java-jdt.lsp"];
+
+        public ValueTask<IReadOnlyList<LanguageToolingCapabilityStatus>> InspectAsync(
+            string workspaceRoot,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new InvalidDataException("java-jdt-payload-set-mismatch");
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeToolchainProvider : IToolchainProvider

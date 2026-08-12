@@ -95,6 +95,7 @@ public sealed class LanguageToolingTrustedRegistry : IAsyncDisposable
                 throw;
             }
             catch (Exception exception) when (exception is IOException
+                or InvalidDataException
                 or UnauthorizedAccessException
                 or InvalidOperationException
                 or TrustedToolchainValidationException
