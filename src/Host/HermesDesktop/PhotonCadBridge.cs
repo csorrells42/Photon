@@ -13,6 +13,7 @@ using PhotonCadProjects.RuntimeSync;
 using PhotonCadProjects.Windows;
 using PhotonCadRuntime;
 using PhotonCadRuntime.IndustrialProvider;
+using PhotonCadRuntime.ManualProvider;
 using PhotonCadVerification;
 
 namespace HermesDesktop;
@@ -28,7 +29,21 @@ internal sealed record IndustrialMutationRequest(
     IReadOnlyDictionary<string, PhotonCadIndustrialCatalogInputValue?> CatalogInputs,
     AssemblyPlacementInputs? AssemblyInputs,
     AssemblyTransformInputs? AssemblyTransform,
-    AssemblyRemovalInputs? AssemblyRemoval);
+    AssemblyRemovalInputs? AssemblyRemoval,
+    ManualMutationInputs? ManualInputs);
+
+internal sealed record ManualMutationInputs(
+    PhotonCadManualOperationKind Kind,
+    string TargetEntityId,
+    string ProfileKind,
+    string Plane,
+    double WidthMm,
+    double HeightMm,
+    double RadiusOrDiameterMm,
+    double DepthMm,
+    double XMm,
+    double YMm,
+    double ZMm);
 
 internal sealed record AssemblyPlacementInputs(
     string SourceEntityId,
@@ -60,6 +75,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     internal const string AcceptedReceiptSha256 = "73774bd9e932624775f281c46377267945f0934b6ae6c9d6d83e13d0702b3687";
     internal const string InstalledAssetRelativePath = "runtime-assets/photon-cad";
     internal const string InstalledIndustrialAssetRelativePath = "runtime-assets/photon-cad-industrial";
+    internal const string InstalledManualAssetRelativePath = "runtime-assets/photon-cad-manual";
     internal const string IndustrialEvidenceSelectionFileName = "evidence-selection.json";
     internal const string PreviewResourcePathPrefix = "/api/photon-cad/previews/";
     internal const string IndustrialImageSha256 = "sha256:eda304290edbf75c33352e3df857a40539c48e20508d4025f63f7d4508ff25f9";
@@ -102,9 +118,11 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     private readonly TimeProvider _previewRefreshTimeProvider;
     private Task<ICadRuntimeBroker>? _brokerTask;
     private Task<PhotonCadIndustrialProviderRuntime>? _industrialRuntimeTask;
+    private Task<PhotonCadManualProviderRuntime>? _manualRuntimeTask;
     private TaskCompletionSource? _handlersDrained;
     private string? _runtimeWorkspace;
     private string? _industrialWorkspace;
+    private string? _manualWorkspace;
     private string _rendererSessionId = "renderer-unavailable";
     private long _rendererEpoch;
     private long _completedResetEpoch = -1;
@@ -402,12 +420,22 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 {
                     var runtime = await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false);
                     var providerCatalog = await runtime.GetCatalogAsync(cancellationToken).ConfigureAwait(false);
+                    IReadOnlyList<PhotonCadManualCapability> manualCatalog = [];
+                    try
+                    {
+                        var manualRuntime = await EnsureManualProviderReadyAsync(cancellationToken).ConfigureAwait(false);
+                        manualCatalog = manualRuntime.GetCatalog();
+                    }
+                    catch (Exception exception) when (IsIndustrialAvailabilityFailure(exception))
+                    {
+                        DesktopLog.Write($"Photon CAD manual runtime unavailable: {SafeAvailabilityDiagnostic(exception)}");
+                    }
                     _post(new
                     {
                         type = "photonCad.describe.result",
                         version = ProtocolVersion,
                         requestId,
-                        value = CadWireProjection.Description(IndustrialRendererDescription(providerCatalog)),
+                        value = CadWireProjection.Description(IndustrialRendererDescription(providerCatalog, manualCatalog)),
                     });
                 }
                 catch (Exception exception) when (IsIndustrialAvailabilityFailure(exception))
@@ -1030,6 +1058,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         AssemblyPlacementInputs? assemblyInputs = null;
         AssemblyTransformInputs? assemblyTransform = null;
         AssemblyRemovalInputs? assemblyRemoval = null;
+        ManualMutationInputs? manualInputs = null;
         try
         {
             if (capabilityId == PhotonCadAssemblyContract.PlaceCapabilityId)
@@ -1081,6 +1110,15 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 if (targetsElement.GetArrayLength() != 0) throw new ArgumentException("targets_invalid", nameof(targetsElement));
                 numericInputs = ParseIndustrialInputs(capabilityId, inputsElement);
             }
+            else if (IsManualCapability(capabilityId))
+            {
+                manualInputs = await ParseManualMutationInputsAsync(
+                    external,
+                    capabilityId,
+                    inputsElement,
+                    targetsElement,
+                    cancellationToken).ConfigureAwait(false);
+            }
             else
             {
                 if (targetsElement.GetArrayLength() != 0) throw new ArgumentException("targets_invalid", nameof(targetsElement));
@@ -1113,7 +1151,8 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             catalogInputs,
             assemblyInputs,
             assemblyTransform,
-            assemblyRemoval);
+            assemblyRemoval,
+            manualInputs);
         IndustrialMutationBinding binding;
         try { binding = await CreateIndustrialBindingAsync(request, cancellationToken).ConfigureAwait(false); }
         catch (Exception exception) when (IsIndustrialAvailabilityFailure(exception))
@@ -1298,12 +1337,167 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         return result;
     }
 
+    private static bool IsManualCapability(string capabilityId) => capabilityId is
+        PhotonCadManualCapabilityIds.SketchExtrudeAdd
+        or PhotonCadManualCapabilityIds.SketchExtrudeCut
+        or PhotonCadManualCapabilityIds.HoleCut;
+
+    private async ValueTask<ManualMutationInputs> ParseManualMutationInputsAsync(
+        ExternalRuntimeRequest external,
+        string capabilityId,
+        JsonElement inputs,
+        JsonElement targets,
+        CancellationToken cancellationToken)
+    {
+        if (inputs.ValueKind != JsonValueKind.Object || targets.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("manual_request_shape_invalid", nameof(inputs));
+        if (capabilityId == PhotonCadManualCapabilityIds.SketchExtrudeAdd)
+        {
+            RequireExactProperties(inputs,
+                "extrusionDepthMm", "profileHeightMm", "profileKind", "profileRadiusMm", "profileWidthMm", "sketchPlane");
+            if (targets.GetArrayLength() != 0) throw new ArgumentException("manual_create_targets_invalid", nameof(targets));
+            var profileKind = RequiredToken(inputs, "profileKind");
+            var plane = RequiredToken(inputs, "sketchPlane");
+            var depth = RequiredFiniteNumber(inputs, "extrusionDepthMm", positive: true);
+            var width = OptionalFiniteNumber(inputs, "profileWidthMm", positive: true);
+            var height = OptionalFiniteNumber(inputs, "profileHeightMm", positive: true);
+            var radius = OptionalFiniteNumber(inputs, "profileRadiusMm", positive: true);
+            if (profileKind == "rectangle" && (width is null || height is null || radius is not null)
+                || profileKind == "circle" && (radius is null || width is not null || height is not null)
+                || profileKind is not ("rectangle" or "circle")
+                || plane != "xy")
+                throw new ArgumentException("manual_profile_invalid", nameof(inputs));
+            return new ManualMutationInputs(
+                PhotonCadManualOperationKind.SketchExtrudeAdd,
+                $"entity-{Guid.NewGuid():N}",
+                profileKind,
+                plane,
+                width ?? 0,
+                height ?? 0,
+                radius ?? 0,
+                depth,
+                0, 0, 0);
+        }
+
+        var targetEntityId = await ResolveManualTargetAsync(external, targets, cancellationToken).ConfigureAwait(false);
+        if (capabilityId == PhotonCadManualCapabilityIds.SketchExtrudeCut)
+        {
+            RequireExactProperties(inputs, "cutDepthMm", "profileHeightMm", "profileWidthMm", "sketchPlane");
+            return new ManualMutationInputs(
+                PhotonCadManualOperationKind.SketchExtrudeCut,
+                targetEntityId,
+                "rectangle",
+                RequiredToken(inputs, "sketchPlane"),
+                RequiredFiniteNumber(inputs, "profileWidthMm", positive: true),
+                RequiredFiniteNumber(inputs, "profileHeightMm", positive: true),
+                0,
+                RequiredFiniteNumber(inputs, "cutDepthMm", positive: true),
+                0, 0, 0);
+        }
+        if (capabilityId == PhotonCadManualCapabilityIds.HoleCut)
+        {
+            RequireExactProperties(inputs, "depthMm", "diameterMm", "xMm", "yMm", "zMm");
+            return new ManualMutationInputs(
+                PhotonCadManualOperationKind.HoleCut,
+                targetEntityId,
+                string.Empty,
+                "xy",
+                0, 0,
+                RequiredFiniteNumber(inputs, "diameterMm", positive: true),
+                RequiredFiniteNumber(inputs, "depthMm", positive: true),
+                RequiredFiniteNumber(inputs, "xMm", positive: false),
+                RequiredFiniteNumber(inputs, "yMm", positive: false),
+                RequiredFiniteNumber(inputs, "zMm", positive: false));
+        }
+        throw new ArgumentException("manual_capability_invalid", nameof(capabilityId));
+    }
+
+    private async ValueTask<string> ResolveManualTargetAsync(
+        ExternalRuntimeRequest external,
+        JsonElement targets,
+        CancellationToken cancellationToken)
+    {
+        if (_projectHost is null || _projectCodec is null || targets.GetArrayLength() != 1)
+            throw new ArgumentException("manual_target_invalid", nameof(targets));
+        var target = targets.EnumerateArray().Single();
+        var targetEntityId = target.ValueKind == JsonValueKind.String ? target.GetString() : null;
+        if (!IsIdentifier(targetEntityId)) throw new ArgumentException("manual_target_invalid", nameof(targets));
+        var project = await _projectHost.ResolveCommittedProjectAsync(
+            $"manual-target-resolve-{Guid.NewGuid():N}",
+            external.SessionId,
+            external.ProjectId,
+            external.Revision,
+            cancellationToken).ConfigureAwait(false);
+        var entity = _projectCodec.Inspect(project).Entities.SingleOrDefault(value =>
+            StringComparer.Ordinal.Equals(value.Id, targetEntityId));
+        if (entity is null || entity.Kind is not (PhotonCadEntityKindV1.Body or PhotonCadEntityKindV1.Part))
+            throw new ArgumentException("manual_target_invalid", nameof(targets));
+        return targetEntityId!;
+    }
+
+    private static void RequireExactProperties(JsonElement value, params string[] expected)
+    {
+        var actual = value.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        if (!actual.SequenceEqual(expected.OrderBy(name => name, StringComparer.Ordinal), StringComparer.Ordinal))
+            throw new ArgumentException("manual_inputs_invalid", nameof(value));
+    }
+
+    private static string RequiredToken(JsonElement value, string property)
+    {
+        var element = value.GetProperty(property);
+        var token = element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+        return !string.IsNullOrWhiteSpace(token) && token.Length <= 64
+            && token.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')
+            ? token
+            : throw new ArgumentException("manual_input_token_invalid", property);
+    }
+
+    private static double RequiredFiniteNumber(JsonElement value, string property, bool positive)
+    {
+        var element = value.GetProperty(property);
+        if (element.ValueKind != JsonValueKind.Number || !element.TryGetDouble(out var number)
+            || !double.IsFinite(number) || Math.Abs(number) > 1_000_000 || positive && number <= 0)
+            throw new ArgumentException("manual_input_number_invalid", property);
+        return number;
+    }
+
+    private static double? OptionalFiniteNumber(JsonElement value, string property, bool positive)
+    {
+        var element = value.GetProperty(property);
+        return element.ValueKind == JsonValueKind.Null ? null : RequiredFiniteNumber(value, property, positive);
+    }
+
     private async ValueTask<IndustrialMutationBinding> CreateIndustrialBindingAsync(
         IndustrialMutationRequest request,
         CancellationToken cancellationToken)
     {
         if (_industrialBindingFactory is not null)
             return await _industrialBindingFactory(request, cancellationToken).ConfigureAwait(false);
+        if (request.ManualInputs is { } manual)
+        {
+            var manualRuntime = await EnsureManualProviderReadyAsync(cancellationToken).ConfigureAwait(false);
+            PhotonCadManualBoundMutation boundManual = manual.Kind switch
+            {
+                PhotonCadManualOperationKind.SketchExtrudeAdd when manual.ProfileKind == "rectangle" =>
+                    manualRuntime.BindSketchExtrudeAdd(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        manual.Plane, manual.WidthMm, manual.HeightMm, manual.DepthMm),
+                PhotonCadManualOperationKind.SketchExtrudeAdd when manual.ProfileKind == "circle" =>
+                    manualRuntime.BindCircularSketchExtrudeAdd(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        manual.Plane, manual.RadiusOrDiameterMm, manual.DepthMm),
+                PhotonCadManualOperationKind.SketchExtrudeCut =>
+                    manualRuntime.BindSketchExtrudeCut(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        manual.Plane, manual.WidthMm, manual.HeightMm, manual.DepthMm),
+                PhotonCadManualOperationKind.HoleCut =>
+                    manualRuntime.BindHoleCut(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        manual.RadiusOrDiameterMm, manual.DepthMm, manual.XMm, manual.YMm, manual.ZMm),
+                _ => throw new InvalidOperationException("manual_operation_unavailable"),
+            };
+            return new IndustrialMutationBinding(boundManual.Request, boundManual.Provider, boundManual.Compensator);
+        }
         var runtime = await EnsureIndustrialProviderReadyAsync(cancellationToken).ConfigureAwait(false);
         if (request.AssemblyInputs is { } assembly)
         {
@@ -1374,6 +1568,49 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         return _industrialRuntimeTask.WaitAsync(cancellationToken);
     }
 
+    private Task<PhotonCadManualProviderRuntime> EnsureManualProviderReadyAsync(CancellationToken cancellationToken)
+    {
+        lock (_brokerLock) _manualRuntimeTask ??= CreateManualRuntimeAsync();
+        return _manualRuntimeTask.WaitAsync(cancellationToken);
+    }
+
+    private async Task<PhotonCadManualProviderRuntime> CreateManualRuntimeAsync()
+    {
+        var assets = Path.Combine(_installRoot, InstalledManualAssetRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var evidence = Path.Combine(assets, IndustrialEvidenceSelectionFileName);
+        var docker = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "Docker", "Docker", "resources", "bin", "docker.exe");
+        if (!File.Exists(evidence) || !File.Exists(docker)) throw new InvalidOperationException("manual_runtime_unavailable");
+        var workspace = CreateManualWorkspace();
+        try
+        {
+            var config = Path.Combine(workspace, "docker-config");
+            var jobs = Path.Combine(workspace, "jobs");
+            Directory.CreateDirectory(config);
+            Directory.CreateDirectory(jobs);
+            return await PhotonCadManualProviderRuntime.CreateLocalEngineeringAsync(
+                docker, config, jobs, evidence, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            DeleteOwnedProviderWorkspace(workspace, "PhotonCadManual");
+            _manualWorkspace = null;
+            throw;
+        }
+    }
+
+    private string CreateManualWorkspace()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), "PhotosAgapeAphthartos", "PhotonCadManual");
+        Directory.CreateDirectory(parent);
+        var workspace = Path.Combine(parent, $"session-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workspace);
+        if ((File.GetAttributes(workspace) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("The manual CAD workspace is not a normal directory.");
+        _manualWorkspace = workspace;
+        return workspace;
+    }
+
     private async Task<PhotonCadIndustrialProviderRuntime> CreateIndustrialRuntimeAsync()
     {
         var assets = Path.Combine(_installRoot, InstalledIndustrialAssetRelativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -1439,7 +1676,9 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             throw new InvalidOperationException("industrial_exact_image_unavailable");
     }
 
-    private static CadRuntimeDescription IndustrialRendererDescription(PhotonCadIndustrialCatalog providerCatalog)
+    private static CadRuntimeDescription IndustrialRendererDescription(
+        PhotonCadIndustrialCatalog providerCatalog,
+        IReadOnlyList<PhotonCadManualCapability>? manualCatalog = null)
     {
         ArgumentNullException.ThrowIfNull(providerCatalog);
         var generated = DateTimeOffset.UtcNow;
@@ -1466,11 +1705,16 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             source,
             previewSupported: true,
             experimental: false)).ToArray();
+        var manualCapabilities = (manualCatalog ?? [])
+            .Where(capability => capability.Availability == PhotonCadManualAvailability.Available)
+            .Select(ManualRendererCapability)
+            .ToArray();
         var capabilities = primitiveCapabilities.Concat(catalogCapabilities)
+            .Concat(manualCapabilities)
             .Concat([AssemblyRendererCapability(), AssemblyTransformRendererCapability(), AssemblyRemoveRendererCapability()])
             .ToArray();
         var catalog = new CadCapabilityCatalog(
-            $"industrial-{providerCatalog.Digest[7..]}-assembly-v1",
+            $"industrial-{providerCatalog.Digest[7..]}-manual-{manualCapabilities.Length}-assembly-v1",
             generated,
             capabilities,
             new CadCatalogCoverage(capabilities.Length, capabilities.Length, 0));
@@ -1483,6 +1727,74 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 "industrial-v1", "linux-amd64", receipt, generated),
             new CadRevision(0));
         return new CadRuntimeDescription(CadRuntimeAvailability.Ready, "ready", "The verified industrial CAD runtime is ready.", bundles, catalog);
+    }
+
+    private static CadCapability ManualRendererCapability(PhotonCadManualCapability capability)
+    {
+        var source = new CadSourceIdentity(
+            "build123d",
+            "0.3.80",
+            "sha256:11225c611b86551574636a1331adb6320217c62d11b7a6992ed15d4b0cc37760",
+            "redistribution-blocked");
+        CadParameterDefinition PositiveLength(string id, string label, bool required = true) => new(
+            id, label, $"Finite positive {label.ToLowerInvariant()} in millimeters.",
+            CadParameterKind.Number, required, CadParameterUnit.Length,
+            minimum: 0.000001, maximum: 1_000_000, step: null,
+            defaultValue: required ? new CadNumberInputValue(10) : new CadNullInputValue(CadParameterKind.Number));
+        CadParameterDefinition SignedLength(string id, string label) => new(
+            id, label, $"Finite signed {label.ToLowerInvariant()} in millimeters.",
+            CadParameterKind.Number, required: true, CadParameterUnit.Length,
+            minimum: -1_000_000, maximum: 1_000_000, defaultValue: new CadNumberInputValue(0));
+        IReadOnlyList<CadParameterDefinition> parameters = capability.Kind switch
+        {
+            PhotonCadManualOperationKind.SketchExtrudeAdd =>
+            [
+                new CadParameterDefinition("profileKind", "Profile", "Rectangle or circle sketch profile.",
+                    CadParameterKind.Choice, required: true, choices:
+                    [new CadChoice("rectangle", "Rectangle"), new CadChoice("circle", "Circle")],
+                    defaultValue: new CadTextInputValue("rectangle", CadParameterKind.Choice)),
+                new CadParameterDefinition("sketchPlane", "Sketch plane", "Supported exact sketch plane.",
+                    CadParameterKind.Choice, required: true,
+                    choices: [new CadChoice("xy", "XY")],
+                    defaultValue: new CadTextInputValue("xy", CadParameterKind.Choice)),
+                PositiveLength("profileWidthMm", "Profile width", required: false),
+                PositiveLength("profileHeightMm", "Profile height", required: false),
+                PositiveLength("profileRadiusMm", "Profile radius", required: false),
+                PositiveLength("extrusionDepthMm", "Extrusion depth"),
+            ],
+            PhotonCadManualOperationKind.SketchExtrudeCut =>
+            [
+                new CadParameterDefinition("sketchPlane", "Sketch plane", "Supported exact sketch plane.",
+                    CadParameterKind.Choice, required: true,
+                    choices: [new CadChoice("xy", "XY")],
+                    defaultValue: new CadTextInputValue("xy", CadParameterKind.Choice)),
+                PositiveLength("profileWidthMm", "Profile width"),
+                PositiveLength("profileHeightMm", "Profile height"),
+                PositiveLength("cutDepthMm", "Cut depth"),
+            ],
+            PhotonCadManualOperationKind.HoleCut =>
+            [
+                PositiveLength("diameterMm", "Hole diameter"),
+                PositiveLength("depthMm", "Hole depth"),
+                SignedLength("xMm", "X position"),
+                SignedLength("yMm", "Y position"),
+                SignedLength("zMm", "Z position"),
+            ],
+            _ => throw new InvalidOperationException("manual_capability_unavailable"),
+        };
+        return new CadCapability(
+            capability.CapabilityId,
+            CadBackend.Geometry,
+            "Build123d design",
+            capability.Title,
+            capability.Description,
+            capability.Kind == PhotonCadManualOperationKind.SketchExtrudeAdd
+                ? CadCapabilityOperationKind.Create
+                : CadCapabilityOperationKind.Modify,
+            parameters,
+            source,
+            previewSupported: true,
+            experimental: false);
     }
 
     private static string IndustrialCatalogCategory(string category)
@@ -2741,6 +3053,22 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 }
             }
 
+            var manualWorkspace = _manualWorkspace;
+            if (manualWorkspace is not null)
+            {
+                try
+                {
+                    DeleteOwnedProviderWorkspace(manualWorkspace, "PhotonCadManual");
+                    _manualWorkspace = null;
+                    lock (_brokerLock) _manualRuntimeTask = null;
+                }
+                catch (Exception exception) when (IsBoundedResetFailure(exception))
+                {
+                    DesktopLog.Write($"Photon CAD manual workspace cleanup failed closed: {exception.GetType().Name}");
+                    brokerResetFailure = exception;
+                }
+            }
+
             if (projectResetFailure is not null || brokerResetFailure is not null)
             {
                 var failures = new[] { projectResetFailure, brokerResetFailure }.OfType<Exception>().ToArray();
@@ -2793,6 +3121,27 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         {
             if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
                 throw new IOException("The industrial CAD workspace contains a link and cannot be deleted safely.");
+        }
+        Directory.Delete(full, recursive: true);
+    }
+
+    private static void DeleteOwnedProviderWorkspace(string workspace, string providerDirectory)
+    {
+        if (providerDirectory.Length is < 1 or > 64
+            || providerDirectory.Any(character => !char.IsAsciiLetterOrDigit(character)))
+            throw new IOException("The CAD provider cleanup identity is invalid.");
+        var expectedParent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "PhotosAgapeAphthartos", providerDirectory));
+        var full = Path.GetFullPath(workspace);
+        var prefix = expectedParent.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || !Path.GetFileName(full).StartsWith("session-", StringComparison.Ordinal)
+            || !Directory.Exists(full)
+            || (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("The CAD provider workspace is outside the owned cleanup root.");
+        foreach (var entry in Directory.EnumerateFileSystemEntries(full, "*", SearchOption.AllDirectories))
+        {
+            if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("The CAD provider workspace contains a link and cannot be deleted safely.");
         }
         Directory.Delete(full, recursive: true);
     }
