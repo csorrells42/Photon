@@ -3679,6 +3679,7 @@ def text_to_speech_tool(
     speed: Optional[float] = None,
     instructions: Optional[str] = None,
     provider: Optional[str] = None,
+    voice: Optional[str] = None,
 ) -> str:
     """Convert text to speech audio with long-form chunking.
 
@@ -3733,6 +3734,19 @@ def text_to_speech_tool(
         provider = provider.lower().strip()
     else:
         provider = _get_provider(tts_config)
+
+    # The desktop's pinned local-voice endpoint may preview one explicitly
+    # selected Kokoro voice without mutating the saved profile. No other
+    # provider receives this field.
+    if voice is not None:
+        if provider != "kokoro":
+            return tool_error("Per-request voice override is supported only for Kokoro", success=False)
+        tts_config = dict(tts_config)
+        kokoro_config = dict(tts_config.get("kokoro") or {})
+        kokoro_config["voice"] = str(voice).strip()
+        if speed is not None:
+            kokoro_config["speed"] = max(0.75, min(1.25, float(speed)))
+        tts_config["kokoro"] = kokoro_config
 
     command_provider_config = _resolve_command_provider_config(provider, tts_config)
     max_len = _resolve_max_text_length(provider, tts_config)

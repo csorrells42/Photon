@@ -305,6 +305,17 @@ class DebugShareRequest(BaseModel):
 
 class TTSSpeakRequest(BaseModel):
     text: str
+    voice: Optional[Literal["af_heart", "am_michael"]] = None
+    speed: Optional[float] = Field(default=None, ge=0.75, le=1.25)
+
+
+class LocalVoiceSettingsUpdate(BaseModel):
+    contract_version: Literal[1]
+    expected_revision: str = Field(min_length=1, max_length=128)
+    profile_id: str = Field(min_length=1, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
+    voice_id: Literal["af_heart", "am_michael"]
+    speed: float = Field(ge=0.75, le=1.25)
 
 
 # --- from web_server.py (originally lines 11549-11551) ---

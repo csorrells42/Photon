@@ -1351,6 +1351,7 @@ from hermes_cli.web_models import (  # noqa: F401
     LearningNodeEdit,
     DebugShareRequest,
     TTSSpeakRequest,
+    LocalVoiceSettingsUpdate,
     OAuthSubmitBody,
     BulkDeleteSessions,
     SessionImport,
@@ -4582,7 +4583,12 @@ async def _speak_text_response(
             # thread is sufficient (same reasoning as the MCP probe scope).
             with _config_profile_scope(profile):
                 if provider_override:
-                    return text_to_speech_tool(text, provider=provider_override)
+                    controls = {"provider": provider_override}
+                    if payload.speed is not None:
+                        controls["speed"] = payload.speed
+                    if payload.voice is not None:
+                        controls["voice"] = payload.voice
+                    return text_to_speech_tool(text, **controls)
                 return text_to_speech_tool(text)
 
         loop = asyncio.get_running_loop()
@@ -4649,6 +4655,71 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
 async def speak_text_local(payload: TTSSpeakRequest, profile: Optional[str] = None):
     """Synthesize with the pinned on-device Kokoro provider only."""
     return await _speak_text_response(payload, profile, provider_override="kokoro")
+
+
+_LOCAL_VOICE_IDS = frozenset({"af_heart", "am_michael"})
+
+
+def _local_voice_settings_payload(config: dict) -> dict:
+    tts = config.get("tts") if isinstance(config.get("tts"), dict) else {}
+    kokoro = tts.get("kokoro") if isinstance(tts.get("kokoro"), dict) else {}
+    voice = str(kokoro.get("voice") or "af_heart").strip()
+    if voice not in _LOCAL_VOICE_IDS:
+        voice = "af_heart"
+    try:
+        speed = round(float(kokoro.get("speed", 0.98)), 2)
+    except (TypeError, ValueError):
+        speed = 0.98
+    if not 0.75 <= speed <= 1.25:
+        speed = 0.98
+    settings = {
+        "contractVersion": 1,
+        "localOnly": True,
+        "provider": "kokoro",
+        "speed": speed,
+        "voiceId": voice,
+    }
+    encoded = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    revision = hashlib.sha256(encoded).hexdigest()
+    return {"profileId": "default", "revision": revision, "settings": settings}
+
+
+@app.get("/api/audio/local-voice/settings")
+async def get_local_voice_settings(profile: Optional[str] = None):
+    def _run():
+        with _profile_scope(profile):
+            result = _local_voice_settings_payload(load_config())
+            result["profileId"] = profile or "default"
+            return result
+
+    return await asyncio.to_thread(_run)
+
+
+@app.put("/api/audio/local-voice/settings")
+async def put_local_voice_settings(payload: LocalVoiceSettingsUpdate):
+    def _run():
+        with _profile_scope(payload.profile_id):
+            with _CONFIG_MUTATION_LOCK:
+                current = _local_voice_settings_payload(load_config())
+                if payload.expected_revision != current["revision"]:
+                    raise HTTPException(status_code=409, detail="stale_revision")
+                config = read_raw_config()
+                tts = config.setdefault("tts", {})
+                if not isinstance(tts, dict):
+                    tts = {}
+                    config["tts"] = tts
+                kokoro = tts.setdefault("kokoro", {})
+                if not isinstance(kokoro, dict):
+                    kokoro = {}
+                    tts["kokoro"] = kokoro
+                kokoro["voice"] = payload.voice_id
+                kokoro["speed"] = round(payload.speed, 2)
+                save_config(config, merge_existing=False)
+                result = _local_voice_settings_payload(load_config())
+                result["profileId"] = payload.profile_id
+                return result
+
+    return await asyncio.to_thread(_run)
 
 
 def _split_text_for_speak_stream(text: str, cap: int) -> list:

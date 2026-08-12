@@ -1,4 +1,5 @@
 import hashlib
+import json
 import sys
 from types import SimpleNamespace
 
@@ -95,3 +96,43 @@ def test_kokoro_generation_rejects_unlisted_voice(tmp_path, monkeypatch):
             str(tmp_path / "voice.wav"),
             {"kokoro": {"voice": "not_a_voice"}},
         )
+
+
+def test_kokoro_public_tool_applies_bounded_per_call_voice_without_mutating_profile(tmp_path, monkeypatch):
+    captured = []
+
+    monkeypatch.setattr(tts_tool, "_load_tts_config", lambda: {
+        "provider": "edge",
+        "kokoro": {"voice": "af_heart", "speed": 0.98},
+    })
+    monkeypatch.setattr(tts_tool, "_split_text_for_tts", lambda text, _cap: [text])
+
+    def synthesize(**kwargs):
+        captured.append(kwargs["tts_config_override"])
+        path = kwargs["output_path"]
+        with open(path, "wb") as output:
+            output.write(b"RIFF-preview")
+        return json.dumps({
+            "success": True,
+            "file_path": path,
+            "provider": "kokoro",
+            "voice_compatible": False,
+        })
+
+    monkeypatch.setattr(tts_tool, "_text_to_speech_single", synthesize)
+    monkeypatch.setattr(
+        tts_tool,
+        "_build_audio_delivery_files",
+        lambda paths, _base, _profile, **_kwargs: (paths, False),
+    )
+
+    result = json.loads(tts_tool.text_to_speech_tool(
+        "Hello.",
+        provider="kokoro",
+        voice="am_michael",
+        speed=1.03,
+        output_path=str(tmp_path / "preview.wav"),
+    ))
+    assert result["success"] is True
+    assert captured[0]["provider"] == "edge"
+    assert captured[0]["kokoro"] == {"voice": "am_michael", "speed": 1.03}
