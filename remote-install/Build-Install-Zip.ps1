@@ -41,7 +41,7 @@ try {
         'Check Hermes.cmd', 'Install Hermes.cmd', 'Launch Hermes.cmd', 'Shutdown Hermes.cmd',
         'Update Hermes.cmd', 'Show Hermes Bridge.cmd', 'docker-compose.yml', 'launcher.settings.json',
         'Install-Hermes.ps1', 'Install-NetCoreDbg.ps1', 'Get-NetCoreDbg.ps1', 'Install-RoslynLanguageServer.ps1', 'roslyn-language-server.lock.json',
-        'Install-ArduinoToolchain.ps1', 'arduino-toolchain.lock.json', 'Test-Hermes.ps1',
+        'Install-ArduinoToolchain.ps1', 'arduino-toolchain.lock.json', 'Install-OpenSshToolchain.ps1', 'Test-Hermes.ps1',
         'Install-PhotonModels.ps1', 'Install-PhotonCadRuntime.ps1', 'photon-cad-assets.lock.json',
         'Launch-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1', 'Show-HermesBridge.ps1',
         'Invoke-HermesFrontend.ps1', 'README.md', 'THIRD-PARTY-NOTICES.md',
@@ -104,7 +104,7 @@ try {
     New-Item -ItemType Directory -Path $editorStage | Out-Null
     Copy-Item -LiteralPath $editorTasks -Destination (Join-Path $editorStage 'tasks.json') -Force
 
-    $requiredSmokeScripts = @('Install-Hermes.Smoke.ps1', 'Shutdown-Hermes.Smoke.ps1', 'Update-Hermes.Smoke.ps1', 'NetCoreDbg-Provisioning.Smoke.ps1', 'RoslynLanguageServer-Provisioning.Fake.Smoke.ps1', 'ArduinoToolchain-Provisioning.Smoke.ps1', 'PhotonCad-Offline-Assets.Smoke.ps1', 'Memory-Vector-Compose.Smoke.ps1')
+    $requiredSmokeScripts = @('Install-Hermes.Smoke.ps1', 'Shutdown-Hermes.Smoke.ps1', 'Update-Hermes.Smoke.ps1', 'NetCoreDbg-Provisioning.Smoke.ps1', 'RoslynLanguageServer-Provisioning.Fake.Smoke.ps1', 'ArduinoToolchain-Provisioning.Smoke.ps1', 'OpenSshToolchain-Provisioning.Smoke.ps1', 'PhotonCad-Offline-Assets.Smoke.ps1', 'Memory-Vector-Compose.Smoke.ps1')
     $missingSmokeScripts = @($requiredSmokeScripts | Where-Object { -not (Test-Path -LiteralPath (Join-Path $testsSource $_) -PathType Leaf) })
     if ($missingSmokeScripts.Count -gt 0) {
         throw "Hermes Workbench installer smoke scripts were not found: $($missingSmokeScripts -join ', ')"
@@ -259,6 +259,7 @@ try {
             'Hermes-Remote-Install/Install-RoslynLanguageServer.ps1',
             'Hermes-Remote-Install/roslyn-language-server.lock.json',
             'Hermes-Remote-Install/Install-ArduinoToolchain.ps1',
+            'Hermes-Remote-Install/Install-OpenSshToolchain.ps1',
             'Hermes-Remote-Install/arduino-toolchain.lock.json',
             'Hermes-Remote-Install/Install-PhotonModels.ps1',
             'Hermes-Remote-Install/Install-PhotonCadRuntime.ps1',
@@ -281,6 +282,7 @@ try {
             'Hermes-Remote-Install/tests/NetCoreDbg-Provisioning.Smoke.ps1',
             'Hermes-Remote-Install/tests/RoslynLanguageServer-Provisioning.Fake.Smoke.ps1',
             'Hermes-Remote-Install/tests/ArduinoToolchain-Provisioning.Smoke.ps1',
+            'Hermes-Remote-Install/tests/OpenSshToolchain-Provisioning.Smoke.ps1',
             'Hermes-Remote-Install/tests/PhotonCad-Offline-Assets.Smoke.ps1',
             'Hermes-Remote-Install/tests/Memory-Vector-Compose.Smoke.ps1',
             'Hermes-Remote-Install/runtime/Runtime.Common.ps1',

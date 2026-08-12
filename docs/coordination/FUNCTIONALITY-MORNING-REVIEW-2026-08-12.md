@@ -6,7 +6,7 @@ Policy: functionality first; security concerns are recorded in `FUNCTIONALITY-FI
 
 ## Executive result
 
-The current authoritative source is broadly green and materially ahead of the published desktop.
+The current authoritative source is broadly green. A coherent desktop/runtime publish completed after the original audit snapshot; mounted acceptance is in progress.
 
 - Frontend: **130 test files / 801 tests passed**.
 - Strict TypeScript: **passed**.
@@ -20,7 +20,7 @@ The current authoritative source is broadly green and materially ahead of the pu
 - Manual CAD provider: **6/6** after restoring the exact receipt-bound image selection and preserving strict byte/semantic pinning.
 - Repository whitespace check: **passed** on the current working changes.
 
-The running desktop is not current acceptance evidence. Its published executable predates the Browser, Developer Services, Docker, and App changes, and its observed top-level HWND is zero. One coherent publish/relaunch and visible acceptance pass is now the next system gate.
+The coherent publish/relaunch is complete. The current runtime uses source commit `feb317bc25a595a73a4bfa95a2d6eedbe5ec130c` and immutable image `sha256:d0e9ef433c24004fdee7a0fde6f8b2fff7d11823adf890e51ae08ec60dc0fb40`. The mounted renderer connected with Photon ready, authenticated Mem0 ready, and exact server-published model/reasoning state. Native visual acceptance remains in progress because one launcher session later lost its top-level WPF handle while the process stayed alive; a subsequent exact launcher restart restored a responding titled window. This lifecycle anomaly must remain visible until stability is proven.
 
 ## Current mounted runtime snapshot
 
@@ -49,10 +49,10 @@ The launcher-scoped `HERMES_IMAGE_REFERENCE` is intentionally absent from an arb
 | P1 | Docker Status / Control Center | **Integrated proven** | Polished status, health, resources, approved lifecycle review, logs and Model Runner inventory/unload pass 19 focused tests and native smoke. Publish and visibly prove the current page. Generic Docker command execution remains intentionally absent. |
 | P1 | Arduino | **Integrated proven; stale live UI** | Real receipt-bound Blink inspect/compile produced five verified artifacts. Publish the executable-adjacent asset-root fix and confirm `2/2 Host verified` for an `.ino`. Upload remains unavailable until a reviewed opaque port authority exists. |
 | P1 | .NET debugger discovery | **Integrated proven; stale live UI** | Bounded reparse-safe traversal now skips inaccessible data/log/metadata/dependency roots and preserves valid targets. Publish, Refresh targets, select a valid Debug target and run one visible launch/stop cycle. |
-| P1 | Raspberry Pi | **Native setup integrated; payload required** | A native owned Configure dialog now collects host/user/port/host-key and accepts the private key only through a Windows PasswordBox into Credential Manager. The renderer receives only an opaque target ID/result. Typed inspection enables only after a valid setup plus a receipt-bound OpenSSH payload; the current published install lacks that receipt, so `openssh-receipt-missing` remains honest. Deploy remains review-gated and has no renderer handler. Host build 0/0, focused UI 10/10, strict TypeScript passed. |
+| P1 | Raspberry Pi | **Native setup + receipt-bound OpenSSH integrated** | A native owned Configure dialog collects host/user/port/host-key and accepts the private key only through a Windows PasswordBox into Credential Manager. The renderer receives only an opaque target ID/result. A new installer copies only Microsoft-signed `ssh.exe`, `scp.exe`, LICENSE and NOTICE from Windows into the private toolchain, pins exact length/SHA-256 in the existing receipt format, replaces repeat installs deterministically and removes rogue files. Provisioning smoke passed and the current published payload is installed. A real Pi target/credential is still required for mounted inspection; no connection was attempted. Deploy remains review-gated and has no renderer handler. |
 | P1 | Browser, Help and Google Maps | **Integrated proven** | Source supports strict navigation, race-safe native visibility, retained/deduplicated Hermes Help, Maps search and typed directions. Publish and visibly test Help, Maps, history, panel switching and click interception. No Maps API key or route-verification claim. |
 | P1 | Voice input/output | **Provider loop proven; mounted UI pending** | The durable target contains pinned Kokoro/faster-whisper packages and both digest-verified Kokoro assets. Real Kokoro synthesis produced a 95,276-byte WAV and local faster-whisper transcribed it back as `photon local voice acceptance.` A narrow source fix now permits only the fixed application-owned audio cache to bypass the workspace safe-root category; credential/system denials remain authoritative. Rebuild the container, then prove microphone, preview, profile save and read-aloud in the mounted UI. |
-| P1 | Coherent desktop acceptance | **Pending** | Rebuild frontend and desktop together, publish, relaunch only through `Launch-Hermes.ps1`, require a responding nonzero HWND, then run the visible acceptance checklist below. |
+| P1 | Coherent desktop acceptance | **Published; mounted proof in progress** | Frontend/desktop/runtime were rebuilt and launched through `Launch-Hermes.ps1`. Mounted web state proves Photon ready, Mem0 ready and model/reasoning metadata. Complete native UI proof remains pending and the top-level-window lifecycle anomaly above is still open. |
 | P2 | Manual CAD fillet/chamfer | **Unavailable honestly** | Requires stable topology/edge identity; do not approximate with all-edge operations. |
 | P2 | CAD interference verification | **Unavailable honestly** | Add a trusted overlap-analysis provider; preview geometry is not verification evidence. |
 | P2 | IPT/IAM conversion | **Conditional / authority absent** | Generic STEP works. Inventor formats require a receipt-bound Autodesk conversion authority. |
@@ -77,9 +77,9 @@ The Developer Services smoke failed only when the managed sandbox denied access 
 
 ## Serialized publish and visible acceptance checklist
 
-1. Re-run frontend 801/801, production build, desktop Release 0/0, complete native desktop smoke, CAD-focused smoke, manual CAD 6/6 and whitespace check.
-2. Publish the desktop and frontend together; verify output timestamps and hashes are newer than the currently running executable.
-3. Relaunch only through `Launch-Hermes.ps1`.
+1. Preserve the completed frontend 803/803, production build, desktop Release 0/0, native smoke, CAD-focused smoke, manual CAD 6/6 and whitespace gates.
+2. Preserve the completed coherent desktop/frontend/runtime publish and immutable image identity recorded above.
+3. Continue launching only through `Launch-Hermes.ps1`.
 4. Require a responding desktop with a nonzero top-level HWND and confirm ports 8972, 9072 and 9121.
 5. In the visible UI, confirm:
    - Docker Status shows engine, Compose, approved services, resources and loaded models.
