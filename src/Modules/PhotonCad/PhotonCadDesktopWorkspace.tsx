@@ -1145,7 +1145,7 @@ export function PhotonCadDesktopWorkspace({
         <div className="photon-cad-desktop__actions" aria-label="Project actions">
           <button type="button" data-command="new" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void beginCreateProject()}><FilePlus2 size={14} aria-hidden="true" /><span>New</span></button>
           <button type="button" data-command="open" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void openProject()}><FolderOpen size={14} aria-hidden="true" /><span>Open</span></button>
-          <button type="button" data-command="import-step" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void importStep()}><FileInput size={14} aria-hidden="true" /><span>Import STEP</span></button>
+          <button type="button" data-command="import-step" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || documents.length >= PHOTON_CAD_PROJECT_LIMITS.openDocuments} onClick={() => void importStep()}><FileInput size={14} aria-hidden="true" /><span>Import CAD</span></button>
           <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab?.metadataCurrent} onClick={() => void saveActiveProject(false)}><Save size={14} aria-hidden="true" /><span>Save</span></button>
           <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab?.metadataCurrent} onClick={() => void saveActiveProject(true)}><SaveAll size={14} aria-hidden="true" /><span>Save as</span></button>
           <button type="button" disabled={!projectActionsAvailable || Boolean(busy) || coreBusy || newProjectDraft !== null || !activeTab} onClick={() => void refreshActiveProject()}><RefreshCw size={14} aria-hidden="true" /><span>Refresh</span></button>
@@ -1290,7 +1290,7 @@ export function projectStatusText(reason: string) {
     'project-runtime-hydration-unavailable': 'This stored project is open for viewing and saving. Browse the connected catalog; editing remains disabled until trusted runtime hydration is available.',
     'choosing-project-workspace': 'Choose an opaque workspace for the new project.',
     'choosing-project': 'Choose a project through the desktop picker.',
-    'choosing-step-source': 'Choose a STEP Part 21 source, then choose the new Photon CAD project file.',
+    'choosing-step-source': 'Choose a STEP, Inventor, or GLB source. Supported STEP files open as a new Photon CAD project.',
     'choosing-save-as-workspace': 'Choose a new opaque workspace for this project.',
     'creating-project': 'Creating a new host-owned CAD project session.',
     'opening-project': 'Opening the selected CAD project.',
@@ -1322,6 +1322,8 @@ export function projectStatusText(reason: string) {
     'step-source-picker-unavailable': 'The native STEP source picker is unavailable. No project was changed.',
     'step-destination-picker-unavailable': 'The STEP source was verified, but the destination picker is unavailable. No project was created.',
     'step-source-invalid': 'The selected file is not a complete supported STEP Part 21 document.',
+    'autodesk-inventor-authority-unavailable': 'This looks like an Autodesk Inventor IPT/IAM file, but no reviewed Inventor conversion authority is installed. No project was changed.',
+    'glb-import-authority-unavailable': 'GLB intake is not installed as an authoritative editable CAD import. No project was changed.',
     'step-import-host-unavailable': 'The native STEP import host is unavailable.',
     'industrial-runtime-unavailable': 'The verified CAD runtime required to seal this STEP import is unavailable.',
     'step-import-cancelled': 'STEP import was cancelled. No imported geometry was accepted.',

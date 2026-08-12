@@ -18,6 +18,7 @@ import {
   LogOut,
   Package,
   RefreshCw,
+  Radio,
   Server,
   ShieldCheck,
   SlidersHorizontal,
@@ -63,9 +64,10 @@ import {
 } from '../HermesSessionAdmin'
 import { HermesConnectionsWorkspace, type ConnectionCatalogEntry } from '../HermesConnections'
 import { HermesRuntimeConfigurationWorkspace } from '../HermesRuntimeConfiguration'
+import { HermesSpeechVoiceWorkspace } from '../HermesSpeechOutput'
 import './HermesSystemWorkspace.css'
 
-type Section = 'overview' | 'account' | 'connections' | 'runtime' | 'integrations' | 'mcp' | 'skills' | 'extensions' | 'profiles' | 'session-admin'
+type Section = 'overview' | 'account' | 'connections' | 'runtime' | 'speech-voice' | 'integrations' | 'mcp' | 'skills' | 'extensions' | 'profiles' | 'session-admin'
 
 const nativeConnectionCatalog: ConnectionCatalogEntry[] = [
   { providerId: 'openrouter', displayName: 'OpenRouter', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:openrouter', 'usage'], supportsNativeChange: true, description: 'Model access and usage collection through a machine-bound native credential.' },
@@ -257,6 +259,8 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
         ? 'Connections & credentials'
         : section === 'runtime'
         ? 'Runtime & model providers'
+        : section === 'speech-voice'
+          ? 'Speech & Voice'
         : section === 'integrations'
           ? 'Serena integration'
           : section === 'mcp'
@@ -270,6 +274,8 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
                   : 'Advanced session administration'
   const sectionSubtitle = section === 'connections'
     ? 'Machine-bound provider access with native review'
+    : section === 'speech-voice'
+      ? 'Local microphone input and Kokoro speech output'
     : section === 'integrations'
     ? 'Hermes container → host-local Serena'
     : section === 'mcp'
@@ -291,6 +297,8 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
         ? <KeyRound size={17} />
         : section === 'runtime'
         ? <Gauge size={17} />
+        : section === 'speech-voice'
+          ? <Radio size={17} />
         : section === 'integrations'
           ? <Cable size={17} />
           : section === 'mcp'
@@ -319,6 +327,7 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
           <button type="button" className={section === 'account' ? 'active' : ''} onClick={() => setSection('account')}><UserRound size={15} /><span><strong>Account</strong><small>{accountLabel}</small></span></button>
           <button type="button" className={section === 'connections' ? 'active' : ''} onClick={() => setSection('connections')}><KeyRound size={15} /><span><strong>Connections</strong><small>Native credential vault</small></span></button>
           <button type="button" className={section === 'runtime' ? 'active' : ''} onClick={() => setSection('runtime')}><Gauge size={15} /><span><strong>Runtime</strong><small>Models and endpoints</small></span></button>
+          <button type="button" className={section === 'speech-voice' ? 'active' : ''} onClick={() => setSection('speech-voice')}><Radio size={15} /><span><strong>Speech &amp; Voice</strong><small>Local mic and speaking voice</small></span></button>
           <button type="button" className={section === 'integrations' ? 'active' : ''} onClick={() => setSection('integrations')}><Cable size={15} /><span><strong>Integrations</strong><small>{serenaTitle(serena)}</small></span></button>
           <button type="button" className={section === 'mcp' ? 'active' : ''} onClick={() => setSection('mcp')}><Package size={15} /><span><strong>MCP & tools</strong><small>Nous catalog and servers</small></span></button>
           <button type="button" className={section === 'skills' ? 'active' : ''} onClick={() => setSection('skills')}><LibraryBig size={15} /><span><strong>Skills</strong><small>Preview and security scan</small></span></button>
@@ -375,6 +384,7 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
               </>}
           </section>}
           {section === 'connections' && <HermesConnectionsWorkspace profileId="default" catalog={nativeConnectionCatalog} />}
+          {section === 'speech-voice' && <HermesSpeechVoiceWorkspace profileId="default" />}
 
           {status && section === 'runtime' && <section className="runtime-surface">
             {!stats ? <div className="system-locked"><LockKeyhole size={23} /><strong>Sign in to view runtime telemetry</strong><p>Host details remain behind the Hermes authentication gate.</p><button type="button" onClick={() => setSection('account')}>Open account</button></div> : <>

@@ -61,8 +61,8 @@ internal sealed class Smoke
     {
         var path = Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
-            "..", "..", "..", "..",
-            "PhotonCadIndustrial.ContainerSmoke", "artifacts", "last-smoke-receipt.json"));
+            "..", "..", "..", "..", "..", "..",
+            "runtime-assets", "photon-cad-industrial", "evidence-selection.json"));
         var evidence = await EvidenceVerifier.VerifyAsync(path, CancellationToken.None);
         Equal(EvidenceVerifier.AcceptedReceiptSha256, evidence.ReceiptSha256, "receipt digest");
         Equal(EvidenceVerifier.AcceptedDerivedImageId, evidence.DerivedImageId, "derived image");

@@ -206,6 +206,7 @@ public partial class MainWindow : Window
         core.NavigationStarting += NavigationStarting;
         core.NavigationCompleted += NavigationCompleted;
         core.NewWindowRequested += NewWindowRequested;
+        core.PermissionRequested += WorkbenchPermissionRequested;
         core.WebMessageReceived += WebMessageReceived;
         core.AddWebResourceRequestedFilter(
             new Uri(_options.WorkbenchUri, PhotonCadBridge.PreviewResourcePathPrefix).AbsoluteUri + "*",
@@ -214,6 +215,20 @@ public partial class MainWindow : Window
         core.ProcessFailed += ProcessFailed;
         _webViewConfigured = true;
         DesktopLog.Write($"WebView2 initialized ({core.Environment.BrowserVersionString}).");
+    }
+
+    private void WorkbenchPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs eventArgs)
+    {
+        if (eventArgs.PermissionKind != CoreWebView2PermissionKind.Microphone
+            || !Uri.TryCreate(eventArgs.Uri, UriKind.Absolute, out var requestUri)
+            || !DesktopOptions.IsSameWorkbenchOrigin(_options.WorkbenchUri, requestUri))
+        {
+            eventArgs.State = CoreWebView2PermissionState.Deny;
+            return;
+        }
+
+        eventArgs.State = CoreWebView2PermissionState.Allow;
+        DesktopLog.Write("Workbench microphone permission allowed for the exact local origin.");
     }
 
     private void PhotonCadPreviewResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs eventArgs)

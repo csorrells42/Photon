@@ -377,7 +377,18 @@ describe('PhotonCadDesktopWorkspace', () => {
     expect(projectStatusText('project-create-failed')).toContain('before a verified project could be opened')
     expect(projectStatusText('overwrite-confirmation-declined')).toContain('existing project file was not changed')
     expect(projectStatusText('desktop-host-unavailable')).toContain('desktop project bridge is unavailable')
+    expect(projectStatusText('autodesk-inventor-authority-unavailable')).toContain('no reviewed Inventor conversion authority is installed')
+    expect(projectStatusText('glb-import-authority-unavailable')).toContain('not installed as an authoritative editable CAD import')
     expect(projectStatusText('unexpected-project-code')).toContain('unexpected-project-code')
+  })
+
+  it('exposes one honest CAD import action rather than implying Inventor conversion is already installed', () => {
+    const markup = renderToStaticMarkup(
+      <PhotonCadDesktopWorkspace projectController={projectController()} coreController={coreController()} />,
+    )
+    expect(markup).toContain('data-command="import-step"')
+    expect(markup).toContain('<span>Import CAD</span>')
+    expect(markup).not.toContain('<span>Import STEP</span>')
   })
 
   it('disables project entry actions when the native storage safety adapter is unavailable', () => {

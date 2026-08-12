@@ -37,9 +37,10 @@ internal sealed class AssemblyMutationProvider : IPhotonCadSealedMutationProvide
         if (Volatile.Read(ref _revoked) != 0) throw AssemblyGuards.Failure("assembly_provider_revoked");
         RequireBoundRequest(request);
         var previewDigest = RequirePreview(request);
-        var occurrences = UpdatedOccurrences(request);
+        var parts = ResolvePartMetadata(request);
+        var occurrences = UpdatedOccurrences(request, parts);
         ValidateAssembly(request, occurrences);
-        var bom = AssemblyBomDeriver.Derive(request.BaseBom, occurrences);
+        var bom = AssemblyBomDeriver.Derive(parts, occurrences);
         var previewPlan = BuildPreview(request, occurrences);
         byte[] glb;
         IndustrialPreviewResponse preview;
@@ -114,7 +115,9 @@ internal sealed class AssemblyMutationProvider : IPhotonCadSealedMutationProvide
         return preview.ContentDigest;
     }
 
-    private IReadOnlyList<PhotonCadOccurrenceV1> UpdatedOccurrences(PhotonCadSealedMutationProviderRequest request)
+    private IReadOnlyList<PhotonCadOccurrenceV1> UpdatedOccurrences(
+        PhotonCadSealedMutationProviderRequest request,
+        IReadOnlyDictionary<string, AssemblyPartMetadata> parts)
     {
         var current = request.BaseOccurrences.Select(value => new PhotonCadOccurrenceV1(
             value.OccurrenceId,
@@ -128,12 +131,12 @@ internal sealed class AssemblyMutationProvider : IPhotonCadSealedMutationProvide
             if (match.Length != 0) throw AssemblyGuards.Failure("assembly_occurrence_duplicate");
             if (!current.Any(value => StringComparer.Ordinal.Equals(value.OccurrenceId, _command.ParentOccurrenceId)))
                 throw AssemblyGuards.Failure("assembly_parent_missing");
-            var template = request.BaseBom.Where(value => StringComparer.Ordinal.Equals(value.SourceEntityId, _command.SourceEntityId)).ToArray();
-            if (template.Length != 1) throw AssemblyGuards.Failure("assembly_part_number_source_ambiguous");
+            if (!parts.TryGetValue(_command.SourceEntityId, out var template))
+                throw AssemblyGuards.Failure("assembly_part_number_source_missing");
             current.Add(new PhotonCadOccurrenceV1(
                 _command.OccurrenceId,
                 _command.ParentOccurrenceId,
-                template[0].PartNumber,
+                template.PartNumber,
                 _command.SourceEntityId,
                 _command.Transform));
         }
@@ -170,6 +173,43 @@ internal sealed class AssemblyMutationProvider : IPhotonCadSealedMutationProvide
             if (current.Count == 0) throw AssemblyGuards.Failure("assembly_last_occurrence_removal_rejected");
         }
         return current.OrderBy(value => value.OccurrenceId, StringComparer.Ordinal).ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, AssemblyPartMetadata> ResolvePartMetadata(
+        PhotonCadSealedMutationProviderRequest request)
+    {
+        var result = new Dictionary<string, AssemblyPartMetadata>(StringComparer.Ordinal);
+        foreach (var group in request.BaseBom.GroupBy(value => value.SourceEntityId, StringComparer.Ordinal))
+        {
+            var rows = group.ToArray();
+            if (rows.Length != 1) throw AssemblyGuards.Failure("assembly_bom_source_ambiguous");
+            result.Add(group.Key, new AssemblyPartMetadata(rows[0].PartNumber, rows[0].Description, rows[0].Unit));
+        }
+
+        foreach (var entity in request.BaseEntities)
+        {
+            if (result.ContainsKey(entity.Id)) continue;
+            var recovered = RecoverPartMetadata(entity);
+            if (recovered is not null) result.Add(entity.Id, recovered);
+        }
+        return result;
+    }
+
+    private static AssemblyPartMetadata? RecoverPartMetadata(PhotonCadProviderBaseEntity entity)
+    {
+        var capability = entity.SourceCapabilityId;
+        if (StringComparer.Ordinal.Equals(capability, "geometry.box.create.v1"))
+            return new AssemblyPartMetadata("BOX", "Create Box", PhotonCadBomUnit.Each);
+        if (StringComparer.Ordinal.Equals(capability, "geometry.cylinder.create.v1"))
+            return new AssemblyPartMetadata("CYLINDER", "Create Cylinder", PhotonCadBomUnit.Each);
+        if (capability is not null
+            && capability.StartsWith("bdw_", StringComparison.Ordinal)
+            && capability.Length >= 16)
+            return new AssemblyPartMetadata(
+                $"BDW-{capability[4..16].ToUpperInvariant()}",
+                $"Create {entity.Name}",
+                PhotonCadBomUnit.Each);
+        return null;
     }
 
     private static void ValidateAssembly(

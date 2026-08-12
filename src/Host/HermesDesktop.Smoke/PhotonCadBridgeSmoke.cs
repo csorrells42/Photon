@@ -13,9 +13,12 @@ using PhotonCadProjects.Windows;
 using PhotonCadPreviews;
 using PhotonCadRuntime;
 using PhotonCadRuntime.IndustrialProvider;
+using PhotonCadRuntime.ManualProvider;
 
 internal static class PhotonCadBridgeSmoke
 {
+    private const string ImportedStepCapabilityId = "external.step.import.v1";
+
     internal static async Task<bool> RunLiveIndustrialAsync(string installRoot)
     {
         EnsureRuntimeSyncLoadedForSmoke();
@@ -224,6 +227,8 @@ internal static class PhotonCadBridgeSmoke
                 return Fail("Live industrial renderer frames exposed a native path.");
 
             Console.WriteLine("Desktop Photon CAD LIVE bearing and Spur Gear exact-image 0-to-2-to-4 persistence, reopen, BOM, STEP, and GLB replacement passed.");
+            if (!await RunLiveStepImportAsync(exactInstallRoot, tempRoot, steps[0].Content.ToArray())) return false;
+            if (!await RunLiveManualAsync(exactInstallRoot)) return false;
             return true;
         }
         finally
@@ -274,7 +279,8 @@ internal static class PhotonCadBridgeSmoke
         string capabilityId,
         IReadOnlyDictionary<string, object?> inputs,
         long expectedRevision,
-        int expectedPreviewEntities)
+        int expectedPreviewEntities,
+        IReadOnlyList<string>? targetEntityIds = null)
     {
         var frameCountBeforeExecute = frames.Count;
         await SendFrameAsync(bridge, new
@@ -289,7 +295,7 @@ internal static class PhotonCadBridgeSmoke
             mode = "scratch",
             capabilityId,
             inputs,
-            targetEntityIds = Array.Empty<string>(),
+            targetEntityIds = targetEntityIds ?? Array.Empty<string>(),
         });
         var emitted = frames.Skip(frameCountBeforeExecute).ToArray();
         var result = emitted.LastOrDefault(frame =>
@@ -329,6 +335,249 @@ internal static class PhotonCadBridgeSmoke
             && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-')
                 ? value
                 : "missing-safe-code";
+    }
+
+    private static async Task<bool> RunLiveManualAsync(string exactInstallRoot)
+    {
+        var tempRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"photon-cad-bridge-smoke-manual-{Guid.NewGuid():N}"));
+        Directory.CreateDirectory(tempRoot);
+        var projectPath = Path.Combine(tempRoot, "live-manual.photoncad");
+        var frames = new List<JsonElement>();
+        PhotonCadBridge? bridge = null;
+        try
+        {
+            bridge = new PhotonCadBridge(
+                exactInstallRoot,
+                message => frames.Add(JsonSerializer.SerializeToElement(message)),
+                projectDialog: new SmokeProjectDialog(projectPath),
+                workbenchOrigin: new Uri("https://127.0.0.1:4173/", UriKind.Absolute));
+            var epoch = await bridge.ResetAsync();
+            if (!bridge.TryOpenRendererGeneration(epoch)) return Fail("Live manual bridge generation did not open.");
+
+            await LivePhaseAsync("manual-describe", () => SendAsync(bridge,
+                """{"type":"photonCad.describe","version":1,"contractVersion":1,"requestId":"live-manual-describe"}"""),
+                LiveControlPhaseTimeout);
+            var describedFrame = Frame(frames, "photonCad.describe.result");
+            if (Text(describedFrame, "requestId") != "live-manual-describe")
+                return Fail("Live manual describe was not correlated to the exact request.");
+            var described = describedFrame.GetProperty("value");
+            var capabilityIds = described.GetProperty("catalog").GetProperty("capabilities").EnumerateArray()
+                .Select(value => Text(value, "id"))
+                .Where(value => value is not null)
+                .ToHashSet(StringComparer.Ordinal);
+            if (!capabilityIds.Contains(PhotonCadManualCapabilityIds.SketchExtrudeAdd)
+                || !capabilityIds.Contains(PhotonCadManualCapabilityIds.SketchExtrudeCut)
+                || !capabilityIds.Contains(PhotonCadManualCapabilityIds.HoleCut))
+                return Fail("Live manual runtime did not advertise its three installed operations.");
+
+            var identity = await LivePhaseAsync("manual-create-project",
+                () => CreateCanonicalProjectAsync(bridge, frames, "live-manual"), LiveControlPhaseTimeout);
+            var createdDocument = Frame(frames, "photonCad.project.create.result", "create-live-manual")
+                .GetProperty("value").GetProperty("document").Clone();
+
+            var add = await LivePhaseAsync("manual-extrude-add", () => ExecuteLiveCatalogAsync(
+                    bridge, frames, "live-manual-add", identity.SessionId, identity.ProjectId, 0,
+                    PhotonCadManualCapabilityIds.SketchExtrudeAdd,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["profileKind"] = "rectangle",
+                        ["sketchPlane"] = "xy",
+                        ["profileWidthMm"] = 40d,
+                        ["profileHeightMm"] = 30d,
+                        ["profileRadiusMm"] = null,
+                        ["extrusionDepthMm"] = 12d,
+                    }, expectedRevision: 2, expectedPreviewEntities: 1), LiveCadPhaseTimeout);
+            var bodyId = add.GetProperty("snapshot").GetProperty("entities").EnumerateArray()
+                .Single(value => Text(value, "kind") == "body" && Text(value, "sourceCapabilityId") == PhotonCadManualCapabilityIds.SketchExtrudeAdd)
+                .GetProperty("id").GetString()!;
+
+            await LivePhaseAsync("manual-sketch-cut", () => ExecuteLiveCatalogAsync(
+                    bridge, frames, "live-manual-cut", identity.SessionId, identity.ProjectId, 2,
+                    PhotonCadManualCapabilityIds.SketchExtrudeCut,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["sketchPlane"] = "xy",
+                        ["profileWidthMm"] = 10d,
+                        ["profileHeightMm"] = 8d,
+                        ["cutDepthMm"] = 6d,
+                    }, expectedRevision: 4, expectedPreviewEntities: 1, [bodyId]), LiveCadPhaseTimeout);
+
+            var hole = await LivePhaseAsync("manual-hole-cut", () => ExecuteLiveCatalogAsync(
+                    bridge, frames, "live-manual-hole", identity.SessionId, identity.ProjectId, 4,
+                    PhotonCadManualCapabilityIds.HoleCut,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["diameterMm"] = 4d,
+                        ["depthMm"] = 12d,
+                        ["xMm"] = 12d,
+                        ["yMm"] = 8d,
+                        ["zMm"] = 0d,
+                    }, expectedRevision: 6, expectedPreviewEntities: 1, [bodyId]), LiveCadPhaseTimeout);
+            var manualOccurrences = SnapshotOccurrenceIds(hole);
+            var manualPreview = await LivePhaseAsync("manual-preview-resolve-read", () => ReadLivePreviewAsync(
+                    bridge, frames, identity, hole.GetProperty("preview"), manualOccurrences, "live-manual-preview"),
+                LiveControlPhaseTimeout);
+            if (manualPreview is null) return false;
+
+            var projectHandle = Text(createdDocument, "projectHandle")!;
+            await SendFrameAsync(bridge, new
+            {
+                type = "photonCad.project.refresh", version = 1, contractVersion = 1,
+                requestId = "live-manual-refresh", projectHandle,
+                sessionId = identity.SessionId, projectId = identity.ProjectId, knownRevision = 6,
+            });
+            var refreshed = Frame(frames, "photonCad.project.refresh.result", "live-manual-refresh")
+                .GetProperty("value").GetProperty("document").Clone();
+            await SendFrameAsync(bridge, new
+            {
+                type = "photonCad.project.close", version = 1, contractVersion = 1,
+                requestId = "live-manual-close", projectHandle,
+                sessionId = identity.SessionId, projectId = identity.ProjectId, revision = 6,
+                lastSavedRevision = refreshed.GetProperty("lastSavedRevision").GetInt64(),
+                contentDigest = Text(refreshed, "contentDigest"),
+                lastSavedContentDigest = Text(refreshed, "lastSavedContentDigest"),
+                discardUnsavedChanges = false,
+            });
+            var closed = Frame(frames, "photonCad.project.close.result", "live-manual-close").GetProperty("value");
+            await SendFrameAsync(bridge, new
+            {
+                type = "photonCad.project.reopen", version = 1, contractVersion = 1,
+                requestId = "live-manual-reopen", reopenHandle = Text(closed.GetProperty("reopen"), "reopenHandle"),
+            });
+            var reopened = Frame(frames, "photonCad.project.reopen.result", "live-manual-reopen")
+                .GetProperty("value").GetProperty("document").GetProperty("snapshot");
+            if (reopened.GetProperty("revision").GetInt64() != 6 || reopened.GetProperty("dirty").GetBoolean())
+                return Fail("Live manual project did not reopen at exact clean revision six.");
+
+            var codec = new PhotonCadCanonicalProjectCodecV1();
+            var canonical = codec.Decode(await File.ReadAllBytesAsync(projectPath));
+            var state = codec.Inspect(canonical);
+            var geometry = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry);
+            var preview = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.ProjectPreview);
+            if (canonical.Revision != 6 || canonical.Dirty
+                || state.Entities.Count != 1 || state.Occurrences.Count != 1 || state.Bom.Count != 1
+                || state.Operations.Count != 6
+                || !state.Operations.Select(value => value.CapabilityId).SequenceEqual([
+                    PhotonCadManualCapabilityIds.SketchExtrudeAdd, "industrial.preview.glb.v1",
+                    PhotonCadManualCapabilityIds.SketchExtrudeCut, "industrial.preview.glb.v1",
+                    PhotonCadManualCapabilityIds.HoleCut, "industrial.preview.glb.v1"], StringComparer.Ordinal)
+                || geometry.OwnerEntityId != bodyId || geometry.Revision != 5 || geometry.Bounds is not null
+                || !ValidPart21Envelope(geometry.Content.Span)
+                || preview.Revision != 6 || !preview.Content.Span.SequenceEqual(manualPreview.Content))
+                return Fail("Live manual extrude/cut/hole project lost its canonical geometry, preview, or operation chain.");
+
+            Console.WriteLine("Desktop Photon CAD LIVE manual sketch/extrude, sketch cut, and hole 0-to-2-to-4-to-6 persistence, preview, and reopen passed.");
+            return true;
+        }
+        finally
+        {
+            if (bridge is not null) await bridge.DisposeAsync();
+            DeleteOwnedSmokeRoot(tempRoot);
+        }
+    }
+
+    private static async Task<bool> RunLiveStepImportAsync(
+        string exactInstallRoot,
+        string tempRoot,
+        byte[] sourceStep)
+    {
+        var sourcePath = Path.Combine(tempRoot, "live-import-source.step");
+        var projectPath = Path.Combine(tempRoot, "live-imported.photoncad");
+        await File.WriteAllBytesAsync(sourcePath, sourceStep);
+        var frames = new List<JsonElement>();
+        await using var bridge = new PhotonCadBridge(
+            exactInstallRoot,
+            message => frames.Add(JsonSerializer.SerializeToElement(message)),
+            projectDialog: new SmokeProjectDialog(projectPath, sourcePath),
+            workbenchOrigin: new Uri("https://127.0.0.1:4173/", UriKind.Absolute));
+        var epoch = await bridge.ResetAsync();
+        if (!bridge.TryOpenRendererGeneration(epoch)) return Fail("Live STEP import bridge generation did not open.");
+
+        await LivePhaseAsync("step-import-commit", () => SendFrameAsync(bridge, new
+        {
+            type = "photonCad.step.import",
+            version = 1,
+            contractVersion = 1,
+            requestId = "live-step-import",
+        }), LiveCadPhaseTimeout);
+        var imported = Frame(frames, "photonCad.step.import.result", "live-step-import").GetProperty("value");
+        if (Text(imported, "status") != "opened" || Text(imported, "reason") != "step-import-committed"
+            || !imported.TryGetProperty("document", out var document))
+            return Fail("Live STEP import did not return an exact committed project document.");
+        var snapshot = document.GetProperty("snapshot");
+        var sessionId = Text(snapshot, "sessionId")!;
+        var projectId = Text(snapshot, "projectId")!;
+        var importedEntity = snapshot.GetProperty("entities").EnumerateArray()
+            .SingleOrDefault(value => Text(value, "kind") == "part" && Text(value, "sourceCapabilityId") == ImportedStepCapabilityId);
+        var occurrenceIds = snapshot.GetProperty("entities").EnumerateArray()
+            .Where(value => Text(value, "kind") == "occurrence")
+            .Select(value => Text(value, "id")!)
+            .ToHashSet(StringComparer.Ordinal);
+        if (snapshot.GetProperty("revision").GetInt64() != 2 || snapshot.GetProperty("dirty").GetBoolean()
+            || importedEntity.ValueKind != JsonValueKind.Object || occurrenceIds.Count != 1
+            || document.GetProperty("lastSavedRevision").GetInt64() != 2)
+            return Fail("Live STEP import did not publish one clean canonical part and occurrence at revision two.");
+
+        await LivePhaseAsync("step-import-preview-hydrate", () => SendFrameAsync(bridge, new
+        {
+            type = "photonCad.preview.hydrate",
+            version = 1,
+            contractVersion = 1,
+            requestId = "live-step-import-hydrate",
+            sessionId,
+            projectId,
+            revision = 2,
+        }), LiveControlPhaseTimeout);
+        var hydration = Frame(frames, "photonCad.preview.hydrate.result", "live-step-import-hydrate").GetProperty("value");
+        if (Text(hydration, "status") != "available" || !hydration.TryGetProperty("preview", out var preview))
+            return Fail("Live STEP import did not hydrate its committed preview.");
+        var previewEvidence = await LivePhaseAsync("step-import-preview-resolve-read", () => ReadLivePreviewAsync(
+            bridge, frames, (sessionId, projectId), preview, occurrenceIds, "live-step-import-preview"), LiveControlPhaseTimeout);
+        if (previewEvidence is null) return false;
+
+        var projectHandle = Text(document, "projectHandle")!;
+        await SendFrameAsync(bridge, new
+        {
+            type = "photonCad.project.close", version = 1, contractVersion = 1,
+            requestId = "live-step-import-close", projectHandle, sessionId, projectId, revision = 2,
+            lastSavedRevision = 2,
+            contentDigest = Text(document, "contentDigest"),
+            lastSavedContentDigest = Text(document, "lastSavedContentDigest"),
+            discardUnsavedChanges = false,
+        });
+        var closed = Frame(frames, "photonCad.project.close.result", "live-step-import-close").GetProperty("value");
+        await SendFrameAsync(bridge, new
+        {
+            type = "photonCad.project.reopen", version = 1, contractVersion = 1,
+            requestId = "live-step-import-reopen", reopenHandle = Text(closed.GetProperty("reopen"), "reopenHandle"),
+        });
+        var reopened = Frame(frames, "photonCad.project.reopen.result", "live-step-import-reopen")
+            .GetProperty("value").GetProperty("document").GetProperty("snapshot");
+        if (reopened.GetProperty("revision").GetInt64() != 2 || reopened.GetProperty("dirty").GetBoolean())
+            return Fail("Live STEP import did not reopen as the exact clean saved revision.");
+
+        var codec = new PhotonCadCanonicalProjectCodecV1();
+        var canonical = codec.Decode(await File.ReadAllBytesAsync(projectPath));
+        var state = codec.Inspect(canonical);
+        var geometry = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry);
+        var persistedPreview = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.ProjectPreview);
+        if (canonical.Revision != 2 || canonical.Dirty
+            || state.Entities.Count != 1 || state.Occurrences.Count != 1 || state.Bom.Count != 1
+            || state.Operations.Count != 2 || state.Operations[0].CapabilityId != ImportedStepCapabilityId
+            || state.Operations[1].CapabilityId != "industrial.preview.glb.v1"
+            || geometry.Revision != 1 || geometry.Bounds is not null || !geometry.Content.Span.SequenceEqual(sourceStep)
+            || geometry.Provenance.Source.Package != "user-supplied-step"
+            || persistedPreview.Revision != 2 || !persistedPreview.Content.Span.SequenceEqual(previewEvidence.Content)
+            || !LiveIndustrialProvenance(persistedPreview.Provenance))
+            return Fail("Live STEP import lost its byte-exact STEP, canonical identities, or complete preview during save/reopen.");
+        var serializedFrames = JsonSerializer.Serialize(frames);
+        if (serializedFrames.Contains(sourcePath, StringComparison.OrdinalIgnoreCase)
+            || serializedFrames.Contains(projectPath, StringComparison.OrdinalIgnoreCase)
+            || serializedFrames.Contains(tempRoot, StringComparison.OrdinalIgnoreCase))
+            return Fail("Live STEP import exposed a native path to the renderer.");
+
+        Console.WriteLine("Desktop Photon CAD LIVE byte-exact STEP import, canonical revision-two save, preview, and reopen passed.");
+        return true;
     }
 
     private static async Task<LivePreviewEvidence?> ReadLivePreviewAsync(
@@ -598,6 +847,24 @@ internal static class PhotonCadBridgeSmoke
             || JsonSerializer.Serialize(invalid).Contains(invalidSource, StringComparison.OrdinalIgnoreCase))
             return Fail("STEP import did not reject invalid source bytes without leaking the native path.");
 
+        var inventorSource = Path.Combine(tempRoot, "unsupported-import.ipt");
+        await File.WriteAllBytesAsync(inventorSource,
+            [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0, 0, 0]);
+        dialog.ImportPath = inventorSource;
+        await SendFrameAsync(bridge, new
+        {
+            type = "photonCad.step.import",
+            version = 1,
+            contractVersion = 1,
+            requestId = "inventor-import-unavailable",
+        });
+        var inventor = Frame(frames, "photonCad.step.import.result", "inventor-import-unavailable");
+        if (Text(inventor.GetProperty("value"), "status") != "unavailable"
+            || Text(inventor.GetProperty("value"), "reason") != "autodesk-inventor-authority-unavailable"
+            || dialog.Calls != 2
+            || JsonSerializer.Serialize(inventor).Contains(inventorSource, StringComparison.OrdinalIgnoreCase))
+            return Fail("Inventor intake did not truthfully report its missing conversion authority without leaking the native path.");
+
         dialog.CancelImport = true;
         await SendFrameAsync(bridge, new
         {
@@ -609,7 +876,7 @@ internal static class PhotonCadBridgeSmoke
         var cancelled = Frame(frames, "photonCad.step.import.result", "step-import-cancelled");
         if (Text(cancelled.GetProperty("value"), "status") != "cancelled"
             || Text(cancelled.GetProperty("value"), "reason") != "native-picker-cancelled"
-            || dialog.Calls != 2)
+            || dialog.Calls != 3)
             return Fail("STEP import cancellation was not returned exactly once before project creation.");
         return true;
     }
@@ -1759,26 +2026,26 @@ internal static class PhotonCadBridgeSmoke
     private sealed class SmokeProjectDialog : IPhotonCadWindowsFileDialog
     {
         private readonly string _projectPath;
-        private readonly string? _importPath;
 
         internal SmokeProjectDialog(string projectPath, string? importPath = null)
         {
             _projectPath = projectPath;
-            _importPath = importPath;
+            ImportPath = importPath;
         }
 
         internal int Calls { get; private set; }
         internal string? LastPurpose { get; private set; }
         internal bool CancelImport { get; set; }
+        internal string? ImportPath { get; set; }
 
         public PhotonCadWindowsDialogResult Show(string purpose)
         {
             Calls++;
             LastPurpose = purpose;
             if (purpose == "import-step")
-                return CancelImport || _importPath is null
+                return CancelImport || ImportPath is null
                     ? new PhotonCadWindowsDialogResult(false, null)
-                    : new PhotonCadWindowsDialogResult(true, _importPath);
+                    : new PhotonCadWindowsDialogResult(true, ImportPath);
             return purpose == "new"
                 ? new PhotonCadWindowsDialogResult(true, _projectPath)
                 : new PhotonCadWindowsDialogResult(false, null);

@@ -22,6 +22,7 @@ internal sealed class AssemblySmoke
             ("two-part assembly saves and reopens 0-2-4", InitialAssemblyRoundTripAsync),
             ("place transform nested place and branch remove persist exact DAG", AssemblyLifecycleAsync),
             ("repeated source quantities derive exact replace-all BOM", RepeatedPartBomAsync),
+            ("retained primitive and catalog definitions can be re-placed after their final occurrence is removed", RePlaceAfterZeroAsync),
             ("stale foreign duplicate source and deletion requests fail before runner", BindingHostilesAsync),
             ("root cycle duplicate depth and rigid-transform hostiles fail closed", GraphHostilesAsync),
             ("preview replacement is digest-bound and complete-project", PreviewCasAsync),
@@ -142,6 +143,81 @@ internal sealed class AssemblySmoke
         True(state.Occurrences.Select(value => value.OccurrenceId).SequenceEqual(
             state.Occurrences.Select(value => value.OccurrenceId).OrderBy(value => value, StringComparer.Ordinal),
             StringComparer.Ordinal), "occurrences are not deterministic");
+    }
+
+    private static async Task RePlaceAfterZeroAsync()
+    {
+        await using var environment = await AssemblyEnvironment.CreateAsync("replace-after-zero");
+        var removed = environment.Runtime.BindAssemblyRemove(
+            "remove-final-cylinder", environment.SessionId, environment.ProjectId, 4,
+            "cylinder.occ", "cylinder");
+        var afterRemove = await environment.CommitAsync(removed.Request, removed.Provider);
+        Equal(6L, afterRemove.State.Revision, "remove final source occurrence revision");
+        True(afterRemove.State.Entities.Any(value => value.Id == "cylinder"),
+            "final occurrence removal deleted the retained source entity");
+        True(afterRemove.State.Bom.All(value => value.SourceEntityId != "cylinder"),
+            "final occurrence removal retained a non-existent BOM quantity");
+
+        var replaced = environment.Runtime.BindAssemblyPlace(
+            "replace-cylinder", environment.SessionId, environment.ProjectId, 6,
+            "cylinder-replaced.occ", "cylinder", "box.occ", Translation(25, 0, 0));
+        var afterPlace = await environment.CommitAsync(replaced.Request, replaced.Provider);
+        Equal(8L, afterPlace.State.Revision, "re-place revision");
+        var row = afterPlace.State.Bom.Single(value => value.SourceEntityId == "cylinder");
+        Equal("CYLINDER", row.PartNumber, "recovered part number");
+        Equal("Create Cylinder", row.Description, "recovered part description");
+        Equal(1d, row.Quantity, "recovered part quantity");
+        AssertPreview(environment.Reopen(), ["box.occ", "cylinder-replaced.occ"]);
+
+        var catalog = await environment.Runtime.GetCatalogAsync();
+        var definition = catalog.Items.Single(value => value.Title == "Smoke Bearing");
+        var catalogBound = await environment.Runtime.BindCatalogItemAsync(
+            "create-retained-catalog-part",
+            environment.SessionId,
+            environment.ProjectId,
+            8,
+            "catalog-bearing",
+            definition.CapabilityId,
+            new Dictionary<string, PhotonCadIndustrialCatalogInputValue?>
+            {
+                ["size"] = PhotonCadIndustrialCatalogInputValue.Choice(
+                    definition.Parameters.Single().Choices.Single().Token),
+            });
+        var catalogResult = await environment.CommitAsync(catalogBound.Request, catalogBound.Provider);
+        Equal(10L, catalogResult.State.Revision, "catalog create revision");
+        var catalogOccurrence = catalogResult.State.Occurrences.Single(value => value.SourceEntityId == "catalog-bearing");
+        var catalogRow = catalogResult.State.Bom.Single(value => value.SourceEntityId == "catalog-bearing");
+
+        var removeCatalog = environment.Runtime.BindAssemblyRemove(
+            "remove-final-catalog-occurrence",
+            environment.SessionId,
+            environment.ProjectId,
+            10,
+            catalogOccurrence.OccurrenceId,
+            "catalog-bearing");
+        var catalogRemoved = await environment.CommitAsync(removeCatalog.Request, removeCatalog.Provider);
+        Equal(12L, catalogRemoved.State.Revision, "catalog remove revision");
+        True(catalogRemoved.State.Entities.Any(value => value.Id == "catalog-bearing"),
+            "final catalog occurrence removal deleted the retained source entity");
+        True(catalogRemoved.State.Bom.All(value => value.SourceEntityId != "catalog-bearing"),
+            "final catalog occurrence removal retained a non-existent BOM quantity");
+
+        var replaceCatalog = environment.Runtime.BindAssemblyPlace(
+            "replace-catalog-bearing",
+            environment.SessionId,
+            environment.ProjectId,
+            12,
+            "catalog-bearing-replaced.occ",
+            "catalog-bearing",
+            "box.occ",
+            Translation(50, 0, 0));
+        var catalogReplaced = await environment.CommitAsync(replaceCatalog.Request, replaceCatalog.Provider);
+        Equal(14L, catalogReplaced.State.Revision, "catalog re-place revision");
+        var recoveredCatalogRow = catalogReplaced.State.Bom.Single(value => value.SourceEntityId == "catalog-bearing");
+        Equal(catalogRow.PartNumber, recoveredCatalogRow.PartNumber, "recovered catalog part number");
+        Equal(catalogRow.Description, recoveredCatalogRow.Description, "recovered catalog description");
+        Equal(1d, recoveredCatalogRow.Quantity, "recovered catalog quantity");
+        AssertPreview(environment.Reopen(), ["box.occ", "catalog-bearing-replaced.occ", "cylinder-replaced.occ"]);
     }
 
     private static async Task BindingHostilesAsync()
@@ -559,7 +635,69 @@ internal sealed class AssemblyFakeRunner : IIndustrialContainerRunner, IAsyncDis
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"PhotonCadAssemblySmoke-{Guid.NewGuid():N}");
     internal List<string> Requests { get; } = [];
-    internal string CatalogDigest { get; } = ProtocolV1.Sha256("{}"u8);
+    internal string CatalogDigest => ProtocolV1.Sha256(CatalogBytes);
+
+    private static byte[] CatalogBytes => JsonSerializer.SerializeToUtf8Bytes(new
+    {
+        schema = "photon.cad.industrial.catalog/v1",
+        runtime = new { identity = "assembly-smoke" },
+        categories = Array.Empty<object>(),
+        items = new object[]
+        {
+            new
+            {
+                availability = "supported",
+                category = "bearings",
+                id = "bdw_111111111111111111111111111111111111111111111111",
+                parameters = new object[]
+                {
+                    new
+                    {
+                        choices = new[] { "M10-30-9" },
+                        id = "size",
+                        kind = "choice",
+                        label = "Size",
+                        nullable = false,
+                        required = true,
+                    },
+                },
+                title = "Smoke Bearing",
+            },
+            new
+            {
+                availability = "supported",
+                category = "gears",
+                id = "bdw_222222222222222222222222222222222222222222222222",
+                parameters = new object[]
+                {
+                    new { id = "module", kind = "number", label = "Module", maximum = 1000000d, minimum = 0.000001d, nullable = false, required = true },
+                    new { id = "pressure_angle", kind = "number", label = "Pressure angle", maximum = 89d, minimum = 0.1d, nullable = false, required = true },
+                    new { id = "thickness", kind = "number", label = "Thickness", maximum = 1000000d, minimum = 0.000001d, nullable = false, required = true },
+                    new { id = "tooth_count", kind = "integer", label = "Tooth count", maximum = 1000, minimum = 3, nullable = false, required = true },
+                },
+                title = "Spur Gear",
+            },
+            new
+            {
+                availability = "supported",
+                category = "fasteners",
+                id = "bdw_333333333333333333333333333333333333333333333333",
+                parameters = new object[]
+                {
+                    new
+                    {
+                        choices = new[] { "M6-1x20" },
+                        id = "size",
+                        kind = "choice",
+                        label = "Size",
+                        nullable = false,
+                        required = true,
+                    },
+                },
+                title = "Socket Head Cap Screw",
+            },
+        },
+    });
 
     public ValueTask<IndustrialContainerInvocation> ExecuteAsync(
         ReadOnlyMemory<byte> request,
@@ -574,6 +712,20 @@ internal sealed class AssemblyFakeRunner : IIndustrialContainerRunner, IAsyncDis
         var job = Path.Combine(_root, $"job-{Requests.Count:D4}");
         var output = Path.Combine(job, "output");
         Directory.CreateDirectory(output);
+
+        if (operation == "catalog")
+        {
+            using var catalog = JsonDocument.Parse(CatalogBytes);
+            var response = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema = ProtocolV1.ResponseSchema,
+                ok = true,
+                operation = "catalog",
+                catalogDigest = CatalogDigest,
+                catalog = catalog.RootElement,
+            });
+            return ValueTask.FromResult(new IndustrialContainerInvocation(response, output, () => CleanupAsync(job)));
+        }
 
         if (operation == "createPrimitive")
         {
@@ -609,6 +761,46 @@ internal sealed class AssemblyFakeRunner : IIndustrialContainerRunner, IAsyncDis
                     bounds = new { minimum = new[] { 0d, 0d, 0d }, maximum = new[] { 10d, 20d, 30d } },
                 },
                 provenance = new { generator = "primitive", kind, parameters },
+            });
+            return ValueTask.FromResult(new IndustrialContainerInvocation(response, output, () => CleanupAsync(job)));
+        }
+
+        if (operation == "createCatalogItem")
+        {
+            var root = document.RootElement;
+            var step = AssemblySmoke.Step("catalog");
+            File.WriteAllBytes(Path.Combine(output, "model.step"), step);
+            var response = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema = ProtocolV1.ResponseSchema,
+                ok = true,
+                operation = "createCatalogItem",
+                catalogDigest = root.GetProperty("catalogDigest").GetString(),
+                itemId = root.GetProperty("itemId").GetString(),
+                artifact = new
+                {
+                    format = "step",
+                    contentDigest = ProtocolV1.Sha256(step),
+                    byteLength = step.Length,
+                },
+                measurement = new
+                {
+                    units = "millimeter",
+                    volumeMm3 = 100d,
+                    solidCount = 4,
+                    bounds = new
+                    {
+                        minimum = new[] { 0d, 0d, 0d },
+                        maximum = new[] { 10d, 20d, 30d },
+                    },
+                },
+                provenance = new
+                {
+                    generator = "catalog",
+                    catalogDigest = root.GetProperty("catalogDigest").GetString(),
+                    itemId = root.GetProperty("itemId").GetString(),
+                    parameters = root.GetProperty("parameters").Clone(),
+                },
             });
             return ValueTask.FromResult(new IndustrialContainerInvocation(response, output, () => CleanupAsync(job)));
         }

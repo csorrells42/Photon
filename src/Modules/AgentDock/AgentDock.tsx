@@ -19,6 +19,8 @@ import {
   LockKeyhole,
   ListPlus,
   MessageCircleQuestion,
+  Mic,
+  MicOff,
   Paperclip,
   Pencil,
   Plus,
@@ -65,6 +67,10 @@ import {
   HermesNaturalVoicePlayer,
 } from './HermesNaturalVoice'
 import './HermesNaturalVoice.css'
+import {
+  HERMES_SPEECH_INPUT_IDLE,
+  HermesSpeechInputController,
+} from '../HermesSpeechVoice/HermesSpeechInput'
 import { isAgentScrollNearBottom, preserveAgentScrollAnchor } from './AgentScroll'
 import { InlineDiffCard } from './InlineDiffCard'
 import { useAssistantDisplayName } from '../AssistantIdentity/AssistantIdentity'
@@ -456,6 +462,8 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const [bridgeObservations, setBridgeObservations] = useState<HermesBridgeObservation[]>([])
   const [naturalVoice, setNaturalVoice] = useState(HERMES_NATURAL_VOICE_IDLE)
+  const [automaticVoiceEnabled, setAutomaticVoiceEnabled] = useState(false)
+  const [speechInput, setSpeechInput] = useState(HERMES_SPEECH_INPUT_IDLE)
   const conversationRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const agentMenuRef = useRef<HTMLDivElement>(null)
@@ -467,7 +475,10 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   const drainingQueueRef = useRef(false)
   const lastCompletionRef = useRef(0)
   const naturalVoicePlayerRef = useRef<HermesNaturalVoicePlayer | null>(null)
+  const speechInputControllerRef = useRef<HermesSpeechInputController | null>(null)
+  const lastAutoSpokenMessageIdRef = useRef<string | null>(null)
   if (!naturalVoicePlayerRef.current) naturalVoicePlayerRef.current = new HermesNaturalVoicePlayer()
+  if (!speechInputControllerRef.current) speechInputControllerRef.current = new HermesSpeechInputController()
   const captureReadingAnchor = useCallback(() => {
     const conversation = conversationRef.current
     const content = conversation?.querySelector<HTMLElement>('.message-list, .welcome')
@@ -545,9 +556,34 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   useEffect(() => {
     naturalVoicePlayerRef.current?.stop()
     setNaturalVoice(HERMES_NATURAL_VOICE_IDLE)
+    speechInputControllerRef.current?.cancel(false)
+    setSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+    lastAutoSpokenMessageIdRef.current = null
   }, [activeStoredSessionId])
 
-  useEffect(() => () => naturalVoicePlayerRef.current?.stop(false), [])
+  useEffect(() => () => {
+    naturalVoicePlayerRef.current?.stop(false)
+    speechInputControllerRef.current?.cancel(false)
+  }, [])
+
+  useEffect(() => {
+    if (speechInput.phase !== 'ready' || !speechInput.transcript) return
+    setDraft((current) => current.trim()
+      ? `${current.trimEnd()} ${speechInput.transcript}`
+      : speechInput.transcript ?? '')
+    setSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+    window.requestAnimationFrame(() => composerRef.current?.focus())
+  }, [speechInput])
+
+  useEffect(() => {
+    if (!automaticVoiceEnabled || busy) return
+    const message = [...messages].reverse().find((candidate) => (
+      candidate.author === 'hermes' && candidate.body && !candidate.streaming && !candidate.interim
+    ))
+    if (!message || message.id === lastAutoSpokenMessageIdRef.current) return
+    lastAutoSpokenMessageIdRef.current = message.id
+    void naturalVoicePlayerRef.current?.toggle(message.id, message.body, setNaturalVoice)
+  }, [automaticVoiceEnabled, busy, messages])
 
   const bridgeStateRef = useRef({ activeStoredSessionId, busy, connection, error, messages, send, stop, toolRuns, turnCompletionCount })
   bridgeStateRef.current = { activeStoredSessionId, busy, connection, error, messages, send, stop, toolRuns, turnCompletionCount }
@@ -812,6 +848,38 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
         </div>
         <div className="dock-actions">
           {dockControls}
+          <button
+            type="button"
+            className="dock-voice-action"
+            data-active={speechInput.phase === 'requesting' || speechInput.phase === 'listening' || speechInput.phase === 'transcribing'}
+            aria-label={speechInput.phase === 'listening' ? 'Stop listening and transcribe' : 'Let Photon hear you'}
+            title={speechInput.phase === 'listening' ? 'Stop listening and transcribe locally' : 'Record with the microphone for local Whisper transcription'}
+            disabled={connection !== 'open' || loadingSession || speechInput.phase === 'requesting' || speechInput.phase === 'transcribing'}
+            onClick={() => {
+              if (speechInputControllerRef.current?.isListening) speechInputControllerRef.current.stop()
+              else void speechInputControllerRef.current?.start(setSpeechInput)
+            }}
+          >
+            {speechInput.phase === 'requesting' || speechInput.phase === 'transcribing'
+              ? <LoaderCircle className="spin" size={16} />
+              : speechInput.phase === 'listening'
+                ? <MicOff size={16} />
+                : <Mic size={16} />}
+          </button>
+          <button
+            type="button"
+            className="dock-voice-action"
+            data-active={automaticVoiceEnabled}
+            aria-pressed={automaticVoiceEnabled}
+            aria-label={automaticVoiceEnabled ? 'Turn off Photon voice' : 'Turn on Photon voice'}
+            title={automaticVoiceEnabled ? 'Stop automatic local voice output' : 'Speak completed responses with local Kokoro'}
+            onClick={() => {
+              setAutomaticVoiceEnabled((enabled) => {
+                if (enabled) naturalVoicePlayerRef.current?.stop()
+                return !enabled
+              })
+            }}
+          ><Volume2 size={16} /></button>
           <NotificationCenter notifications={notifications} onClear={clearNotifications} onDismiss={dismissNotification} />
           <button
             aria-label="New chat"
@@ -1079,6 +1147,19 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
           )}
           {pendingPrompt && (
             <PromptCard key={pendingPrompt.requestId} request={pendingPrompt} submitting={promptSubmitting} respond={respondToPrompt} />
+          )}
+        </div>
+      )}
+
+      {(speechInput.phase === 'listening' || speechInput.phase === 'transcribing' || speechInput.phase === 'error' || speechInput.phase === 'unavailable') && (
+        <div className={`speech-input-status is-${speechInput.phase}`} role="status" aria-live="polite">
+          {speechInput.phase === 'listening'
+            ? 'Listening locally — press the microphone again to transcribe.'
+            : speechInput.phase === 'transcribing'
+              ? 'Local Whisper is transcribing…'
+              : speechInput.reason}
+          {(speechInput.phase === 'error' || speechInput.phase === 'unavailable') && (
+            <button type="button" aria-label="Dismiss microphone status" onClick={() => setSpeechInput(HERMES_SPEECH_INPUT_IDLE)}><XCircle size={13} /></button>
           )}
         </div>
       )}

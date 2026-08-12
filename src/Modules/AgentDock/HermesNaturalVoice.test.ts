@@ -45,7 +45,7 @@ describe('HermesNaturalVoice', () => {
 
     await player.toggle('message-1', 'Hello **Chris**.', (state) => states.push(state.phase))
 
-    expect(fetchVoice).toHaveBeenCalledWith(HERMES_NATURAL_VOICE_ENDPOINT, expect.objectContaining({
+    expect(fetchVoice).toHaveBeenCalledWith(`${HERMES_NATURAL_VOICE_ENDPOINT}?profile=default`, expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ text: 'Hello Chris.' }),
     }))
@@ -81,5 +81,34 @@ describe('HermesNaturalVoice', () => {
     await Promise.resolve()
     await waiting.toggle('message-3', 'Please speak.', (state) => waitingStates.push(state.phase))
     expect(waitingStates).toEqual(['loading', 'idle'])
+  })
+
+  it('binds speech to one validated profile without leaking arbitrary query text', async () => {
+    const audio = new FakeAudio()
+    const fetchVoice = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        provider: 'kokoro',
+        mime_type: 'audio/wav',
+        data_url: 'data:audio/wav;base64,UklGRg==',
+      }),
+    } as Response))
+    const player = new HermesNaturalVoicePlayer({ fetch: fetchVoice, createAudio: () => audio })
+
+    player.setProfileId('work:voice-1')
+    await player.toggle('message-profile', 'Profile voice.', () => undefined)
+    expect(fetchVoice).toHaveBeenCalledWith(
+      `${HERMES_NATURAL_VOICE_ENDPOINT}?profile=work%3Avoice-1`,
+      expect.any(Object),
+    )
+
+    player.stop()
+    player.setProfileId('../invalid?profile')
+    await player.toggle('message-default', 'Default voice.', () => undefined)
+    expect(fetchVoice).toHaveBeenLastCalledWith(
+      `${HERMES_NATURAL_VOICE_ENDPOINT}?profile=default`,
+      expect.any(Object),
+    )
   })
 })

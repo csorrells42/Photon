@@ -71,8 +71,18 @@ await suite.RunAsync("native project dialog is invoked once with the exact live 
                     }
                     else
                     {
-                        Equal("Create Photon CAD project", candidate.Title, "new dialog title");
-                        Equal("Gearbox Input", candidate.FileName, "new dialog receives the modal project name");
+                        if (calls == 2)
+                        {
+                            Equal("Create Photon CAD project", candidate.Title, "new dialog title");
+                            Equal("Gearbox Input", candidate.FileName, "new dialog receives the modal project name");
+                        }
+                        else
+                        {
+                            Equal("Import CAD source", candidate.Title, "CAD import dialog title");
+                            True(candidate.Filter.Contains("*.step;*.stp;*.ipt;*.iam;*.glb", StringComparison.Ordinal),
+                                "CAD import dialog filter");
+                            Equal("step", candidate.DefaultExt, "CAD import default extension");
+                        }
                     }
                     return false;
                 });
@@ -80,7 +90,9 @@ await suite.RunAsync("native project dialog is invoked once with the exact live 
             True(!result.Accepted && result.ExactPath is null, "owned dialog cancellation");
             var newResult = dialog.Show("new", "Gearbox Input");
             True(!newResult.Accepted && newResult.ExactPath is null, "suggested-name dialog cancellation");
-            Equal(2, calls, "one invocation per owned dialog request");
+            var importResult = dialog.Show("import-step");
+            True(!importResult.Accepted && importResult.ExactPath is null, "CAD import dialog cancellation");
+            Equal(3, calls, "one invocation per owned dialog request");
             completed.SetResult();
         }
         catch (Exception exception) { completed.SetException(exception); }

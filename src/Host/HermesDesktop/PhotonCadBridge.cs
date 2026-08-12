@@ -909,7 +909,18 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 PostStepImportResult(requestId, "cancelled", "step-import-cancelled");
                 return;
             }
-            catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException
+            catch (InvalidDataException exception)
+            {
+                var reason = PhotonCadConversionReason(exception);
+                PostStepImportResult(
+                    requestId,
+                    reason is "autodesk-inventor-authority-unavailable" or "glb-import-authority-unavailable"
+                        ? "unavailable"
+                        : "rejected",
+                    reason);
+                return;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
                 or NotSupportedException or ArgumentException)
             {
                 PostStepImportResult(requestId, "rejected", "step-source-invalid");
@@ -1028,6 +1039,18 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         version = ProtocolVersion,
         value = new { contractVersion = ProtocolVersion, requestId, status, reason },
     });
+
+    private static string PhotonCadConversionReason(InvalidDataException exception)
+    {
+        var separator = exception.Message.IndexOf(':');
+        var code = separator < 0 ? exception.Message : exception.Message[..separator];
+        return code switch
+        {
+            "autodesk-inventor-authority-unavailable" => code,
+            "glb-import-authority-unavailable" => code,
+            _ => "step-source-invalid",
+        };
+    }
 
     private static string SafeImportedStepDisplayName(string exactPath)
     {

@@ -70,6 +70,12 @@ export class HermesNaturalVoicePlayer {
   private generation = 0
   private active: { messageId: string; audio: NaturalVoiceAudio | null; abort: AbortController } | null = null
   private publish: ((state: HermesNaturalVoiceState) => void) | null = null
+  private profileId = 'default'
+
+  setProfileId(profileId: string): void {
+    const next = profileId.trim()
+    this.profileId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(next) ? next : 'default'
+  }
 
   constructor(dependencies?: Partial<NaturalVoiceDependencies>) {
     this.dependencies = {
@@ -102,7 +108,7 @@ export class HermesNaturalVoicePlayer {
     publish({ messageId, phase: 'loading' })
 
     try {
-      const response = await this.dependencies.fetch(HERMES_NATURAL_VOICE_ENDPOINT, {
+      const response = await this.dependencies.fetch(`${HERMES_NATURAL_VOICE_ENDPOINT}?profile=${encodeURIComponent(this.profileId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),

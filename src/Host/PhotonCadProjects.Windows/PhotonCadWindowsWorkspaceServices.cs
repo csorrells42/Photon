@@ -43,7 +43,7 @@ public sealed class PhotonCadWindowsFileDialog : IPhotonCadWindowsFileDialog
                 : new SaveFileDialog { AddExtension = true, OverwritePrompt = true };
             dialog.DefaultExt = purpose == "import-step" ? ".step" : ".photoncad";
             dialog.Filter = purpose == "import-step"
-                ? "STEP Part 21 files (*.step;*.stp)|*.step;*.stp"
+                ? "Supported CAD sources (*.step;*.stp;*.ipt;*.iam;*.glb)|*.step;*.stp;*.ipt;*.iam;*.glb|STEP Part 21 files (*.step;*.stp)|*.step;*.stp|Autodesk Inventor files (*.ipt;*.iam)|*.ipt;*.iam|glTF Binary files (*.glb)|*.glb"
                 : "Photon CAD projects (*.photoncad)|*.photoncad";
             dialog.CheckPathExists = true;
             if (purpose is "new" or "save-as" && SafeSuggestedFileName(suggestedName) is { } fileName)
@@ -53,7 +53,7 @@ public sealed class PhotonCadWindowsFileDialog : IPhotonCadWindowsFileDialog
                 "new" => "Create Photon CAD project",
                 "open" => "Open Photon CAD project",
                 "save-as" => "Save Photon CAD project as",
-                "import-step" => "Import STEP Part 21 file",
+                "import-step" => "Import CAD source",
                 _ => throw new PhotonCadProjectException("unsupported_picker_purpose", nameof(purpose)),
             };
             var accepted = _showDialog(dialog, owner) == true;
