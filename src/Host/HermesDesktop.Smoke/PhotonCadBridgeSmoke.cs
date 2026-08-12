@@ -18,6 +18,7 @@ using PhotonCadRuntime.ManualProvider;
 internal static class PhotonCadBridgeSmoke
 {
     private const string ImportedStepCapabilityId = "external.step.import.v1";
+    private const string ImportedStepAssemblyCapabilityId = "external.step.assembly.import.v1";
 
     internal static async Task<bool> RunLiveIndustrialAsync(string installRoot)
     {
@@ -507,16 +508,24 @@ internal static class PhotonCadBridgeSmoke
         var snapshot = document.GetProperty("snapshot");
         var sessionId = Text(snapshot, "sessionId")!;
         var projectId = Text(snapshot, "projectId")!;
-        var importedEntity = snapshot.GetProperty("entities").EnumerateArray()
-            .SingleOrDefault(value => Text(value, "kind") == "part" && Text(value, "sourceCapabilityId") == ImportedStepCapabilityId);
-        var occurrenceIds = snapshot.GetProperty("entities").EnumerateArray()
+        var projectedEntities = snapshot.GetProperty("entities").EnumerateArray().ToArray();
+        var importedDefinitions = projectedEntities
+            .Where(value => Text(value, "kind") is "part" or "assembly")
+            .ToArray();
+        var assemblyImport = importedDefinitions.Any(value => Text(value, "kind") == "assembly");
+        var expectedCapability = assemblyImport ? ImportedStepAssemblyCapabilityId : ImportedStepCapabilityId;
+        var occurrenceIds = projectedEntities
             .Where(value => Text(value, "kind") == "occurrence")
             .Select(value => Text(value, "id")!)
             .ToHashSet(StringComparer.Ordinal);
         if (snapshot.GetProperty("revision").GetInt64() != 2 || snapshot.GetProperty("dirty").GetBoolean()
-            || importedEntity.ValueKind != JsonValueKind.Object || occurrenceIds.Count != 1
+            || importedDefinitions.Length < 1
+            || importedDefinitions.Any(value => Text(value, "sourceCapabilityId") != expectedCapability)
+            || occurrenceIds.Count != importedDefinitions.Length
+            || assemblyImport && importedDefinitions.Count(value => Text(value, "kind") == "assembly") < 1
+            || !assemblyImport && (importedDefinitions.Length != 1 || occurrenceIds.Count != 1)
             || document.GetProperty("lastSavedRevision").GetInt64() != 2)
-            return Fail("Live STEP import did not publish one clean canonical part and occurrence at revision two.");
+            return Fail("Live STEP import did not publish its complete clean canonical definition and occurrence hierarchy at revision two.");
 
         await LivePhaseAsync("step-import-preview-hydrate", () => SendFrameAsync(bridge, new
         {
@@ -559,14 +568,17 @@ internal static class PhotonCadBridgeSmoke
         var codec = new PhotonCadCanonicalProjectCodecV1();
         var canonical = codec.Decode(await File.ReadAllBytesAsync(projectPath));
         var state = codec.Inspect(canonical);
-        var geometry = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry);
+        var geometries = state.Artifacts.Where(value => value.Role == PhotonCadArtifactRoleV1.AuthoritativeGeometry).ToArray();
+        var originalGeometry = geometries.SingleOrDefault(value => value.Content.Span.SequenceEqual(sourceStep));
         var persistedPreview = state.Artifacts.Single(value => value.Role == PhotonCadArtifactRoleV1.ProjectPreview);
         if (canonical.Revision != 2 || canonical.Dirty
-            || state.Entities.Count != 1 || state.Occurrences.Count != 1 || state.Bom.Count != 1
-            || state.Operations.Count != 2 || state.Operations[0].CapabilityId != ImportedStepCapabilityId
+            || state.Entities.Count != importedDefinitions.Length || state.Occurrences.Count != occurrenceIds.Count
+            || state.Bom.Count != state.Entities.Count(value => value.Kind == PhotonCadEntityKindV1.Part)
+            || state.Operations.Count != 2 || state.Operations[0].CapabilityId != expectedCapability
             || state.Operations[1].CapabilityId != "industrial.preview.glb.v1"
-            || geometry.Revision != 1 || geometry.Bounds is not null || !geometry.Content.Span.SequenceEqual(sourceStep)
-            || geometry.Provenance.Source.Package != "user-supplied-step"
+            || originalGeometry is null || originalGeometry.Revision != 1 || originalGeometry.Bounds is not null
+            || originalGeometry.Provenance.Source.Package != "user-supplied-step"
+            || geometries.Any(value => value.Bounds is not null || !ValidPart21Envelope(value.Content.Span))
             || persistedPreview.Revision != 2 || !persistedPreview.Content.Span.SequenceEqual(previewEvidence.Content)
             || !LiveIndustrialProvenance(persistedPreview.Provenance))
             return Fail("Live STEP import lost its byte-exact STEP, canonical identities, or complete preview during save/reopen.");
@@ -576,7 +588,7 @@ internal static class PhotonCadBridgeSmoke
             || serializedFrames.Contains(tempRoot, StringComparison.OrdinalIgnoreCase))
             return Fail("Live STEP import exposed a native path to the renderer.");
 
-        Console.WriteLine("Desktop Photon CAD LIVE byte-exact STEP import, canonical revision-two save, preview, and reopen passed.");
+        Console.WriteLine($"Desktop Photon CAD LIVE byte-exact STEP {(assemblyImport ? "assembly hierarchy" : "part")} import, canonical revision-two save, preview, and reopen passed.");
         return true;
     }
 
@@ -790,7 +802,7 @@ internal static class PhotonCadBridgeSmoke
         && StringComparer.Ordinal.Equals(provenance.BundleId, "photon.cad.industrial.container.v1")
         && StringComparer.Ordinal.Equals(
             provenance.BundleManifestSha256,
-            "sha256:70969065e209b454e4149235ad2662686629d7a23c44d584938c8a672bb2edb4")
+            "sha256:12dcd086d95759f47a892def58e2e7a85e4107ad5c0c1a83cdccd1b2f415e4da")
         && StringComparer.Ordinal.Equals(provenance.Source.Package, "photon-cad-industrial")
         && StringComparer.Ordinal.Equals(provenance.Source.Version, "0.1.0")
         && StringComparer.Ordinal.Equals(provenance.Source.Digest, PhotonCadBridge.IndustrialImageSha256)

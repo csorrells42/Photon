@@ -14,9 +14,9 @@ internal sealed record VerifiedIndustrialEvidence(
 
 internal static class EvidenceVerifier
 {
-    internal const string AcceptedSelectionSha256 = "sha256:8b199ce6b1a96f2fe0e5e8b98b6fd6136ea31d836d3270923318243dbc607fda";
-    internal const string AcceptedReceiptSha256 = "sha256:70969065e209b454e4149235ad2662686629d7a23c44d584938c8a672bb2edb4";
-    internal const string AcceptedDerivedImageId = "sha256:eda304290edbf75c33352e3df857a40539c48e20508d4025f63f7d4508ff25f9";
+    internal const string AcceptedSelectionSha256 = "sha256:6f3fdd5b8c0678e0871501aaf28d609c1a760bb060b69fc4c6ca86127c7cca37";
+    internal const string AcceptedReceiptSha256 = "sha256:12dcd086d95759f47a892def58e2e7a85e4107ad5c0c1a83cdccd1b2f415e4da";
+    internal const string AcceptedDerivedImageId = "sha256:4ad3200ff457b11e1b3f1b115e28927cf376930660919a5295417352112354fc";
     internal const string AcceptedBaseImageId = "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703";
     internal const string AcceptedCatalogDigest = "sha256:aae5554ce9e57133f508e3343663704d35c82e6a31e5201f6224a9b299ddf6b6";
     internal const string RedistributionStatus = "blocked-pending-license-review";
@@ -39,7 +39,7 @@ internal static class EvidenceVerifier
         RequireDigest(root, "baseImageId", AcceptedBaseImageId);
         RequireDigest(root, "derivedImageId", AcceptedDerivedImageId);
         RequireBoolean(root, "friendlyTagVerified", true);
-        if (Integer(root, "scenarioCount", 1, 1000) != 20) throw Failure("industrial_scenario_count_mismatch");
+        if (Integer(root, "scenarioCount", 1, 1000) != 23) throw Failure("industrial_scenario_count_mismatch");
 
         var receipt = root.GetProperty("receipt");
         Exact(receipt, "path", "sha256", "immutable");
@@ -88,8 +88,8 @@ internal static class EvidenceVerifier
 
         var sourceHashes = evidence.GetProperty("sourceHashes");
         RequireDigest(sourceHashes, "src/Host/PhotonCadRuntime.Container/industrial/Dockerfile", "sha256:fae78fb2fc6bb033c33f19ec8571a5cc2ae4c619d38050a969cf4d0323353c7f");
-        RequireDigest(sourceHashes, "src/Host/PhotonCadRuntime.Container/industrial/photon_industrial_adapter.py", "sha256:0a3591e6228af936eddddf9f00e0354513003e547486a4e39b3c4165490e3a12");
-        RequireDigest(sourceHashes, "src/Host/PhotonCadRuntime.Container/industrial/schemas/response-v1.schema.json", "sha256:c8083bf5e666e386dd7ebf7d28958e628e37260b990c2b4c39fdee69b242bad6");
+        RequireDigest(sourceHashes, "src/Host/PhotonCadRuntime.Container/industrial/photon_industrial_adapter.py", "sha256:d7a70bf9b83973b202bb66ad520b2e6bdb5c03b6c408ade394e6309d0a95b196");
+        RequireDigest(sourceHashes, "src/Host/PhotonCadRuntime.Container/industrial/schemas/response-v1.schema.json", "sha256:a528e14a01c0a8c9f59fda00e71136cc2e9724e7da124d91bb45417a34ce31de");
 
         var source = new PhotonCadSourceIdentityV1(
             "photon-cad-industrial",

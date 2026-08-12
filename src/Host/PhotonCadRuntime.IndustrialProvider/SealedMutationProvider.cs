@@ -230,6 +230,74 @@ public sealed class PhotonCadIndustrialProviderRuntime
         return new PhotonCadIndustrialBoundMutation(request, provider, new ImportedStepMutationCompensator(provider));
     }
 
+    public async ValueTask<PhotonCadIndustrialBoundMutation> BindImportedStepAssemblyAsync(
+        string requestId,
+        string sessionId,
+        string projectId,
+        long baseRevision,
+        ReadOnlyMemory<byte> stepContent,
+        string stepContentDigest,
+        PhotonCadProviderEvidence importEvidence,
+        CancellationToken cancellationToken = default)
+    {
+        if (baseRevision != 0) throw new ArgumentOutOfRangeException(nameof(baseRevision), "assembly_import_requires_new_project");
+        if (stepContent.Length is < 48 or > ProtocolV1.MaximumStepBytes) throw new ArgumentOutOfRangeException(nameof(stepContent));
+        var source = stepContent.ToArray();
+        var digest = ProtocolV1.NormalizeDigest(stepContentDigest);
+        if (!ProtocolV1.FixedDigestEquals(ProtocolV1.Sha256(source), digest))
+            throw new InvalidDataException("assembly_import_step_digest_mismatch");
+        IndustrialStepAssemblyInspection inspection;
+        var definitions = new List<ImportedStepAssemblyDefinition>();
+        await using (var invocation = await _runner.ExecuteAsync(
+            StepAssemblyProtocol.SerializeInspection("assembly", digest),
+            [new IndustrialInputArtifact("assembly", source, digest)],
+            cancellationToken).ConfigureAwait(false))
+        {
+            inspection = StepAssemblyProtocol.ParseInspection(invocation.Response, digest, source.LongLength);
+            foreach (var claim in inspection.Definitions)
+            {
+                byte[] content;
+                if (claim.OutputFile is null)
+                {
+                    content = source.ToArray();
+                }
+                else
+                {
+                    content = await ArtifactReader.ReadSealedAsync(
+                        invocation.OutputDirectory,
+                        claim.OutputFile,
+                        claim.Artifact,
+                        ProtocolV1.MaximumStepBytes,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                definitions.Add(new ImportedStepAssemblyDefinition(claim, content));
+            }
+        }
+        long aggregate = 0;
+        try { foreach (var definition in definitions) aggregate = checked(aggregate + definition.Content.Length); }
+        catch (OverflowException exception) { throw new InvalidDataException("assembly_import_artifact_budget_overflow", exception); }
+        if (aggregate >= PhotonCadRuntimeSyncContract.MaximumSealedArtifactBytesPerMutation)
+            throw new InvalidDataException("assembly_import_artifact_budget_exceeded");
+        var command = new ImportedStepAssemblyCommand(inspection.RootEntityId, definitions, inspection.Occurrences, importEvidence);
+        var targets = definitions.Select(value => value.Claim.EntityId).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        var request = new PhotonCadRuntimeSyncRequest(
+            requestId,
+            sessionId,
+            projectId,
+            baseRevision,
+            ImportedStepAssemblyCommand.Capability,
+            PhotonCadOperationModeV1.Scratch,
+            [
+                new PhotonCadSyncOperationInput("sourceDigest", PhotonCadSyncInputValue.Text(digest)),
+                new PhotonCadSyncOperationInput("sourceByteLength", PhotonCadSyncInputValue.Integer(source.LongLength)),
+                new PhotonCadSyncOperationInput("definitionCount", PhotonCadSyncInputValue.Integer(definitions.Count)),
+                new PhotonCadSyncOperationInput("occurrenceCount", PhotonCadSyncInputValue.Integer(inspection.Occurrences.Count)),
+            ],
+            targets);
+        var provider = new ImportedStepAssemblyMutationProvider(request, command, _runner, _evidence);
+        return new PhotonCadIndustrialBoundMutation(request, provider, new ImportedStepAssemblyMutationCompensator(provider));
+    }
+
     public PhotonCadAssemblyBoundMutation BindAssemblyPlace(
         string requestId,
         string sessionId,

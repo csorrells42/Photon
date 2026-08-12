@@ -12,7 +12,12 @@ internal static class ArtifactReader
         int maximumBytes,
         CancellationToken cancellationToken)
     {
-        if (fileName is not ("model.step" or "preview.glb")) throw Failure("artifact_name_rejected");
+        if (fileName is not ("model.step" or "preview.glb")
+            && (fileName.Length != "definition-0000.step".Length
+                || !fileName.StartsWith("definition-", StringComparison.Ordinal)
+                || !fileName.EndsWith(".step", StringComparison.Ordinal)
+                || fileName.AsSpan(11, 4).IndexOfAnyExceptInRange('0', '9') >= 0))
+            throw Failure("artifact_name_rejected");
         var root = Path.GetFullPath(ownedOutputDirectory);
         if (!Directory.Exists(root) || (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
             throw Failure("artifact_root_rejected");

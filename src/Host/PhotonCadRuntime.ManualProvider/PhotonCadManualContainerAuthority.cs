@@ -244,7 +244,7 @@ internal sealed class PhotonCadManualContainerAuthority : IPhotonCadManualGeomet
                 value.ParentOccurrenceId,
                 value.Transform.ToArray()))
             .ToArray();
-        if (previewOccurrences.Any(value => !parts.ContainsKey(value.SourcePartId)))
+        if (previewOccurrences.Any(value => value.SourcePartId is null || !parts.ContainsKey(value.SourcePartId)))
             throw Failure("manual_preview_source_coverage_invalid");
         return new ManualPreviewPlan(
             new IndustrialPreviewCommand(sources, previewOccurrences),

@@ -90,6 +90,41 @@
       "properties": {
         "schema": { "const": "photon.cad.industrial.response/v1" },
         "ok": { "const": true },
+        "operation": { "const": "inspectStepAssembly" },
+        "sourceDigest": { "$ref": "#/$defs/digest" },
+        "rootEntityId": { "$ref": "#/$defs/identifier" },
+        "definitionCount": { "type": "integer", "minimum": 2, "maximum": 256 },
+        "occurrenceCount": { "type": "integer", "minimum": 2, "maximum": 1024 },
+        "definitions": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/assemblyDefinition" }
+        },
+        "occurrences": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/assemblyOccurrence" }
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "sourceDigest": { "$ref": "#/$defs/digest" },
+            "sourceByteLength": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+          },
+          "required": ["sourceDigest", "sourceByteLength"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema", "ok", "operation", "sourceDigest", "rootEntityId", "definitionCount", "occurrenceCount", "definitions", "occurrences", "provenance"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.response/v1" },
+        "ok": { "const": true },
         "operation": { "const": "manualSketchExtrudeAdd" },
         "artifact": { "$ref": "#/$defs/stepArtifact" },
         "measurement": { "$ref": "#/$defs/measurement" },
@@ -173,6 +208,38 @@
         "byteLength": { "type": "integer", "minimum": 20, "maximum": 134217728 }
       },
       "required": ["format", "contentDigest", "byteLength"],
+      "additionalProperties": false
+    },
+    "assemblyDefinition": {
+      "type": "object",
+      "properties": {
+        "entityId": { "$ref": "#/$defs/identifier" },
+        "parentEntityId": { "oneOf": [{ "$ref": "#/$defs/identifier" }, { "type": "null" }] },
+        "kind": { "enum": ["part", "assembly"] },
+        "partNumber": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "previewSource": { "type": "boolean" },
+        "artifact": { "$ref": "#/$defs/stepArtifact" },
+        "outputFile": { "oneOf": [{ "type": "string", "pattern": "^definition-[0-9]{4}\\.step$" }, { "type": "null" }] }
+      },
+      "required": ["entityId", "parentEntityId", "kind", "partNumber", "displayName", "previewSource", "artifact", "outputFile"],
+      "additionalProperties": false
+    },
+    "assemblyOccurrence": {
+      "type": "object",
+      "properties": {
+        "occurrenceId": { "$ref": "#/$defs/identifier" },
+        "parentOccurrenceId": { "oneOf": [{ "$ref": "#/$defs/identifier" }, { "type": "null" }] },
+        "sourceEntityId": { "$ref": "#/$defs/identifier" },
+        "partNumber": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" },
+        "transform": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": { "type": "number", "minimum": -1000000000, "maximum": 1000000000 }
+        }
+      },
+      "required": ["occurrenceId", "parentOccurrenceId", "sourceEntityId", "partNumber", "transform"],
       "additionalProperties": false
     },
     "primitiveProvenance": {
@@ -327,7 +394,12 @@
             "type": "object",
             "properties": {
               "entityId": { "$ref": "#/$defs/identifier" },
-              "sourcePartId": { "$ref": "#/$defs/identifier" },
+              "sourcePartId": {
+                "oneOf": [
+                  { "$ref": "#/$defs/identifier" },
+                  { "type": "null" }
+                ]
+              },
               "parentEntityId": {
                 "oneOf": [
                   { "$ref": "#/$defs/identifier" },

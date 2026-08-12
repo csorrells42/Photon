@@ -61,9 +61,17 @@ internal static class GlbValidator
             var expected = command.Occurrences[index];
             var node = nodes[index];
             var extras = node.GetProperty("extras");
-            if (extras.GetProperty("photonEntityId").GetString() != expected.EntityId
-                || node.GetProperty("mesh").GetInt32() != sourceIndexes[expected.SourcePartId])
+            if (extras.GetProperty("photonEntityId").GetString() != expected.EntityId)
                 throw Failure("glb_entity_identity_mismatch");
+            if (expected.SourcePartId is null)
+            {
+                if (node.TryGetProperty("mesh", out _)) throw Failure("glb_entity_identity_mismatch");
+            }
+            else if (!node.TryGetProperty("mesh", out var mesh)
+                || mesh.GetInt32() != sourceIndexes[expected.SourcePartId])
+            {
+                throw Failure("glb_entity_identity_mismatch");
+            }
             var matrix = node.GetProperty("matrix");
             if (matrix.GetArrayLength() != 16) throw Failure("glb_transform_invalid");
             for (var column = 0; column < 4; column++)

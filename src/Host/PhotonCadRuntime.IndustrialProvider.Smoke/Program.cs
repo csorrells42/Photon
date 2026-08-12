@@ -37,6 +37,7 @@ internal sealed class Smoke
             ("catalog cache copies and loads once", CatalogCacheAsync),
             ("dynamic bearing and Spur Gear catalog item persists", DynamicCatalogItemAsync),
             ("verified STEP part import persists with complete GLB preview", ImportedStepPartAsync),
+            ("verified STEP assembly hierarchy persists with complete GLB preview", ImportedStepAssemblyAsync),
             ("public mutation seam leaks no path or process type", PublicSurfaceAsync),
         };
         foreach (var test in tests)
@@ -619,6 +620,62 @@ internal sealed class Smoke
             "import invoked non-preview container operation");
     }
 
+    private static async Task ImportedStepAssemblyAsync()
+    {
+        await using var runner = new FakeRunner();
+        var runtime = Runtime(runner);
+        const string sessionId = "pcsid:step-assembly-import";
+        const string projectId = "pcpid:step-assembly-import";
+        var codec = new PhotonCadCanonicalProjectCodecV1(new FixedIdentityIssuer(sessionId, projectId));
+        var initial = await codec.CreateAsync("Imported assembly", PhotonCadProjectUnit.Millimeter);
+        var step = Step();
+        var digest = ProtocolV1.Sha256(step);
+        var importEvidence = new PhotonCadProviderEvidence(
+            PhotonCadBackendV1.Assembly,
+            "photon.cad.step.assembly.import.v1",
+            ["iso-10303-21-xcaf"],
+            digest,
+            "external.step.assembly.v1",
+            digest,
+            digest,
+            digest,
+            digest,
+            new PhotonCadSourceIdentityV1("user-supplied-step", "part21", digest, "user-supplied"));
+        var bound = await runtime.BindImportedStepAssemblyAsync(
+            "request-step-assembly-import",
+            sessionId,
+            projectId,
+            0,
+            step,
+            digest,
+            importEvidence);
+        var mapper = new PhotonCadRuntimeCanonicalMapperV1(codec, IndustrialPolicy());
+        var binding = new PhotonCadCanonicalMutationBinding(
+            new PhotonCadProjectHandle("cad-project:44444444444444444444444444444444"), initial);
+        var mutation = await bound.Provider.ApplyAsync(mapper.PrepareProviderRequest(binding, bound.Request));
+        Equal(2L, mutation.ResultingRevision, "assembly import revision");
+        Equal(3, mutation.Entities.Count, "assembly entity count");
+        Equal(3, mutation.Occurrences.Count, "assembly occurrence count");
+        Equal(2, mutation.Bom.Count, "assembly BOM rows");
+        Equal(4, mutation.Artifacts.Count, "assembly artifact count");
+        var saved = codec.MarkSaved(mapper.Apply(binding, bound.Request, mutation));
+        var reopened = codec.Inspect(codec.Decode(saved.CanonicalBytes));
+        Equal(3, reopened.Entities.Count, "reopened assembly entity count");
+        Equal("Demo assembly", reopened.Entities.Single(value => value.Kind == PhotonCadEntityKindV1.Assembly).Name,
+            "reopened assembly name");
+        Equal("Base plate", reopened.Entities.Single(value => value.Id == "part-0002").Name, "first part name");
+        Equal("Bracket", reopened.Entities.Single(value => value.Id == "part-0003").Name, "second part name");
+        Equal(40d, reopened.Occurrences.Single(value => value.OccurrenceId == "occurrence-0003").Transform[3],
+            "assembly transform");
+        True(reopened.Artifacts.Single(value => value.OwnerEntityId == "assembly-0001").Content.Span.SequenceEqual(step),
+            "original assembly STEP bytes changed");
+        True(ReadGlbEntityTags(reopened.Artifacts.Single(value => value.Kind == PhotonCadArtifactKindV1.Glb).Content.Span)
+            .SetEquals(["occurrence-0001", "occurrence-0002", "occurrence-0003"]), "assembly GLB tags");
+        Equal(2, runner.Requests.Count, "assembly import invocation count");
+        True(runner.Requests[0].Contains("\"operation\":\"inspectStepAssembly\"", StringComparison.Ordinal), "inspection missing");
+        True(runner.Requests[1].Contains("\"operation\":\"createPreview\"", StringComparison.Ordinal), "preview missing");
+    }
+
     private static async Task<(PhotonCadIndustrialBoundMutation Bound, PhotonCadSealedMutationProviderRequest Request)> BoxAsync(
         FakeRunner runner,
         string suffix = "box")
@@ -711,10 +768,10 @@ internal sealed class Smoke
         {
             var node = new Dictionary<string, object?>
             {
-                ["mesh"] = sourceIndexes[occurrence.SourcePartId],
                 ["matrix"] = ColumnMajor(occurrence.Transform),
                 ["extras"] = new { photonEntityId = occurrence.EntityId },
             };
+            if (occurrence.SourcePartId is not null) node["mesh"] = sourceIndexes[occurrence.SourcePartId];
             var children = command.Occurrences
                 .Where(candidate => StringComparer.Ordinal.Equals(candidate.ParentEntityId, occurrence.EntityId))
                 .Select(candidate => occurrenceIndexes[candidate.EntityId])
@@ -955,7 +1012,9 @@ internal sealed class FakeRunner : IIndustrialContainerRunner, IAsyncDisposable
             var occurrences = document.RootElement.GetProperty("occurrences").EnumerateArray()
                 .Select(occurrence => new IndustrialPreviewOccurrence(
                     occurrence.GetProperty("entityId").GetString()!,
-                    occurrence.GetProperty("sourcePartId").GetString()!,
+                    occurrence.GetProperty("sourcePartId").ValueKind == JsonValueKind.Null
+                        ? null
+                        : occurrence.GetProperty("sourcePartId").GetString()!,
                     occurrence.GetProperty("parentEntityId").ValueKind == JsonValueKind.Null
                         ? null
                         : occurrence.GetProperty("parentEntityId").GetString(),
@@ -1000,6 +1059,41 @@ internal sealed class FakeRunner : IIndustrialContainerRunner, IAsyncDisposable
             });
             return ValueTask.FromResult(new IndustrialContainerInvocation(
                 Encoding.UTF8.GetBytes(response), output, () => ValueTask.CompletedTask));
+        }
+        if (operation == "inspectStepAssembly")
+        {
+            var original = inputs.Single();
+            var first = Smoke.Step();
+            var second = Smoke.Step().Concat("\n"u8.ToArray()).ToArray();
+            File.WriteAllBytes(Path.Combine(output, "definition-0002.step"), first);
+            File.WriteAllBytes(Path.Combine(output, "definition-0003.step"), second);
+            var identity = MutationMapperV1.IdentityTransform.ToArray();
+            var translated = identity.ToArray();
+            translated[3] = 40d;
+            var response = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema = ProtocolV1.ResponseSchema,
+                ok = true,
+                operation = "inspectStepAssembly",
+                sourceDigest = original.Digest,
+                rootEntityId = "assembly-0001",
+                definitionCount = 3,
+                occurrenceCount = 3,
+                definitions = new object[]
+                {
+                    new { entityId = "assembly-0001", parentEntityId = (string?)null, kind = "assembly", partNumber = "STEP-ASM-0001", displayName = "Demo assembly", previewSource = false, artifact = new { format = "step", contentDigest = original.Digest, byteLength = original.Content.Length }, outputFile = (string?)null },
+                    new { entityId = "part-0002", parentEntityId = "assembly-0001", kind = "part", partNumber = "STEP-PART-0002", displayName = "Base plate", previewSource = true, artifact = new { format = "step", contentDigest = ProtocolV1.Sha256(first), byteLength = first.Length }, outputFile = "definition-0002.step" },
+                    new { entityId = "part-0003", parentEntityId = "assembly-0001", kind = "part", partNumber = "STEP-PART-0003", displayName = "Bracket", previewSource = true, artifact = new { format = "step", contentDigest = ProtocolV1.Sha256(second), byteLength = second.Length }, outputFile = "definition-0003.step" },
+                },
+                occurrences = new object[]
+                {
+                    new { occurrenceId = "occurrence-0001", parentOccurrenceId = (string?)null, sourceEntityId = "assembly-0001", partNumber = "STEP-ASM-0001", transform = identity },
+                    new { occurrenceId = "occurrence-0002", parentOccurrenceId = "occurrence-0001", sourceEntityId = "part-0002", partNumber = "STEP-PART-0002", transform = identity },
+                    new { occurrenceId = "occurrence-0003", parentOccurrenceId = "occurrence-0001", sourceEntityId = "part-0003", partNumber = "STEP-PART-0003", transform = translated },
+                },
+                provenance = new { sourceDigest = original.Digest, sourceByteLength = original.Content.Length },
+            });
+            return ValueTask.FromResult(new IndustrialContainerInvocation(response, output, () => ValueTask.CompletedTask));
         }
         throw new InvalidOperationException("unexpected fake operation");
     }

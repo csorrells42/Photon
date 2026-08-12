@@ -73,6 +73,14 @@ try:
     import bd_warehouse.pipe as warehouse_pipe
     import bd_warehouse.sprocket as warehouse_sprocket
     import bd_warehouse.thread as warehouse_thread
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPCAFControl import STEPCAFControl_Reader
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+    from OCP.TCollection import TCollection_AsciiString, TCollection_ExtendedString
+    from OCP.TDataStd import TDataStd_Name
+    from OCP.TDF import TDF_Label, TDF_LabelSequence, TDF_Tool
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.XCAFDoc import XCAFDoc_DocumentTool, XCAFDoc_ShapeTool
 
     DEPENDENCIES_READY = True
 except Exception:
@@ -86,6 +94,19 @@ except Exception:
     warehouse_pipe = None
     warehouse_sprocket = None
     warehouse_thread = None
+    IFSelect_RetDone = None
+    STEPCAFControl_Reader = None
+    STEPControl_AsIs = None
+    STEPControl_Writer = None
+    TCollection_AsciiString = None
+    TCollection_ExtendedString = None
+    TDataStd_Name = None
+    TDF_Label = None
+    TDF_LabelSequence = None
+    TDF_Tool = None
+    TDocStd_Document = None
+    XCAFDoc_DocumentTool = None
+    XCAFDoc_ShapeTool = None
     DEPENDENCIES_READY = False
 
 
@@ -787,7 +808,7 @@ def _read_exact_open_file(descriptor: int, expected_size: int) -> bytes:
 
 
 def _write_new_artifact(filename: str, payload: bytes) -> dict[str, object]:
-    if filename not in ("model.step", "preview.glb"):
+    if filename not in ("model.step", "preview.glb") and re.fullmatch(r"definition-[0-9]{4}\.step", filename) is None:
         raise ProtocolFailure("internal-error")
     directory_descriptor = _open_directory_no_follow(OUTPUT_DIRECTORY)
     temporary = "." + filename + ".photon-tmp"
@@ -1179,6 +1200,290 @@ def _read_sealed_model(slot: str, expected: str, total: list[int]) -> tuple[byte
             os.close(private_directory_descriptor)
 
 
+@contextlib.contextmanager
+def _private_step_payload(filename: str, payload: bytes) -> typing.Iterator[Path]:
+    if SAFE_SLOT.fullmatch(filename.removesuffix(".step")) is None:
+        raise ProtocolFailure("invalid-parameter")
+    directory_descriptor = -1
+    descriptor = -1
+    path = PRIVATE_DIRECTORY / filename
+    try:
+        try:
+            os.mkdir(PRIVATE_DIRECTORY, mode=0o700)
+        except FileExistsError:
+            pass
+        directory_descriptor = _open_directory_no_follow(PRIVATE_DIRECTORY)
+        metadata = os.fstat(directory_descriptor)
+        if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise ProtocolFailure("artifact-invalid")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(filename, flags, 0o600, dir_fd=directory_descriptor)
+        _write_all(descriptor, payload)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.fsync(directory_descriptor)
+        yield path
+    except ProtocolFailure:
+        raise
+    except Exception as exception:
+        raise ProtocolFailure("artifact-invalid") from exception
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if directory_descriptor >= 0:
+            try:
+                os.unlink(filename, dir_fd=directory_descriptor)
+                os.fsync(directory_descriptor)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+            os.close(directory_descriptor)
+
+
+def _xcaf_entry(label: object) -> str:
+    value = TCollection_AsciiString()
+    TDF_Tool.Entry_s(label, value)
+    return typing.cast(str, value.ToCString())
+
+
+def _xcaf_name(label: object, fallback: str) -> str:
+    attribute = TDataStd_Name()
+    value = attribute.Get().ToExtString() if label.FindAttribute(TDataStd_Name.GetID_s(), attribute) else fallback
+    value = " ".join(str(value).split())
+    value = "".join(character if not ord(character) < 32 else "-" for character in value).strip()
+    return value[:256] or fallback
+
+
+def _xcaf_matrix(location: object) -> list[float]:
+    transform = location.Transformation()
+    return _matrix(
+        [transform.Value(row, column) for row in range(1, 4) for column in range(1, 5)]
+        + [0.0, 0.0, 0.0, 1.0]
+    )
+
+
+def _xcaf_step_bytes(shape: object, ordinal: int) -> bytes:
+    directory_descriptor = -1
+    descriptor = -1
+    filename = f"xcaf-definition-{ordinal:04d}.step"
+    path = PRIVATE_DIRECTORY / filename
+    try:
+        try:
+            os.mkdir(PRIVATE_DIRECTORY, mode=0o700)
+        except FileExistsError:
+            pass
+        directory_descriptor = _open_directory_no_follow(PRIVATE_DIRECTORY)
+        metadata = os.fstat(directory_descriptor)
+        if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise ProtocolFailure("artifact-invalid")
+        writer = STEPControl_Writer()
+        if writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone or writer.Write(str(path)) != IFSelect_RetDone:
+            raise ProtocolFailure("operation-failed")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(filename, flags, dir_fd=directory_descriptor)
+        file_metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(file_metadata.st_mode) or file_metadata.st_nlink != 1 or file_metadata.st_size < 1:
+            raise ProtocolFailure("artifact-invalid")
+        payload = _read_exact_open_file(descriptor, file_metadata.st_size)
+        imported = build123d.import_step(path)
+        _validate_shape(imported)
+        return payload
+    except ProtocolFailure:
+        raise
+    except Exception as exception:
+        raise ProtocolFailure("artifact-invalid") from exception
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if directory_descriptor >= 0:
+            try:
+                os.unlink(filename, dir_fd=directory_descriptor)
+                os.fsync(directory_descriptor)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+            os.close(directory_descriptor)
+
+
+def _inspect_step_assembly(request: dict[str, object]) -> dict[str, object]:
+    _exact_keys(request, {"schema", "operation", "source"})
+    source = _require_object(request["source"])
+    _exact_keys(source, {"inputSlot", "expectedDigest"})
+    slot = _safe_slot(source["inputSlot"])
+    expected = _expected_digest(source["expectedDigest"])
+    payload, _, _ = _read_sealed_model(slot, expected, [0])
+    if any(
+        dependency is None
+        for dependency in (
+            STEPCAFControl_Reader,
+            TCollection_ExtendedString,
+            TDocStd_Document,
+            XCAFDoc_DocumentTool,
+            XCAFDoc_ShapeTool,
+        )
+    ):
+        raise ProtocolFailure("dependency-unavailable")
+
+    with _private_step_payload("assembly.step", payload) as private_path:
+        try:
+            document = TDocStd_Document(TCollection_ExtendedString("XmlXCAF"))
+            reader = STEPCAFControl_Reader()
+            reader.SetNameMode(True)
+            if reader.ReadFile(str(private_path)) != IFSelect_RetDone or not reader.Transfer(document):
+                raise ProtocolFailure("artifact-invalid")
+            shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(document.Main())
+            free_shapes = TDF_LabelSequence()
+            shape_tool.GetFreeShapes(free_shapes)
+        except ProtocolFailure:
+            raise
+        except Exception as exception:
+            raise ProtocolFailure("artifact-invalid") from exception
+
+        if free_shapes.Length() < 1 or free_shapes.Length() > MAX_SOURCES:
+            raise ProtocolFailure("resource-limit")
+
+        definitions: list[dict[str, object]] = []
+        occurrences: list[dict[str, object]] = []
+        definition_by_entry: dict[str, dict[str, object]] = {}
+        def define(label: object, parent_entity_id: str | None, original: bool = False) -> dict[str, object]:
+            entry = _xcaf_entry(label)
+            if entry in definition_by_entry:
+                return definition_by_entry[entry]
+            if len(definitions) >= MAX_SOURCES:
+                raise ProtocolFailure("resource-limit")
+            assembly = bool(XCAFDoc_ShapeTool.IsAssembly_s(label))
+            ordinal = len(definitions) + 1
+            entity_id = ("assembly" if assembly else "part") + f"-{ordinal:04d}"
+            display_name = _xcaf_name(label, "Imported assembly" if assembly else f"Imported part {ordinal}")
+            part_number = ("STEP-ASM" if assembly else "STEP-PART") + f"-{ordinal:04d}"
+            definition: dict[str, object] = {
+                "entityId": entity_id,
+                "parentEntityId": parent_entity_id,
+                "kind": "assembly" if assembly else "part",
+                "partNumber": part_number,
+                "displayName": display_name,
+                "previewSource": not assembly,
+            }
+            if original:
+                definition["artifact"] = {
+                    "format": "step",
+                    "contentDigest": expected,
+                    "byteLength": len(payload),
+                }
+                definition["outputFile"] = None
+            else:
+                try:
+                    artifact_payload = _xcaf_step_bytes(shape_tool.GetShape_s(label), ordinal)
+                except ProtocolFailure:
+                    raise
+                except Exception as exception:
+                    raise ProtocolFailure("artifact-invalid") from exception
+                output_file = f"definition-{ordinal:04d}.step"
+                definition["artifact"] = _write_new_artifact(output_file, artifact_payload)
+                definition["outputFile"] = output_file
+            definitions.append(definition)
+            definition_by_entry[entry] = definition
+            return definition
+
+        one_assembly_root = free_shapes.Length() == 1 and bool(XCAFDoc_ShapeTool.IsAssembly_s(free_shapes.Value(1)))
+        if one_assembly_root:
+            root_label = free_shapes.Value(1)
+            root_definition = define(root_label, None, original=True)
+        else:
+            root_definition = {
+                "entityId": "assembly-0001",
+                "parentEntityId": None,
+                "kind": "assembly",
+                "partNumber": "STEP-ASM-0001",
+                "displayName": "Imported STEP assembly",
+                "previewSource": False,
+                "artifact": {"format": "step", "contentDigest": expected, "byteLength": len(payload)},
+                "outputFile": None,
+            }
+            definitions.append(root_definition)
+            root_label = None
+
+        root_occurrence = {
+            "occurrenceId": "occurrence-0001",
+            "parentOccurrenceId": None,
+            "sourceEntityId": root_definition["entityId"],
+            "partNumber": root_definition["partNumber"],
+            "transform": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        }
+        occurrences.append(root_occurrence)
+
+        def append_children(
+            definition_label: object,
+            parent_definition_id: str,
+            parent_occurrence_id: str,
+            depth: int,
+        ) -> None:
+            if depth > MAX_DAG_DEPTH:
+                raise ProtocolFailure("resource-limit")
+            components = TDF_LabelSequence()
+            XCAFDoc_ShapeTool.GetComponents_s(definition_label, components, False)
+            for index in range(1, components.Length() + 1):
+                if len(occurrences) >= MAX_OCCURRENCES:
+                    raise ProtocolFailure("resource-limit")
+                component = components.Value(index)
+                referred = TDF_Label()
+                if not XCAFDoc_ShapeTool.GetReferredShape_s(component, referred):
+                    raise ProtocolFailure("artifact-invalid")
+                child = define(referred, parent_definition_id)
+                occurrence_id = f"occurrence-{len(occurrences) + 1:04d}"
+                occurrences.append(
+                    {
+                        "occurrenceId": occurrence_id,
+                        "parentOccurrenceId": parent_occurrence_id,
+                        "sourceEntityId": child["entityId"],
+                        "partNumber": child["partNumber"],
+                        "transform": _xcaf_matrix(XCAFDoc_ShapeTool.GetLocation_s(component)),
+                    }
+                )
+                if child["kind"] == "assembly":
+                    append_children(referred, typing.cast(str, child["entityId"]), occurrence_id, depth + 1)
+
+        if root_label is not None:
+            append_children(
+                root_label,
+                typing.cast(str, root_definition["entityId"]),
+                typing.cast(str, root_occurrence["occurrenceId"]),
+                1,
+            )
+        else:
+            for index in range(1, free_shapes.Length() + 1):
+                free_label = free_shapes.Value(index)
+                child = define(free_label, typing.cast(str, root_definition["entityId"]))
+                occurrence_id = f"occurrence-{len(occurrences) + 1:04d}"
+                occurrences.append(
+                    {
+                        "occurrenceId": occurrence_id,
+                        "parentOccurrenceId": root_occurrence["occurrenceId"],
+                        "sourceEntityId": child["entityId"],
+                        "partNumber": child["partNumber"],
+                        "transform": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+                    }
+                )
+                if child["kind"] == "assembly":
+                    append_children(free_label, typing.cast(str, child["entityId"]), occurrence_id, 1)
+
+        if len(definitions) < 2 or not any(definition["previewSource"] for definition in definitions):
+            raise ProtocolFailure("artifact-invalid")
+        return {
+            "operation": "inspectStepAssembly",
+            "sourceDigest": expected,
+            "rootEntityId": root_definition["entityId"],
+            "definitionCount": len(definitions),
+            "occurrenceCount": len(occurrences),
+            "definitions": sorted(definitions, key=lambda value: typing.cast(str, value["entityId"])),
+            "occurrences": sorted(occurrences, key=lambda value: typing.cast(str, value["occurrenceId"])),
+            "provenance": {"sourceDigest": expected, "sourceByteLength": len(payload)},
+        }
+
+
 def _matrix(value: object) -> list[float]:
     if not isinstance(value, list) or len(value) != 16:
         raise ProtocolFailure("invalid-parameter")
@@ -1265,11 +1570,12 @@ def _glb(request: dict[str, object]) -> dict[str, object]:
         occurrence = _require_object(raw_occurrence)
         _exact_keys(occurrence, {"entityId", "sourcePartId", "parentEntityId", "transform"})
         entity_id = _safe_identifier(occurrence["entityId"])
-        source_part_id = _safe_identifier(occurrence["sourcePartId"])
+        raw_source_part_id = occurrence["sourcePartId"]
+        source_part_id = None if raw_source_part_id is None else _safe_identifier(raw_source_part_id)
         parent = occurrence["parentEntityId"]
         if parent is not None:
             parent = _safe_identifier(parent)
-        if entity_id in occurrences or source_part_id not in source_requests or parent == entity_id:
+        if entity_id in occurrences or (source_part_id is not None and source_part_id not in source_requests) or parent == entity_id:
             raise ProtocolFailure("invalid-request")
         occurrences[entity_id] = {
             "entityId": entity_id,
@@ -1277,7 +1583,8 @@ def _glb(request: dict[str, object]) -> dict[str, object]:
             "parentEntityId": parent,
             "transform": _matrix(occurrence["transform"]),
         }
-        used_sources.add(source_part_id)
+        if source_part_id is not None:
+            used_sources.add(source_part_id)
     if used_sources != set(source_requests):
         raise ProtocolFailure("invalid-request")
     ordered_entities = sorted(occurrences)
@@ -1404,16 +1711,19 @@ def _glb(request: dict[str, object]) -> dict[str, object]:
     overall_maximum = [-math.inf, -math.inf, -math.inf]
     for entity_id in ordered_entities:
         occurrence = occurrences[entity_id]
-        source_id = typing.cast(str, occurrence["sourcePartId"])
+        source_id = typing.cast(str | None, occurrence["sourcePartId"])
         local = typing.cast(list[float], occurrence["transform"])
         node: dict[str, object] = {
-            "mesh": mesh_indexes[source_id],
             "matrix": _column_major(local),
             "extras": {"photonEntityId": entity_id},
         }
+        if source_id is not None:
+            node["mesh"] = mesh_indexes[source_id]
         if children[entity_id]:
             node["children"] = [entity_indexes[child] for child in sorted(children[entity_id])]
         nodes.append(node)
+        if source_id is None:
+            continue
         measurement = typing.cast(dict[str, object], imported[source_id]["measurement"])
         bounds = typing.cast(dict[str, list[float]], measurement["bounds"])
         minimum = bounds["minimum"]
@@ -1475,7 +1785,7 @@ def _glb(request: dict[str, object]) -> dict[str, object]:
             "occurrences": [
                 {
                     "entityId": entity_id,
-                    "sourcePartId": typing.cast(str, occurrences[entity_id]["sourcePartId"]),
+                    "sourcePartId": typing.cast(str | None, occurrences[entity_id]["sourcePartId"]),
                     "parentEntityId": occurrences[entity_id]["parentEntityId"],
                     "transform": typing.cast(list[float], occurrences[entity_id]["transform"]),
                 }
@@ -1505,6 +1815,8 @@ def _dispatch(request: dict[str, object]) -> dict[str, object]:
         return _create_catalog_item(request)
     if operation == "createPreview":
         return _glb(request)
+    if operation == "inspectStepAssembly":
+        return _inspect_step_assembly(request)
     if operation == "manualSketchExtrudeAdd":
         return _manual_sketch_extrude_add(request)
     if operation == "manualSketchExtrudeCut":

@@ -105,7 +105,7 @@ internal sealed record IndustrialPreviewSource(
 
 internal sealed record IndustrialPreviewOccurrence(
     string EntityId,
-    string SourcePartId,
+    string? SourcePartId,
     string? ParentEntityId,
     IReadOnlyList<double> Transform);
 
@@ -218,7 +218,8 @@ internal static class ProtocolV1
             {
                 writer.WriteStartObject();
                 writer.WriteString("entityId", occurrence.EntityId);
-                writer.WriteString("sourcePartId", occurrence.SourcePartId);
+                if (occurrence.SourcePartId is null) writer.WriteNull("sourcePartId");
+                else writer.WriteString("sourcePartId", occurrence.SourcePartId);
                 if (occurrence.ParentEntityId is null) writer.WriteNull("parentEntityId");
                 else writer.WriteString("parentEntityId", occurrence.ParentEntityId);
                 writer.WriteStartArray("transform");
@@ -472,7 +473,16 @@ internal static class ProtocolV1
             var expected = command.Occurrences[occurrenceIndex];
             Exact(occurrence, "entityId", "sourcePartId", "parentEntityId", "transform");
             RequireString(occurrence, "entityId", expected.EntityId);
-            RequireString(occurrence, "sourcePartId", expected.SourcePartId);
+            var sourcePartId = occurrence.GetProperty("sourcePartId");
+            if (expected.SourcePartId is null)
+            {
+                if (sourcePartId.ValueKind != JsonValueKind.Null) throw Failure("preview_source_mismatch");
+            }
+            else if (sourcePartId.ValueKind != JsonValueKind.String
+                || !StringComparer.Ordinal.Equals(sourcePartId.GetString(), expected.SourcePartId))
+            {
+                throw Failure("preview_source_mismatch");
+            }
             var parent = occurrence.GetProperty("parentEntityId");
             if (expected.ParentEntityId is null)
             {
@@ -522,12 +532,12 @@ internal static class ProtocolV1
         var usedSources = new HashSet<string>(StringComparer.Ordinal);
         foreach (var occurrence in command.Occurrences)
         {
-            if (!sourceIds.Contains(occurrence.SourcePartId)
+            if (occurrence.SourcePartId is not null && !sourceIds.Contains(occurrence.SourcePartId)
                 || occurrence.ParentEntityId is not null && !occurrenceIds.Contains(occurrence.ParentEntityId)
                 || occurrence.Transform.Count != 16
                 || occurrence.Transform.Any(value => !double.IsFinite(value) || Math.Abs(value) > 1_000_000_000))
                 throw Failure("preview_occurrence_rejected");
-            usedSources.Add(occurrence.SourcePartId);
+            if (occurrence.SourcePartId is not null) usedSources.Add(occurrence.SourcePartId);
         }
         if (!usedSources.SetEquals(sourceIds)) throw Failure("preview_source_unreferenced");
     }

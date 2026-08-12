@@ -365,6 +365,59 @@ internal static class Program
                 RequireErrorResponse(fillet, "unsupported-operation");
             });
 
+            await ScenarioAsync(scenarios, "named-transformed-step-assembly-inspection-and-preview", async () =>
+            {
+                var fixtureJob = NewJob(tempRoot, "step-assembly-fixture");
+                var fixture = await harness!.RunWorkloadAsync(
+                    derivedImageId!,
+                    Path.Combine(fixtureJob, "input"),
+                    Path.Combine(fixtureJob, "output"),
+                    StepAssemblyFixtureSource(),
+                    TimeSpan.FromSeconds(75),
+                    256 * 1024,
+                    256 * 1024);
+                RequireSuccess(fixture, "STEP assembly fixture generation");
+                Require(fixture.StandardErrorBytes.Length == 0, "STEP assembly fixture wrote to stderr");
+                var assemblyPath = Path.Combine(fixtureJob, "output", "assembly.step");
+                var (assemblyBytes, assemblyDigest) = ReadBoundedSealedHostFile(assemblyPath, 64 * 1024 * 1024);
+
+                var inspectionJob = NewJob(tempRoot, "step-assembly-inspection");
+                File.WriteAllBytes(Path.Combine(inspectionJob, "input", "assembly.step"), assemblyBytes);
+                var inspection = await InvokeAdapterAsync(
+                    harness,
+                    derivedImageId!,
+                    inspectionJob,
+                    StepAssemblyInspectionRequest("assembly", assemblyDigest));
+                RequireSuccess(inspection.Process, "STEP assembly inspection");
+                RequireSuccessResponse(inspection.Response, "inspectStepAssembly");
+                ValidateStepAssemblyInspection(inspection.Response, assemblyDigest, assemblyBytes.Length, inspectionJob);
+
+                var previewJob = NewJob(tempRoot, "step-assembly-preview");
+                var definitions = inspection.Response.GetProperty("definitions").EnumerateArray().ToArray();
+                foreach (var definition in definitions.Where(value => value.GetProperty("previewSource").GetBoolean()))
+                {
+                    var outputFile = definition.GetProperty("outputFile").GetString()!;
+                    File.Copy(
+                        Path.Combine(inspectionJob, "output", outputFile),
+                        Path.Combine(previewJob, "input", outputFile),
+                        overwrite: false);
+                }
+                var preview = await InvokeAdapterAsync(
+                    harness,
+                    derivedImageId!,
+                    previewJob,
+                    StepAssemblyPreviewRequest(inspection.Response));
+                RequireSuccess(preview.Process, "STEP assembly preview");
+                RequireSuccessResponse(preview.Response, "createPreview");
+                Require(preview.Response.GetProperty("sourceCount").GetInt32() == 2, "STEP assembly preview source count drifted");
+                Require(preview.Response.GetProperty("entityCount").GetInt32() == 3, "STEP assembly preview occurrence count drifted");
+                ValidateArtifact(preview.Response, Path.Combine(previewJob, "output", "preview.glb"), "glb");
+                ValidateGlb(
+                    File.ReadAllBytes(Path.Combine(previewJob, "output", "preview.glb")),
+                    new[] { "occurrence-0001", "occurrence-0002", "occurrence-0003" },
+                    meshlessEntities: new[] { "occurrence-0001" });
+            });
+
             await ScenarioAsync(scenarios, "dynamic-bearing-creation", async () =>
             {
                 var item = SelectCatalogItem(firstCatalog.Response, "bearings", null);
@@ -1140,6 +1193,116 @@ internal static class Program
 
     private static string CatalogRequest() => JsonSerializer.Serialize(new { schema = RequestSchema, operation = "catalog" }, JsonOptions);
 
+    private static string StepAssemblyInspectionRequest(string inputSlot, string digest) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "inspectStepAssembly",
+            source = new { inputSlot, expectedDigest = digest },
+        }, JsonOptions);
+
+    private static string StepAssemblyPreviewRequest(JsonElement inspection)
+    {
+        var sources = inspection.GetProperty("definitions").EnumerateArray()
+            .Where(value => value.GetProperty("previewSource").GetBoolean())
+            .Select(value => new
+            {
+                sourcePartId = value.GetProperty("entityId").GetString(),
+                inputSlot = Path.GetFileNameWithoutExtension(value.GetProperty("outputFile").GetString()),
+                expectedDigest = value.GetProperty("artifact").GetProperty("contentDigest").GetString(),
+            })
+            .ToArray();
+        var occurrences = inspection.GetProperty("occurrences").EnumerateArray()
+            .Select(value => new
+            {
+                entityId = value.GetProperty("occurrenceId").GetString(),
+                sourcePartId = inspection.GetProperty("definitions").EnumerateArray()
+                    .Single(definition => definition.GetProperty("entityId").GetString() == value.GetProperty("sourceEntityId").GetString())
+                    .GetProperty("previewSource").GetBoolean()
+                        ? value.GetProperty("sourceEntityId").GetString()
+                        : null,
+                parentEntityId = value.GetProperty("parentOccurrenceId").ValueKind == JsonValueKind.Null
+                    ? null
+                    : value.GetProperty("parentOccurrenceId").GetString(),
+                transform = value.GetProperty("transform").EnumerateArray().Select(component => component.GetDouble()).ToArray(),
+            })
+            .ToArray();
+        return JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "createPreview",
+            sources,
+            occurrences,
+        }, JsonOptions);
+    }
+
+    private static void ValidateStepAssemblyInspection(JsonElement response, string digest, int byteLength, string job)
+    {
+        Require(response.GetProperty("sourceDigest").GetString() == digest, "STEP assembly source digest drifted");
+        Require(response.GetProperty("rootEntityId").GetString() == "assembly-0001", "STEP assembly root identity drifted");
+        Require(response.GetProperty("definitionCount").GetInt32() == 3, "STEP assembly definition count drifted");
+        Require(response.GetProperty("occurrenceCount").GetInt32() == 3, "STEP assembly occurrence count drifted");
+        var definitions = response.GetProperty("definitions").EnumerateArray().ToArray();
+        Require(definitions.Select(value => value.GetProperty("displayName").GetString())
+            .SequenceEqual(new[] { "Demo assembly", "Base plate", "Bracket" }), "STEP assembly definition names drifted");
+        Require(definitions[0].GetProperty("kind").GetString() == "assembly"
+            && definitions[0].GetProperty("parentEntityId").ValueKind == JsonValueKind.Null
+            && definitions[0].GetProperty("outputFile").ValueKind == JsonValueKind.Null
+            && !definitions[0].GetProperty("previewSource").GetBoolean(), "STEP assembly root shape drifted");
+        for (var index = 1; index < definitions.Length; index++)
+        {
+            var definition = definitions[index];
+            Require(definition.GetProperty("kind").GetString() == "part"
+                && definition.GetProperty("parentEntityId").GetString() == "assembly-0001"
+                && definition.GetProperty("previewSource").GetBoolean(), "STEP part definition shape drifted");
+            var outputFile = definition.GetProperty("outputFile").GetString()!;
+            var artifact = Path.Combine(job, "output", outputFile);
+            var (bytes, actualDigest) = ReadBoundedSealedHostFile(artifact, 64 * 1024 * 1024);
+            Require(definition.GetProperty("artifact").GetProperty("contentDigest").GetString() == actualDigest
+                && definition.GetProperty("artifact").GetProperty("byteLength").GetInt64() == bytes.LongLength,
+                "STEP definition artifact binding drifted");
+        }
+        var occurrences = response.GetProperty("occurrences").EnumerateArray().ToArray();
+        Require(occurrences[0].GetProperty("parentOccurrenceId").ValueKind == JsonValueKind.Null
+            && occurrences[1].GetProperty("parentOccurrenceId").GetString() == "occurrence-0001"
+            && occurrences[2].GetProperty("parentOccurrenceId").GetString() == "occurrence-0001", "STEP occurrence hierarchy drifted");
+        var translated = occurrences[2].GetProperty("transform").EnumerateArray().Select(value => value.GetDouble()).ToArray();
+        RequireApproximately(translated[3], 40.0, 1e-9, "STEP occurrence X translation");
+        Require(response.GetProperty("provenance").GetProperty("sourceDigest").GetString() == digest
+            && response.GetProperty("provenance").GetProperty("sourceByteLength").GetInt64() == byteLength,
+            "STEP inspection provenance drifted");
+    }
+
+    private static string StepAssemblyFixtureSource() => """
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from OCP.gp import gp_Trsf, gp_Vec
+from OCP.TopLoc import TopLoc_Location
+from OCP.TDocStd import TDocStd_Document
+from OCP.TCollection import TCollection_ExtendedString
+from OCP.TDataStd import TDataStd_Name
+from OCP.XCAFDoc import XCAFDoc_DocumentTool
+from OCP.STEPCAFControl import STEPCAFControl_Writer
+from OCP.IFSelect import IFSelect_RetDone
+
+document = TDocStd_Document(TCollection_ExtendedString("XmlXCAF"))
+shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(document.Main())
+base_plate = shape_tool.AddShape(BRepPrimAPI_MakeBox(10, 20, 30).Shape(), False)
+bracket = shape_tool.AddShape(BRepPrimAPI_MakeBox(5, 6, 7).Shape(), False)
+TDataStd_Name.Set_s(base_plate, TCollection_ExtendedString("Base plate"))
+TDataStd_Name.Set_s(bracket, TCollection_ExtendedString("Bracket"))
+assembly = shape_tool.NewShape()
+TDataStd_Name.Set_s(assembly, TCollection_ExtendedString("Demo assembly"))
+shape_tool.AddComponent(assembly, base_plate, TopLoc_Location())
+translation = gp_Trsf()
+translation.SetTranslation(gp_Vec(40, 0, 0))
+shape_tool.AddComponent(assembly, bracket, TopLoc_Location(translation))
+shape_tool.UpdateAssemblies()
+writer = STEPCAFControl_Writer()
+writer.SetNameMode(True)
+if not writer.Transfer(document) or writer.Write("/photon-output/assembly.step") != IFSelect_RetDone:
+    raise SystemExit(2)
+""";
+
     private static string PrimitiveRequest(string kind, Dictionary<string, object> dimensions) =>
         JsonSerializer.Serialize(new { schema = RequestSchema, operation = "createPrimitive", primitive = new { kind, dimensions } }, JsonOptions);
 
@@ -1505,7 +1668,10 @@ internal static class Program
         Require(actual.SequenceEqual(orderedExpected, StringComparer.Ordinal), $"JSON keys drifted: {string.Join(',', actual)}");
     }
 
-    private static void ValidateGlb(byte[] bytes, IReadOnlyCollection<string> expectedEntities)
+    private static void ValidateGlb(
+        byte[] bytes,
+        IReadOnlyCollection<string> expectedEntities,
+        IReadOnlyCollection<string>? meshlessEntities = null)
     {
         Require(bytes.Length is >= 20 and <= MaximumGlbBytes, "GLB size is outside viewer policy");
         Require(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(0, 4)) == 0x46546c67, "GLB magic mismatch");
@@ -1560,9 +1726,11 @@ internal static class Program
             for (var index = 0; index < nodes.Length; index++)
             {
                 var node = nodes[index];
-                Require(node.TryGetProperty("mesh", out _), "occurrence node has no mesh");
                 var entityId = node.GetProperty("extras").GetProperty("photonEntityId").GetString();
                 Require(entityId is not null && actualEntities.Add(entityId), "GLB entity ID missing or duplicated");
+                var shouldBeMeshless = meshlessEntities?.Contains(entityId, StringComparer.Ordinal) == true;
+                Require(shouldBeMeshless != node.TryGetProperty("mesh", out _),
+                    shouldBeMeshless ? "assembly occurrence unexpectedly owns a mesh" : "part occurrence has no mesh");
                 children[index] = new List<int>();
                 if (!node.TryGetProperty("children", out var rawChildren))
                 {
@@ -1618,6 +1786,7 @@ internal static class Program
             }
         }
     }
+
 
     private static void RejectExternalUris(JsonElement root)
     {

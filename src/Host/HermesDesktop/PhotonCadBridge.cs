@@ -78,7 +78,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     internal const string InstalledManualAssetRelativePath = "runtime-assets/photon-cad-manual";
     internal const string IndustrialEvidenceSelectionFileName = "evidence-selection.json";
     internal const string PreviewResourcePathPrefix = "/api/photon-cad/previews/";
-    internal const string IndustrialImageSha256 = "sha256:eda304290edbf75c33352e3df857a40539c48e20508d4025f63f7d4508ff25f9";
+    internal const string IndustrialImageSha256 = "sha256:4ad3200ff457b11e1b3f1b115e28927cf376930660919a5295417352112354fc";
     private const string GeometryImageSha256 = "33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703";
     private const string GeometryProtocolId = "mcp-2025-06-18";
     private const long MaximumSealedStepBytes = 64L * 1024 * 1024;
@@ -976,27 +976,37 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                     cancellationToken).ConfigureAwait(false);
                 var digest = $"sha256:{converted.Artifact.Digest}";
                 var evidence = new PhotonCadProviderEvidence(
-                    PhotonCadBackendV1.Geometry,
-                    "photon.cad.step.import.v1",
-                    ["iso-10303-21"],
+                    converted.ContainsAssemblyConstructs ? PhotonCadBackendV1.Assembly : PhotonCadBackendV1.Geometry,
+                    converted.ContainsAssemblyConstructs ? "photon.cad.step.assembly.import.v1" : "photon.cad.step.import.v1",
+                    converted.ContainsAssemblyConstructs ? ["iso-10303-21-xcaf"] : ["iso-10303-21"],
                     digest,
-                    "external.step.part21.v1",
+                    converted.ContainsAssemblyConstructs ? "external.step.assembly.v1" : "external.step.part21.v1",
                     digest,
                     digest,
                     digest,
                     digest,
                     new PhotonCadSourceIdentityV1("user-supplied-step", "part21", digest, "user-supplied"));
-                var bound = runtime.BindImportedStepPart(
-                    requestId,
-                    created.Snapshot.SessionId,
-                    created.Snapshot.ProjectId,
-                    created.Snapshot.Revision,
-                    $"imported-{Guid.NewGuid():N}",
-                    $"IMPORT-{converted.Artifact.Digest[..12].ToUpperInvariant()}",
-                    displayName,
-                    converted.Artifact.Content,
-                    digest,
-                    evidence);
+                var bound = converted.ContainsAssemblyConstructs
+                    ? await runtime.BindImportedStepAssemblyAsync(
+                        requestId,
+                        created.Snapshot.SessionId,
+                        created.Snapshot.ProjectId,
+                        created.Snapshot.Revision,
+                        converted.Artifact.Content,
+                        digest,
+                        evidence,
+                        cancellationToken).ConfigureAwait(false)
+                    : runtime.BindImportedStepPart(
+                        requestId,
+                        created.Snapshot.SessionId,
+                        created.Snapshot.ProjectId,
+                        created.Snapshot.Revision,
+                        $"imported-{Guid.NewGuid():N}",
+                        $"IMPORT-{converted.Artifact.Digest[..12].ToUpperInvariant()}",
+                        displayName,
+                        converted.Artifact.Content,
+                        digest,
+                        evidence);
                 var mapper = new PhotonCadRuntimeCanonicalMapperV1(_projectCodec);
                 var registration = _projectHost.CreateRuntimeProjectSynchronizer(bound.Provider, bound.Compensator, mapper);
                 var result = await _projectHost.ApplyRuntimeMutationAsync(registration, bound.Request, cancellationToken).ConfigureAwait(false);
@@ -1742,7 +1752,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             capabilities,
             new CadCatalogCoverage(capabilities.Length, capabilities.Length, 0));
         var digest = IndustrialImageSha256[7..];
-        var receipt = "70969065e209b454e4149235ad2662686629d7a23c44d584938c8a672bb2edb4";
+        var receipt = "12dcd086d95759f47a892def58e2e7a85e4107ad5c0c1a83cdccd1b2f415e4da";
         var bundles = new CadRuntimeBundleSetIdentity(
             new CadBundleIdentity(CadRuntimeRole.Geometry, "photon-cad-industrial-geometry", "0.1.0", "docker",
                 "industrial-v1", "linux-amd64", digest, generated),

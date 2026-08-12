@@ -108,6 +108,15 @@
     {
       "properties": {
         "schema": { "const": "photon.cad.industrial.request/v1" },
+        "operation": { "const": "inspectStepAssembly" },
+        "source": { "$ref": "#/$defs/manualSource" }
+      },
+      "required": ["schema", "operation", "source"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "schema": { "const": "photon.cad.industrial.request/v1" },
         "operation": { "const": "manualSketchExtrudeAdd" },
         "profile": { "$ref": "#/$defs/manualProfile" },
         "depthMm": { "$ref": "#/$defs/positiveDimension" }
@@ -202,7 +211,12 @@
       "type": "object",
       "properties": {
         "entityId": { "$ref": "#/$defs/identifier" },
-        "sourcePartId": { "$ref": "#/$defs/identifier" },
+        "sourcePartId": {
+          "oneOf": [
+            { "$ref": "#/$defs/identifier" },
+            { "type": "null" }
+          ]
+        },
         "parentEntityId": {
           "oneOf": [
             { "$ref": "#/$defs/identifier" },
