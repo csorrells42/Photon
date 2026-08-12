@@ -158,14 +158,27 @@ def _classify_write_denial(path: str) -> Optional[str]:
     return None
 
 
+def get_write_denial_kind(path: str) -> Optional[str]:
+    """Return the stable category for a denied write, or ``None``.
+
+    Callers that own a fixed application cache may distinguish the workspace
+    ``safe_root`` policy from credential/system denials without parsing a
+    user-facing error string.  Credential denials always remain authoritative.
+    """
+    denial = _classify_write_denial(path)
+    # Older session-state branches returned the boolean ``True``. Normalize
+    # that internal shape without weakening the denial.
+    return "credential" if denial is True else denial
+
+
 def is_write_denied(path: str) -> bool:
     """Return True if path is blocked by the write denylist or safe root."""
-    return _classify_write_denial(path) is not None
+    return get_write_denial_kind(path) is not None
 
 
 def get_write_denied_error(path: str, *, verb: str = "Write") -> Optional[str]:
     """Return a user/model-facing error when writes to ``path`` are blocked."""
-    denial = _classify_write_denial(path)
+    denial = get_write_denial_kind(path)
     if denial is None:
         return None
     if denial == "safe_root":

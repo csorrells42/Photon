@@ -284,6 +284,23 @@ def _get_default_output_dir() -> str:
 
 DEFAULT_OUTPUT_DIR = _get_default_output_dir()
 
+
+def _is_application_audio_cache_path(path: Path) -> bool:
+    """Return whether *path* is confined to Hermes' fixed audio cache.
+
+    ``HERMES_WRITE_SAFE_ROOT`` constrains model-chosen file destinations, but
+    the TTS implementation owns a separate, fixed cache under HERMES_HOME.
+    Resolve both sides so an existing symlink cannot turn that narrow
+    application-owned exception into a write outside the cache.
+    """
+    try:
+        resolved = path.expanduser().resolve(strict=False)
+        cache_root = Path(DEFAULT_OUTPUT_DIR).expanduser().resolve(strict=False)
+        resolved.relative_to(cache_root)
+        return resolved != cache_root
+    except (OSError, ValueError):
+        return False
+
 # ---------------------------------------------------------------------------
 # Per-provider input-character limits (from official provider docs).
 # A single global cap was wrong: OpenAI is 4096, xAI is 15k, MiniMax is 10k,
@@ -3398,9 +3415,13 @@ def _text_to_speech_single(
             file_path = _configured_command_tts_output_path(
                 file_path, command_provider_config
             )
-        from agent.file_safety import is_write_denied
+        from agent.file_safety import get_write_denial_kind
 
-        if is_write_denied(str(file_path)):
+        denial = get_write_denial_kind(str(file_path))
+        if denial and not (
+            denial == "safe_root"
+            and _is_application_audio_cache_path(file_path)
+        ):
             return json.dumps({
                 "success": False,
                 "error": (
@@ -3784,8 +3805,12 @@ def text_to_speech_tool(
             base_path = _configured_command_tts_output_path(
                 base_path, command_provider_config,
             )
-        from agent.file_safety import is_write_denied
-        if is_write_denied(str(base_path)):
+        from agent.file_safety import get_write_denial_kind
+        denial = get_write_denial_kind(str(base_path))
+        if denial and not (
+            denial == "safe_root"
+            and _is_application_audio_cache_path(base_path)
+        ):
             return json.dumps({
                 "success": False,
                 "error": (
