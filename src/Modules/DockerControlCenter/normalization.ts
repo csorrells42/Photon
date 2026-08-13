@@ -21,7 +21,7 @@ const SHA256 = /^sha256:[a-f0-9]{64}$/u
 const CONTAINER_ID = /^[a-f0-9]{12,64}$/u
 const MODEL_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,255}$/u
 const OPAQUE_REVIEW_TOKEN = /^[A-Za-z0-9_-]{32,512}$/u
-const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$/u
+const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:Z|\+00:00)$/u
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/gu
 const TOKENISH = /\b(?:gh[opusr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/gu
 const AUTH_VALUE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._=-]{8,}/giu
@@ -64,17 +64,17 @@ function finiteNumber(value: unknown, minimum: number, maximum: number): number 
 function normalizeResources(value: unknown): DockerResourceSnapshot | null {
   const raw = record(value)
   if (!raw) return null
-  const cpuPercent = raw.cpuPercent === undefined ? undefined : finiteNumber(raw.cpuPercent, 0, 1_000_000)
-  const memoryPercent = raw.memoryPercent === undefined ? undefined : finiteNumber(raw.memoryPercent, 0, 1_000_000)
-  const memoryUsage = raw.memoryUsage === undefined ? undefined : displayText(raw.memoryUsage, 64)
-  const memoryLimit = raw.memoryLimit === undefined ? undefined : displayText(raw.memoryLimit, 64)
-  const networkIo = raw.networkIo === undefined ? undefined : displayText(raw.networkIo, 64)
-  const blockIo = raw.blockIo === undefined ? undefined : displayText(raw.blockIo, 64)
-  const pids = raw.pids === undefined ? undefined : integer(raw.pids, 0, 10_000_000) ?? undefined
-  if ((raw.cpuPercent !== undefined && cpuPercent === undefined) || (raw.memoryPercent !== undefined && memoryPercent === undefined)
-    || (raw.memoryUsage !== undefined && memoryUsage === undefined) || (raw.memoryLimit !== undefined && memoryLimit === undefined)
-    || (raw.networkIo !== undefined && networkIo === undefined) || (raw.blockIo !== undefined && blockIo === undefined)
-    || (raw.pids !== undefined && pids === undefined)) return null
+  const cpuPercent = raw.cpuPercent == null ? undefined : finiteNumber(raw.cpuPercent, 0, 1_000_000)
+  const memoryPercent = raw.memoryPercent == null ? undefined : finiteNumber(raw.memoryPercent, 0, 1_000_000)
+  const memoryUsage = raw.memoryUsage == null ? undefined : displayText(raw.memoryUsage, 64)
+  const memoryLimit = raw.memoryLimit == null ? undefined : displayText(raw.memoryLimit, 64)
+  const networkIo = raw.networkIo == null ? undefined : displayText(raw.networkIo, 64)
+  const blockIo = raw.blockIo == null ? undefined : displayText(raw.blockIo, 64)
+  const pids = raw.pids == null ? undefined : integer(raw.pids, 0, 10_000_000) ?? undefined
+  if ((raw.cpuPercent != null && cpuPercent === undefined) || (raw.memoryPercent != null && memoryPercent === undefined)
+    || (raw.memoryUsage != null && memoryUsage === undefined) || (raw.memoryLimit != null && memoryLimit === undefined)
+    || (raw.networkIo != null && networkIo === undefined) || (raw.blockIo != null && blockIo === undefined)
+    || (raw.pids != null && pids === undefined)) return null
   return { cpuPercent, memoryUsage, memoryLimit, memoryPercent, networkIo, blockIo, pids }
 }
 
@@ -94,9 +94,9 @@ function observedState(value: unknown): DockerObservedState | null {
 function normalizeImage(value: unknown): DockerImageIdentity | null {
   const raw = record(value)
   if (!raw || typeof raw.verification !== 'string' || !verificationStates.has(raw.verification as DockerVerificationState)) return null
-  const imageId = raw.imageId === undefined ? undefined : typeof raw.imageId === 'string' && SHA256.test(raw.imageId) ? raw.imageId : null
-  const approvedDigest = raw.approvedDigest === undefined ? undefined : typeof raw.approvedDigest === 'string' && SHA256.test(raw.approvedDigest) ? raw.approvedDigest : null
-  const ociRevision = raw.ociRevision === undefined ? undefined : identityText(raw.ociRevision) ?? null
+  const imageId = raw.imageId == null ? undefined : typeof raw.imageId === 'string' && SHA256.test(raw.imageId) ? raw.imageId : null
+  const approvedDigest = raw.approvedDigest == null ? undefined : typeof raw.approvedDigest === 'string' && SHA256.test(raw.approvedDigest) ? raw.approvedDigest : null
+  const ociRevision = raw.ociRevision == null ? undefined : identityText(raw.ociRevision) ?? null
   if (imageId === null || approvedDigest === null || ociRevision === null) return null
   return { verification: raw.verification as DockerVerificationState, imageId, approvedDigest, ociRevision }
 }
@@ -149,11 +149,11 @@ export function normalizeDockerSnapshot(value: unknown): DockerStackSnapshot | n
         protocol: port.protocol as 'tcp' | 'udp',
       }
     })
-    const version = item.version === undefined ? undefined : identityText(item.version) ?? null
-    const manageable = item.manageable === undefined ? undefined : typeof item.manageable === 'boolean' ? item.manageable : null
-    const containerId = item.containerId === undefined ? undefined : typeof item.containerId === 'string' && CONTAINER_ID.test(item.containerId) ? item.containerId : null
-    const image = item.image === undefined ? undefined : normalizeImage(item.image)
-    const resources = item.resources === undefined ? undefined : normalizeResources(item.resources)
+    const version = item.version == null ? undefined : identityText(item.version) ?? null
+    const manageable = item.manageable == null ? undefined : typeof item.manageable === 'boolean' ? item.manageable : null
+    const containerId = item.containerId == null ? undefined : typeof item.containerId === 'string' && CONTAINER_ID.test(item.containerId) ? item.containerId : null
+    const image = item.image == null ? undefined : normalizeImage(item.image)
+    const resources = item.resources == null ? undefined : normalizeResources(item.resources)
     return ports.some((port) => port === null) || version === null || manageable === null || containerId === null || image === null || resources === null
       ? null
       : { id, state, health, manageable, containerId, version, image, ports: ports as NonNullable<typeof ports[number]>[], resources }
@@ -177,17 +177,17 @@ export function normalizeDockerSnapshot(value: unknown): DockerStackSnapshot | n
   const normalizedVolumes = volumes as NonNullable<typeof volumes[number]>[]
   if (new Set(normalizedVolumes.map((volume) => volume.role)).size !== normalizedVolumes.length) return null
 
-  const engineVersion = engine.version === undefined ? undefined : identityText(engine.version) ?? null
-  const definitionFingerprint = compose.definitionFingerprint === undefined
+  const engineVersion = engine.version == null ? undefined : identityText(engine.version) ?? null
+  const definitionFingerprint = compose.definitionFingerprint == null
     ? undefined
     : typeof compose.definitionFingerprint === 'string' && SHA256.test(compose.definitionFingerprint) ? compose.definitionFingerprint : null
-  const upstreamRevision = compose.upstreamRevision === undefined ? undefined : identityText(compose.upstreamRevision) ?? null
-  const runtimeProtocol = compose.runtimeProtocol === undefined ? undefined : identityText(compose.runtimeProtocol) ?? null
+  const upstreamRevision = compose.upstreamRevision == null ? undefined : identityText(compose.upstreamRevision) ?? null
+  const runtimeProtocol = compose.runtimeProtocol == null ? undefined : identityText(compose.runtimeProtocol) ?? null
   if (engineVersion === null || definitionFingerprint === null || upstreamRevision === null || runtimeProtocol === null) return null
 
-  const workflowRaw = raw.lastWorkflow === undefined ? undefined : record(raw.lastWorkflow)
+  const workflowRaw = raw.lastWorkflow == null ? undefined : record(raw.lastWorkflow)
   let lastWorkflow: DockerStackSnapshot['lastWorkflow']
-  if (raw.lastWorkflow !== undefined) {
+  if (raw.lastWorkflow != null) {
     const summary = normalizeDockerMessage(workflowRaw?.summary, '') || undefined
     const completedAtUtc = workflowRaw?.completedAtUtc === undefined ? undefined : timestamp(workflowRaw.completedAtUtc)
     if (!workflowRaw || (workflowRaw.kind !== 'update' && workflowRaw.kind !== 'rollback')
@@ -198,26 +198,26 @@ export function normalizeDockerSnapshot(value: unknown): DockerStackSnapshot | n
 
 
   let modelRunner: DockerStackSnapshot['modelRunner']
-  if (raw.modelRunner !== undefined) {
+  if (raw.modelRunner != null) {
     const modelRunnerRaw = record(raw.modelRunner)
     const runnerState = observedState(modelRunnerRaw?.state)
     if (!modelRunnerRaw || !runnerState || modelRunnerRaw.loadAvailable !== false || typeof modelRunnerRaw.unloadAvailable !== 'boolean'
       || !Array.isArray(modelRunnerRaw.models) || modelRunnerRaw.models.length > DOCKER_CONTROL_LIMITS.models) return null
-    const runnerVersion = modelRunnerRaw.version === undefined ? undefined : identityText(modelRunnerRaw.version) ?? null
-    const endpoint = modelRunnerRaw.endpoint === undefined ? undefined : displayText(modelRunnerRaw.endpoint, 256) ?? null
-    const kind = modelRunnerRaw.kind === undefined ? undefined : displayText(modelRunnerRaw.kind, 64) ?? null
-    const diskUsage = modelRunnerRaw.diskUsage === undefined ? undefined : displayText(modelRunnerRaw.diskUsage, 64) ?? null
-    const message = modelRunnerRaw.message === undefined ? undefined : normalizeDockerMessage(modelRunnerRaw.message, '') || null
+    const runnerVersion = modelRunnerRaw.version == null ? undefined : identityText(modelRunnerRaw.version) ?? null
+    const endpoint = modelRunnerRaw.endpoint == null ? undefined : displayText(modelRunnerRaw.endpoint, 256) ?? null
+    const kind = modelRunnerRaw.kind == null ? undefined : displayText(modelRunnerRaw.kind, 64) ?? null
+    const diskUsage = modelRunnerRaw.diskUsage == null ? undefined : displayText(modelRunnerRaw.diskUsage, 64) ?? null
+    const message = modelRunnerRaw.message == null ? undefined : normalizeDockerMessage(modelRunnerRaw.message, '') || null
     if (runnerVersion === null || endpoint === null || kind === null || diskUsage === null || message === null) return null
     const models = modelRunnerRaw.models.map((candidate) => {
       const model = record(candidate)
       const reference = typeof model?.reference === 'string' && MODEL_REFERENCE.test(model.reference) ? model.reference : null
-      const modelId = model?.modelId === undefined ? undefined : typeof model.modelId === 'string' && SHA256.test(model.modelId) ? model.modelId : null
-      const size = model?.size === undefined ? undefined : displayText(model.size, 64) ?? null
-      const format = model?.format === undefined ? undefined : identityText(model.format) ?? null
-      const parameters = model?.parameters === undefined ? undefined : displayText(model.parameters, 64) ?? null
-      const backend = model?.backend === undefined ? undefined : identityText(model.backend) ?? null
-      const mode = model?.mode === undefined ? undefined : identityText(model.mode) ?? null
+      const modelId = model?.modelId == null ? undefined : typeof model.modelId === 'string' && SHA256.test(model.modelId) ? model.modelId : null
+      const size = model?.size == null ? undefined : displayText(model.size, 64) ?? null
+      const format = model?.format == null ? undefined : identityText(model.format) ?? null
+      const parameters = model?.parameters == null ? undefined : displayText(model.parameters, 64) ?? null
+      const backend = model?.backend == null ? undefined : identityText(model.backend) ?? null
+      const mode = model?.mode == null ? undefined : identityText(model.mode) ?? null
       if (!model || !reference || modelId === null || size === null || format === null || parameters === null || backend === null || mode === null
         || typeof model.loaded !== 'boolean') return null
       return { reference, modelId, size, format, parameters, loaded: model.loaded, backend, mode }
@@ -289,7 +289,7 @@ export function normalizeDockerReview(
   const affectedServices = raw.affectedServices.map(serviceId)
   if (affectedServices.some((id) => id === null) || new Set(affectedServices).size !== affectedServices.length) return null
   const affected = affectedServices as DockerProductService[]
-  if ((intent.kind === 'start-service' || intent.kind === 'stop-service' || intent.kind === 'restart-service')
+  if ((intent.kind === 'start-service' || intent.kind === 'stop-service' || intent.kind === 'restart-service' || intent.kind === 'repair-service')
     && (affected.length !== 1 || affected[0] !== intent.service)) return null
   if (intent.kind === 'unload-model' && (affected.length !== 1 || affected[0] !== 'model-runner')) return null
   if ((intent.kind === 'start-stack' || intent.kind === 'stop-stack') && affected.length === 0) return null

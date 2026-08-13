@@ -8,7 +8,7 @@ import './HermesRuntimeConfigurationWorkspace.css'
 
 type ModelAdapter = Pick<typeof hermesModelAdapter, 'options' | 'selectDefault'>
 type SessionConnectionsClient = Pick<DesktopHermesConnectionsClient, 'forceOpenRouterSession'>
-const OPENROUTER_SAFE_DEFAULT_MODEL = 'deepseek/deepseek-v4-flash'
+const OPENROUTER_SAFE_DEFAULT_MODEL = 'deepseek/deepseek-v4-flash-latest'
 
 function preferredModel(provider: HermesModelCatalog['providers'][number] | undefined, currentModel = '') {
   if (currentModel && provider?.models.includes(currentModel)) return currentModel

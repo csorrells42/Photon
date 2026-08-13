@@ -21,6 +21,7 @@ export type HermesApprovalRequest = {
   requestId: string
   command: string
   description: string
+  reason: string | null
   choices: HermesApprovalChoice[]
   allowPermanent: boolean
   smartDenied: boolean
@@ -162,6 +163,10 @@ export function normalizeHermesApproval(
     requestId: nonEmptyString(payload.request_id) ?? '',
     command: nonEmptyString(payload.command) ?? '',
     description: nonEmptyString(payload.description) ?? 'Hermes needs approval to run a protected command.',
+    reason: nonEmptyString(payload.reason)
+      ?? nonEmptyString(payload.purpose)
+      ?? nonEmptyString(payload.intent)
+      ?? null,
     choices,
     allowPermanent,
     smartDenied,

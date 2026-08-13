@@ -402,6 +402,50 @@
   display: none;
 }
 
+.pcad-desktop-preview-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pcad-desktop-preview-surface > .photon-cad-viewer {
+  width: 100%;
+  height: 100%;
+}
+
+.pcad-desktop-tool-bins {
+  position: absolute;
+  z-index: 8;
+  right: 12px;
+  bottom: 28px;
+  display: grid;
+  gap: 6px;
+  width: min(360px, calc(100% - 24px));
+}
+
+.pcad-desktop-tool-bins details {
+  border: 1px solid rgba(102, 211, 183, .28);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: rgba(12, 20, 30, .94);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .38);
+}
+
+.pcad-desktop-tool-bins summary { cursor: pointer; color: #c5f4e8; font-weight: 650; }
+.pcad-desktop-tool-bins details > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.pcad-desktop-tool-bins p { margin: 6px 0 0; font-size: 12px; color: #aeb8c9; }
+.pcad-desktop-tool-bins button[disabled] { opacity: .52; cursor: not-allowed; }
+
+.pcad-desktop-sketch-button {
+  min-height: 30px;
+  border-color: rgba(102, 211, 183, .42) !important;
+  color: #c5f4e8 !important;
+  background: rgba(12, 43, 41, .94) !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .38);
+}
+
 .photon-cad-desktop__empty {
   display: grid;
   place-content: center;

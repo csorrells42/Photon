@@ -1,3 +1,5 @@
+import { hermesAudioConstraints } from './HermesAudioDevicePreferences'
+
 export const HERMES_SPEECH_INPUT_ENDPOINT = '/api/audio/transcribe'
 export const HERMES_SPEECH_INPUT_MAX_BYTES = 25 * 1024 * 1024
 export const HERMES_SPEECH_INPUT_MAX_DURATION_MS = 120_000
@@ -83,15 +85,7 @@ export class HermesSpeechInputController {
     this.dependencies = {
       createRecorder: dependencies?.createRecorder ?? ((stream) => new MediaRecorder(stream) as MediaRecorderLike),
       fetch: dependencies?.fetch ?? fetch,
-      getUserMedia: dependencies?.getUserMedia ?? (() => navigator.mediaDevices.getUserMedia({
-        audio: {
-          autoGainControl: true,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-        video: false,
-      })),
+      getUserMedia: dependencies?.getUserMedia ?? (() => navigator.mediaDevices.getUserMedia(hermesAudioConstraints())),
       readBlob: dependencies?.readBlob ?? defaultReadBlob,
       setTimer: dependencies?.setTimer ?? setTimeout,
       clearTimer: dependencies?.clearTimer ?? clearTimeout,

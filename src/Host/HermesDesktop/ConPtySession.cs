@@ -39,7 +39,12 @@ internal sealed class ConPtySession : IAsyncDisposable
         string[]? arguments = null)
     {
         application ??= Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-        arguments ??= ["-NoLogo", "-NoProfile"];
+        // The interactive terminal must behave like an ordinary developer
+        // shell. Windows installs npm, npx, and pnpm with PowerShell wrapper
+        // scripts; a machine execution policy can otherwise make those
+        // commands fail even though the corresponding tools are installed.
+        // Scope the bypass to this child PowerShell process only.
+        arguments ??= ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"];
         var options = new PtyOptions
         {
             Name = "Phos Agape Aphthartos",

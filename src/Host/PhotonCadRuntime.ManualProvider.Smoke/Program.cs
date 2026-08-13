@@ -35,7 +35,7 @@ static void UnavailableCatalog()
 {
     var runtime = PhotonCadManualProviderRuntime.CreateUnavailable();
     var catalog = runtime.GetCatalog();
-    Equal(7, catalog.Count, "catalog count");
+    Equal(9, catalog.Count, "catalog count");
     True(catalog.All(item => item.Availability == PhotonCadManualAvailability.Unavailable), "availability");
     True(catalog.All(item => item.UnavailableReason == "manual_geometry_protocol_v1_not_installed"), "reason");
 }
@@ -51,6 +51,15 @@ static void SketchExtrudeBinding()
     var circular = PhotonCadManualProviderRuntime.CreateUnavailable().BindCircularSketchExtrudeAdd(
         "circle-request", "pcsid:manual", "pcpid:manual", 0, "circle-body", "xy", 5, 12);
     Equal(4, circular.Request.Inputs.Count, "circle input count");
+
+    var mouse = new PhotonCadManualMouseSketch(
+        "polygon",
+        [new ManualSketchPoint(0, 0), new ManualSketchPoint(12, 0), new ManualSketchPoint(12, 8), new ManualSketchPoint(0, 8)],
+        [], 0, 0, 0, 1, 0, 0, 0, 0, 1);
+    var mouseAdd = PhotonCadManualProviderRuntime.CreateUnavailable().BindMouseSketchExtrudeAdd(
+        "mouse-request", "pcsid:manual", "pcpid:manual", 0, "mouse-body", mouse, 4, "polygon");
+    Equal(PhotonCadManualCapabilityIds.MouseSketchExtrudeAdd, mouseAdd.Request.CapabilityId, "mouse capability");
+    Equal(2, mouseAdd.Request.Inputs.Count, "mouse input count");
 }
 
 static void ExistingTargetBinding()
@@ -70,6 +79,10 @@ static void InputBounds()
     Throws(() => runtime.BindSketchExtrudeAdd("request", "pcsid:manual", "pcpid:manual", 0, "body", "invalid", 1, 1, 1));
     Throws(() => runtime.BindHoleCut("request", "pcsid:manual", "pcpid:manual", 0, "body", 0, 1, 0, 0, 0));
     Throws(() => runtime.BindLinearPattern("request", "pcsid:manual", "pcpid:manual", 0, "body", "seed", 1, 1));
+    Throws(() => runtime.BindMouseSketchExtrudeAdd(
+        "request", "pcsid:manual", "pcpid:manual", 0, "body",
+        new PhotonCadManualMouseSketch("polygon", [new ManualSketchPoint(0, 0), new ManualSketchPoint(1, 0), new ManualSketchPoint(2, 0)], [], 0, 0, 0, 1, 0, 0, 0, 0, 1),
+        1, "polygon"));
 }
 
 static void ProtocolRequirements()

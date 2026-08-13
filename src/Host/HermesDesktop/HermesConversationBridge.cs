@@ -68,6 +68,8 @@ internal sealed class HermesConversationBridge : IAsyncDisposable
             application.MapPost("/v1/observe", (Func<HttpContext, Task<IResult>>)ObserveAsync);
             application.MapPost("/v1/interrupt", (Func<HttpContext, Task<IResult>>)(async context =>
                 await RelayAsync("interrupt", payload: null, context.RequestAborted).ConfigureAwait(false)));
+            application.MapPost("/v1/new", (Func<HttpContext, Task<IResult>>)(async context =>
+                await RelayAsync("new", payload: null, context.RequestAborted).ConfigureAwait(false)));
             try
             {
                 await application.StartAsync(cancellationToken).ConfigureAwait(false);

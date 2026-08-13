@@ -50,6 +50,7 @@ describe('BrowserWorkspace Google Maps integration', () => {
       key: 'hermes-help',
       label: 'Hermes Help',
       url: 'https://hermes-agent.nousresearch.com/docs/',
+      bookmark: true,
     })
     const tabs: BrowserTab[] = [{ id: 'help-tab', url: HERMES_HELP_BROWSER_REQUEST.url, title: 'Hermes Help', requestKey: 'hermes-help' }]
     expect(browserRequestTabId(tabs, { nonce: 2, ...HERMES_HELP_BROWSER_REQUEST })).toBe('help-tab')

@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private readonly NativeTerminalBridge _terminalBridge;
     private readonly CodexAppServerBridge _codexBridge;
     private readonly DeveloperServicesBridge _developerServicesBridge;
+    private readonly WindowsAdministratorBridge _windowsAdministratorBridge;
     private readonly WorkspaceSearchBridge _workspaceSearchBridge;
     private readonly DockerControlBridge _dockerControlBridge;
     private readonly PhotonCadBridge _photonCadBridge;
@@ -60,6 +61,7 @@ public partial class MainWindow : Window
             options.WorkspacePath,
             options.ApplicationInstallRoot,
             PostHostMessage);
+        _windowsAdministratorBridge = new WindowsAdministratorBridge(options.WorkspacePath, PostHostMessage);
         _raspberryPiTooling = new RaspberryPiDesktopTooling(options.ApplicationInstallRoot, _credentialVault);
         _workspaceSearchBridge = new WorkspaceSearchBridge(options.WorkspacePath, PostHostMessage);
         _dockerControlBridge = new DockerControlBridge(options.ApplicationInstallRoot, PostHostMessage);
@@ -99,6 +101,7 @@ public partial class MainWindow : Window
 
     private async void OnClosing(object? sender, CancelEventArgs eventArgs)
     {
+        DesktopLog.Write($"Desktop window closing requested: started={_shutdownStarted}, completed={_shutdownCompleted}.");
         if (_shutdownCompleted) return;
         eventArgs.Cancel = true;
         if (_shutdownStarted) return;
@@ -667,6 +670,13 @@ public partial class MainWindow : Window
                         GetInteger(document.RootElement, "version", 0),
                         GetString(document.RootElement, "requestId"));
                     break;
+                case "developerServices.windowsAdministrator.run":
+                    await _windowsAdministratorBridge.RunAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "script"),
+                        GetString(document.RootElement, "reason"));
+                    break;
                 case "workspaceSearch.literal":
                     await _workspaceSearchBridge.SearchLiteralAsync(
                         GetInteger(document.RootElement, "version", 0),
@@ -825,7 +835,7 @@ public partial class MainWindow : Window
                     _browserSurfaceBridge.CloseTab(GetString(document.RootElement, "tabId"));
                     break;
                 case "browser.navigate":
-                    _browserSurfaceBridge.Navigate(
+                    await _browserSurfaceBridge.NavigateAsync(
                         GetString(document.RootElement, "tabId"),
                         GetString(document.RootElement, "url"));
                     break;
@@ -841,7 +851,8 @@ public partial class MainWindow : Window
                 case "accountLink.status":
                     await _accountLinkBridge.PostStatusAsync(
                         GetInteger(document.RootElement, "version", 0),
-                        GetString(document.RootElement, "requestId"));
+                        GetString(document.RootElement, "requestId"),
+                        GetString(document.RootElement, "provider"));
                     break;
                 case "accountLink.open":
                     _accountLinkBridge.Open(

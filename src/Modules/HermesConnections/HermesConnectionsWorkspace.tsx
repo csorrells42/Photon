@@ -3,6 +3,7 @@ import { Check, KeyRound, Link2, RefreshCw, ShieldCheck, Trash2, X } from 'lucid
 import { DesktopHermesConnectionsClient, type HermesConnectionsClient } from './DesktopHermesConnectionsClient'
 import { HermesConnectionsController } from './HermesConnectionsController'
 import type { ConnectionCatalogEntry } from './contracts'
+import { AccountLinkPanel } from '../UsageIntelligence/AccountLinkPanel'
 import './HermesConnectionsWorkspace.css'
 
 export type HermesConnectionsWorkspaceProps = {
@@ -25,17 +26,27 @@ export function HermesConnectionsWorkspace({ profileId, catalog, client }: Herme
   const review = snapshot.pendingReview
 
   return (
-    <section className="hermes-connections" aria-label="Connections and credentials">
+    <section className="hermes-connections" aria-label="Accounts and connections">
       <header className="hermes-connections__header">
         <div>
-          <span className="hermes-connections__eyebrow"><ShieldCheck size={14} /> Native security boundary</span>
-          <h2>Connections &amp; Credentials</h2>
-          <p>Photon can use your connected providers without displaying, exporting, or placing credential values in this page.</p>
+          <span className="hermes-connections__eyebrow"><ShieldCheck size={14} /> Account cockpit</span>
+          <h2>Accounts &amp; Connections</h2>
+          <p>See the subscription tools you already pay for in one place. Developer API keys stay separate and optional.</p>
         </div>
         <button type="button" className="hermes-connections__refresh" onClick={() => void controller.load()} disabled={snapshot.working}>
           <RefreshCw size={15} className={snapshot.status === 'loading' ? 'is-spinning' : undefined} /> Refresh
         </button>
       </header>
+
+      <AccountLinkPanel />
+
+      <div className="hermes-connections__section-heading">
+        <div>
+          <span className="hermes-connections__eyebrow"><KeyRound size={14} /> Optional developer access</span>
+          <h3>Developer API keys</h3>
+          <p>These connections are for direct API use. They do not represent your ChatGPT, Claude, or Google subscription login.</p>
+        </div>
+      </div>
 
       {snapshot.message && <div className={`hermes-connections__notice is-${snapshot.status}`} role="status">{snapshot.message}</div>}
       {snapshot.status === 'unavailable' && (

@@ -1,15 +1,19 @@
 import {
+  HERMES_SPEECH_OUTPUT_VOICES,
   assertHermesSpeechOutputSettings,
   type HermesSpeechOutputActionResult,
   type HermesSpeechOutputPreviewRequest,
   type HermesSpeechOutputSaveRequest,
   type HermesSpeechOutputSettings,
+  type HermesSpeechOutputVoice,
 } from './contracts'
+import { applyHermesAudioOutput } from '../HermesSpeechVoice/HermesAudioDevicePreferences'
 
 export type HermesSpeechOutputSnapshot = Readonly<{
   profileId: string
   revision: string
   settings: HermesSpeechOutputSettings
+  voices: readonly HermesSpeechOutputVoice[]
 }>
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -24,12 +28,38 @@ function opaque(value: unknown, label: string): string {
   return text
 }
 
+const localAudioDataUrlPattern = /^data:audio\/(?:wav|wave|x-wav|mpeg|mp3|ogg|opus|flac);base64,[A-Za-z0-9+/]+={0,2}$/
+
+function localAudioDataUrl(value: unknown): string {
+  const source = typeof value === 'string' ? value.trim() : ''
+  return source.length <= 16_000_000 && localAudioDataUrlPattern.test(source) ? source : ''
+}
+
+const languageNames: Record<string, string> = {
+  a: 'American English', b: 'British English', e: 'Spanish', f: 'French', h: 'Hindi',
+  i: 'Italian', j: 'Japanese', p: 'Portuguese', z: 'Mandarin Chinese',
+}
+
+function voiceLabel(id: string): HermesSpeechOutputVoice {
+  const name = id.slice(3).split('_').map((part) => part ? part[0].toUpperCase() + part.slice(1) : '').join(' ')
+  const language = languageNames[id[0]] ?? 'Local'
+  const gender = id[1] === 'f' ? 'female' : id[1] === 'm' ? 'male' : ''
+  return { id, label: name || id, description: `${language}${gender ? ` ${gender}` : ''} voice` }
+}
+
+function normalizeVoices(value: unknown): readonly HermesSpeechOutputVoice[] {
+  if (!Array.isArray(value)) return HERMES_SPEECH_OUTPUT_VOICES
+  const ids = [...new Set(value.filter((item): item is string => typeof item === 'string' && /^[a-z]{2}_[a-z0-9_]{1,63}$/.test(item)))]
+  return ids.length ? ids.map(voiceLabel) : HERMES_SPEECH_OUTPUT_VOICES
+}
+
 export function normalizeHermesSpeechOutputSnapshot(value: unknown): HermesSpeechOutputSnapshot {
   const raw = object(value)
   return {
     profileId: opaque(raw.profileId, 'Profile ID'),
     revision: opaque(raw.revision, 'Settings revision'),
     settings: assertHermesSpeechOutputSettings(raw.settings),
+    voices: normalizeVoices(raw.voices),
   }
 }
 
@@ -37,7 +67,9 @@ export class HermesSpeechOutputLiveAdapter {
   constructor(
     private readonly fetcher: FetchLike = (...arguments_) => globalThis.fetch(...arguments_),
     private readonly playAudio: (source: string) => Promise<void> = async (source) => {
-      await new Audio(source).play()
+      const audio = new Audio(source)
+      await applyHermesAudioOutput(audio)
+      await audio.play()
     },
   ) {}
 
@@ -70,8 +102,7 @@ export class HermesSpeechOutputLiveAdapter {
         }),
       })
       const raw = object(await this.response(response))
-      const source = typeof raw.data_url === 'string' && raw.data_url.startsWith('data:audio/wav;base64,')
-        ? raw.data_url : ''
+      const source = localAudioDataUrl(raw.data_url)
       if (!source || raw.provider !== 'kokoro') return { status: 'rejected', reason: 'invalid_settings' }
       await this.playAudio(source)
       return { status: 'accepted', reason: 'preview_complete' }

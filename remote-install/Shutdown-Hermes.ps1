@@ -81,6 +81,7 @@ try {
         @{ PidFile = (Join-Path $logsPath 'maui.pid'); IdentityFile = (Join-Path $logsPath 'maui.process.json'); Label = 'legacy MAUI client'; Port = 0 },
         @{ PidFile = (Join-Path $logsPath 'assistant-bus.pid'); IdentityFile = (Join-Path $logsPath 'assistant-bus.process.json'); Label = 'Assistant Conversation Bus'; Port = 9072 },
         @{ PidFile = (Join-Path $logsPath 'workbench.pid'); IdentityFile = (Join-Path $logsPath 'workbench.process.json'); Label = 'Hermes Workbench web client'; Port = 4173 },
+        @{ PidFile = (Join-Path $logsPath 'photon-mcp.pid'); IdentityFile = (Join-Path $logsPath 'photon-mcp.process.json'); Label = 'Photon Docker MCP gateway'; Port = 9131 },
         @{ PidFile = (Join-Path $logsPath 'serena.pid'); IdentityFile = (Join-Path $logsPath 'serena.process.json'); Label = 'Serena'; Port = 9121 }
     )
     foreach ($owned in $ownedProcesses) {
@@ -90,28 +91,53 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $logsPath 'workbench.pid'))) {
         Remove-Item -LiteralPath (Join-Path $logsPath 'workbench.nonce') -Force -ErrorAction SilentlyContinue
     }
+    if (-not (Test-Path -LiteralPath (Join-Path $logsPath 'photon-mcp.pid'))) {
+        Remove-Item -LiteralPath (Join-Path $logsPath 'photon-mcp.token') -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $logsPath 'photon-mcp.config.sha256') -Force -ErrorAction SilentlyContinue
+    }
 
     if (Get-Command docker -ErrorAction SilentlyContinue) {
         & docker info *> $null
         if ($LASTEXITCODE -eq 0) {
             $previousImageReference = [Environment]::GetEnvironmentVariable('HERMES_IMAGE_REFERENCE', 'Process')
+            $previousWorkspacePath = [Environment]::GetEnvironmentVariable('HERMES_HOST_WORKSPACE_PATH', 'Process')
             try {
                 $containerJson = (& docker inspect --type container hermes 2>$null) -join [Environment]::NewLine
                 $selectedImage = $approvedHermesImage
+                $selectedWorkspace = $null
                 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($containerJson)) {
                     try {
                         $runningContainer = @($containerJson | ConvertFrom-Json -ErrorAction Stop)[0]
                         if ([string]$runningContainer.Image -match '^sha256:[a-f0-9]{64}$') { $selectedImage = [string]$runningContainer.Image }
+                        $workspaceMount = @($runningContainer.Mounts | Where-Object { [string]$_.Destination -ceq '/workspace' } | Select-Object -First 1)
+                        if ($workspaceMount.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$workspaceMount[0].Source)) {
+                            $selectedWorkspace = [string]$workspaceMount[0].Source
+                        }
                     }
                     catch { }
                 }
+                if ([string]::IsNullOrWhiteSpace($selectedWorkspace) -and (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
+                    try {
+                        $configuredWorkspace = [string](Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json).WorkspacePath
+                        if (-not [string]::IsNullOrWhiteSpace($configuredWorkspace)) {
+                            $selectedWorkspace = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($configuredWorkspace)) { $configuredWorkspace } else { Join-Path $bundleRoot $configuredWorkspace }))
+                        }
+                    }
+                    catch { }
+                }
+                if ([string]::IsNullOrWhiteSpace($selectedWorkspace)) {
+                    throw 'The Hermes workspace mount could not be resolved for Docker Compose shutdown.'
+                }
                 $env:HERMES_IMAGE_REFERENCE = $selectedImage
+                $env:HERMES_HOST_WORKSPACE_PATH = $selectedWorkspace
                 & docker compose down
                 if ($LASTEXITCODE -ne 0) { $failures.Add('Docker Compose could not stop Hermes cleanly.') }
             }
             finally {
                 if ($null -eq $previousImageReference) { Remove-Item Env:\HERMES_IMAGE_REFERENCE -ErrorAction SilentlyContinue }
                 else { $env:HERMES_IMAGE_REFERENCE = $previousImageReference }
+                if ($null -eq $previousWorkspacePath) { Remove-Item Env:\HERMES_HOST_WORKSPACE_PATH -ErrorAction SilentlyContinue }
+                else { $env:HERMES_HOST_WORKSPACE_PATH = $previousWorkspacePath }
             }
         } else {
             Write-Warning 'Docker Desktop is not available; local Workbench processes were still cleaned up.'

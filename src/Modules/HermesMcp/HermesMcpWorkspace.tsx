@@ -71,9 +71,9 @@ function runtimeDescription(entry: HermesMcpCatalogEntry) {
   return [entry.command, ...entry.args].filter(Boolean).join(' ') || 'Local stdio command supplied by the catalog'
 }
 
-function serverDescription(server: HermesMcpServer) {
+export function serverDescription(server: HermesMcpServer) {
   return server.transport === 'http'
-    ? server.url || 'HTTP endpoint unavailable'
+    ? server.url || 'HTTP endpoint details protected'
     : [server.command, ...server.args].filter(Boolean).join(' ') || 'stdio command unavailable'
 }
 

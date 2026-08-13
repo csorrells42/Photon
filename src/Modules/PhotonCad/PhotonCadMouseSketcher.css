@@ -1,0 +1,31 @@
+.pcad-mouse-sketcher { display: grid; grid-template-rows: auto minmax(180px, 1fr) auto; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: #c3cedb; background: #080b11; font: 11px/1.35 "Segoe UI Variable", "Segoe UI", sans-serif; }
+.pcad-sketch-toolbar, .pcad-sketch-footer { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 8px; border-color: rgba(255,255,255,.08); background: #0c1018; }
+.pcad-sketch-toolbar { flex-wrap: wrap; border-bottom: 1px solid rgba(255,255,255,.08); }
+.pcad-sketch-toolbar > span, .pcad-sketch-toolbar > div, .pcad-sketch-actions { display: flex; align-items: center; gap: 4px; }
+.pcad-sketch-toolbar > span { color: #a8bdcf; margin-right: 5px; }
+.pcad-sketch-plane-lock { color: #b8d8f5 !important; border: 1px solid rgba(111,176,230,.35); border-radius: 4px; padding: 2px 5px; font-size: 10px; }
+.pcad-sketch-toolbar button, .pcad-sketch-footer button { display: inline-flex; align-items: center; gap: 4px; min-height: 27px; border: 1px solid rgba(255,255,255,.1); border-radius: 5px; color: #8d9cae; background: rgba(255,255,255,.035); padding: 2px 7px; font: inherit; cursor: pointer; }
+.pcad-sketch-toolbar button:hover:not(:disabled), .pcad-sketch-toolbar button[aria-pressed="true"], .pcad-sketch-footer button:hover:not(:disabled) { border-color: rgba(95,206,179,.45); color: #b7e7da; background: rgba(67,168,147,.12); }
+.pcad-sketch-toolbar button:focus-visible, .pcad-sketch-footer button:focus-visible, .pcad-sketch-dimension input:focus-visible, .pcad-sketch-canvas:focus-visible { outline: 2px solid #9b89ee; outline-offset: 2px; }
+.pcad-sketch-toolbar button:disabled, .pcad-sketch-footer button:disabled { cursor: not-allowed; opacity: .43; }
+.pcad-sketch-close { margin-left: auto; }
+.pcad-sketch-canvas { width: 100%; height: 100%; min-height: 0; color: #3c5361; background: radial-gradient(circle at center, rgba(59,188,159,.07), transparent 52%), #080b11; cursor: crosshair; touch-action: none; }
+.pcad-sketch-canvas:focus-visible { outline-offset: -3px; }
+.pcad-sketch-axis { stroke: #658a96; stroke-opacity: .52; stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+.pcad-sketch-origin { fill: #71ddc4; stroke: #e5fffa; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.pcad-sketch-origin-label, .pcad-sketch-measure { fill: #9dd7ca; font-size: 11px; user-select: none; paint-order: stroke; stroke: #080b11; stroke-width: 3px; stroke-linejoin: round; }
+.pcad-sketch-measure { fill: #e9d18b; font-weight: 600; }
+.pcad-sketch-profile { fill: rgba(101,210,181,.16); stroke: #71ddc4; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.pcad-sketch-wire { fill: none; stroke: #f1c46e; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.pcad-sketch-wire.closed { stroke: #71ddc4; }
+.pcad-sketch-selection { stroke: #b79aff; stroke-width: 6; stroke-linecap: round; vector-effect: non-scaling-stroke; opacity: .8; }
+.pcad-sketch-vertex { fill: #f1c46e; stroke: #080b11; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.pcad-sketch-vertex.selected { fill: #b79aff; stroke: #f5efff; }
+.pcad-sketch-footer { min-height: 42px; flex-wrap: wrap; border-top: 1px solid rgba(255,255,255,.08); }
+.pcad-sketch-footer > p { flex: 1 1 250px; min-width: 0; margin: 0; color: #93a4b6; }
+.pcad-sketch-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.pcad-sketch-actions button:nth-last-child(2) { border-color: rgba(91,206,174,.34); color: #b3e9dc; }
+.pcad-sketch-dimension { display: flex; align-items: end; gap: 5px; padding: 4px 6px; border: 1px solid rgba(155,137,238,.45); border-radius: 5px; background: #141324; }
+.pcad-sketch-dimension label { display: grid; gap: 2px; color: #c6bdf2; font-size: 9px; }
+.pcad-sketch-dimension input { width: 78px; min-height: 24px; border: 1px solid rgba(255,255,255,.16); border-radius: 3px; color: #eef6ff; background: #080b11; padding: 1px 5px; font: inherit; }
+@media (max-width: 760px) { .pcad-sketch-toolbar > div[role="group"] button { padding-inline: 5px; } .pcad-sketch-toolbar > div[role="group"] button svg { display: none; } .pcad-sketch-close, .pcad-sketch-actions { margin-left: 0; } }

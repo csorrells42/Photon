@@ -28,7 +28,7 @@ function adapter(): DockerControlAdapter {
       protocolVersion: DOCKER_CONTROL_PROTOCOL_VERSION,
       availability: { state: 'available' },
       services: ['hermes', 'serena', 'model-runner'],
-      operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, loadModel: false, unloadModel: true, update: false },
+      operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, repairService: true, loadModel: false, unloadModel: true, update: false },
       updateReason: 'derived-runtime-updater-not-integrated',
     } as const)),
     refresh: vi.fn(async () => snapshot),
@@ -61,7 +61,7 @@ describe('DockerControlCenter', () => {
       'Hermes', 'Serena', 'Model Runner', 'Revision 9', 'sha256:', '127.0.0.1:9119',
       'Data:', 'Workspace:', 'Previous verified image restored.', 'Review stack start', 'Update workflow unavailable',
       'Container ID', 'Current resources', '512MiB / 8GiB', 'Docker Model Runner', 'docker.io/ai/qwen3:4b', 'Review unload', 'Load model unavailable',
-      'Docker status', 'Approved services', 'Local inference', 'role="meter"',
+      'Docker status', 'Live services', 'Local inference', 'role="meter"',
       'Environment values, Docker credentials, mounted secret contents',
     ]) expect(markup).toContain(expected)
     expect(markup).toContain('tabindex="0"')

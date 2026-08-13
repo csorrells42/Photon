@@ -32,6 +32,7 @@ const unavailableOperations = {
   startService: false,
   stopService: false,
   restartService: false,
+  repairService: false,
   loadModel: false,
   unloadModel: false,
   update: false,
@@ -102,7 +103,23 @@ export class DockerControlController {
     this.refreshLane = lane
     this.update({ status: 'refreshing', logsStatus: 'idle', logs: [], logsTruncated: false, mutationStatus: 'idle', message: 'Reading Docker state…' })
     try {
-      const description = await this.adapter!.describe({ signal: lane.abort.signal })
+      const descriptionTask = this.adapter!.describe({ signal: lane.abort.signal })
+      const snapshotTask = this.adapter!.refresh({
+        signal: lane.abort.signal,
+        onSnapshotProgress: (snapshot) => {
+          if (!this.isCurrentRefresh(lane)) return
+          const liveSnapshot = mergeProgressSnapshot(this.state.snapshot, snapshot)
+          const selectedService = liveSnapshot.services.some((service) => service.id === this.state.selectedService)
+            ? this.state.selectedService
+            : liveSnapshot.services[0]?.id ?? 'hermes'
+          this.update({
+            snapshot: liveSnapshot,
+            selectedService,
+            message: `Live monitors updating · ${liveSnapshot.services.length} service${liveSnapshot.services.length === 1 ? '' : 's'} reporting.`,
+          })
+        },
+      })
+      const description = await descriptionTask
       if (!this.isCurrentRefresh(lane)) return false
       if (description.availability.state !== 'available') {
         this.update({
@@ -114,7 +131,7 @@ export class DockerControlController {
         })
         return false
       }
-      const raw = await this.adapter!.refresh({ signal: lane.abort.signal })
+      const raw = await snapshotTask
       if (!this.isCurrentRefresh(lane)) return false
       const snapshot = normalizeDockerSnapshot(raw)
       if (!snapshot) {
@@ -136,7 +153,13 @@ export class DockerControlController {
       return true
     } catch {
       if (!this.isCurrentRefresh(lane)) return false
-      this.update({ status: 'error', message: 'Docker state could not be read safely.' })
+      const lastObservation = this.state.snapshot?.observedAtUtc
+      this.update({
+        status: 'error',
+        message: lastObservation
+          ? `Live refresh failed; showing the last evidence observed at ${lastObservation}. Retrying automatically.`
+          : 'Docker state is temporarily unavailable. Retrying automatically.',
+      })
       return false
     } finally {
       if (this.refreshLane === lane) this.refreshLane = undefined
@@ -192,7 +215,7 @@ export class DockerControlController {
       })
       return false
     }
-    if (intent.kind === 'start-service' || intent.kind === 'stop-service' || intent.kind === 'restart-service') {
+    if (intent.kind === 'start-service' || intent.kind === 'stop-service' || intent.kind === 'restart-service' || intent.kind === 'repair-service') {
       const service = this.state.snapshot.services.find((candidate) => candidate.id === intent.service)
       if (!service || service.manageable !== true) return false
     }
@@ -324,6 +347,7 @@ export class DockerControlController {
     if (intent.kind === 'start-service') return this.state.operations.startService
     if (intent.kind === 'stop-service') return this.state.operations.stopService
     if (intent.kind === 'restart-service') return this.state.operations.restartService
+    if (intent.kind === 'repair-service') return this.state.operations.repairService
     if (intent.kind === 'unload-model') return this.state.operations.unloadModel
     return this.state.operations.update
   }
@@ -370,8 +394,29 @@ export class DockerControlController {
   }
 }
 
+function mergeProgressSnapshot(previous: DockerControlState['snapshot'], next: NonNullable<DockerControlState['snapshot']>) {
+  if (!previous) return next
+  const services = new Map(previous.services.map((service) => [service.id, service]))
+  for (const service of next.services) services.set(service.id, service)
+  const volumes = new Map(previous.volumes.map((volume) => [volume.role, volume]))
+  for (const volume of next.volumes) volumes.set(volume.role, volume)
+  return {
+    ...next,
+    revision: previous.revision,
+    engine: next.engine,
+    compose: next.compose,
+    services: [...services.values()],
+    volumes: [...volumes.values()],
+    modelRunner: next.modelRunner ?? previous.modelRunner,
+    lastWorkflow: next.lastWorkflow ?? previous.lastWorkflow,
+  }
+}
+
 function serviceLabel(service: DockerProductService) {
-  return service === 'hermes' ? 'Hermes' : service === 'serena' ? 'Serena' : 'Model Runner'
+  if (service === 'hermes') return 'Hermes'
+  if (service === 'memory-vector') return 'Memory Vector'
+  if (service === 'serena') return 'Serena'
+  return 'Model Runner'
 }
 
 function normalizeCommitResult(value: unknown, requestId: string): DockerMutationCommitResult | null {

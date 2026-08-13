@@ -17,3 +17,11 @@ export {
   createProductionHermesProfileRuntimeBridge,
   type ProductionHermesProfileRuntimeBridgeOptions,
 } from './ReadOnlyHermesProfileRuntimeBridge'
+export {
+  HERMES_PROFILE_RUNTIME_MUTATION_ROUTES,
+  HermesProfileRuntimeMutationBridge,
+  HermesProfileRuntimeMutationBridgeError,
+  type HermesProfileRuntimeMutationBridgeErrorCode,
+  type HermesProfileRuntimeMutationBridgeOptions,
+  type HermesProfileRuntimeMutationFetch,
+} from './HermesProfileRuntimeMutationBridge'

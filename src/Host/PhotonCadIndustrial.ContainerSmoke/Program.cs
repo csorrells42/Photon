@@ -287,6 +287,67 @@ internal static class Program
                 RequireApproximately(circle.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble(), Math.PI * 5 * 5 * 12, 1e-8, "manual circle volume");
                 ValidateManualProvenance(circle.Response, "sketchExtrudeAdd", "circle");
 
+                var mousePolygonJob = NewJob(tempRoot, "manual-mouse-polygon-add");
+                var mousePolygon = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    mousePolygonJob,
+                    ManualMouseSketchExtrudeAddRequest(depthMm: 6));
+                RequireSuccess(mousePolygon.Process, "manual mouse polygon add");
+                RequireSuccessResponse(mousePolygon.Response, "manualSketchExtrudeAdd");
+                RequireApproximately(mousePolygon.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble(), 432.0, 1e-8, "manual mouse polygon volume");
+                ValidateManualProvenance(mousePolygon.Response, "sketchExtrudeAdd", "polygon");
+
+                var mouseXzJob = NewJob(tempRoot, "manual-mouse-xz-polygon-add");
+                var mouseXz = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    mouseXzJob,
+                    ManualMouseDatumSketchExtrudeAddRequest(depthMm: 6));
+                RequireSuccess(mouseXz.Process, "manual mouse XZ polygon add");
+                RequireSuccessResponse(mouseXz.Response, "manualSketchExtrudeAdd");
+                RequireApproximately(mouseXz.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble(), 432.0, 1e-8, "manual mouse XZ polygon volume");
+                ValidateManualProvenance(mouseXz.Response, "sketchExtrudeAdd", "polygon");
+
+                var mouseFilletJob = NewJob(tempRoot, "manual-mouse-fillet-add");
+                var mouseFillet = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    mouseFilletJob,
+                    ManualMouseFilletedSketchExtrudeAddRequest(depthMm: 5));
+                RequireSuccess(mouseFillet.Process, "manual mouse fillet add");
+                RequireSuccessResponse(mouseFillet.Response, "manualSketchExtrudeAdd");
+                var mouseFilletVolume = mouseFillet.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
+                Require(mouseFilletVolume > 0 && mouseFilletVolume < 1000, "manual mouse fillet did not create rounded solid geometry");
+                ValidateManualProvenance(mouseFillet.Response, "sketchExtrudeAdd", "filletedPolygon");
+
+                var mouseFaceCutJob = NewJob(tempRoot, "manual-mouse-face-cut");
+                File.WriteAllBytes(Path.Combine(mouseFaceCutJob, "input", "base.step"), rectangleBytes);
+                var mouseFaceCut = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    mouseFaceCutJob,
+                    ManualMouseFaceSketchExtrudeCutRequest("base", rectangleDigest, depthMm: 30));
+                RequireSuccess(mouseFaceCut.Process, "manual mouse face cut");
+                RequireSuccessResponse(mouseFaceCut.Response, "manualSketchExtrudeCut");
+                var mouseFaceCutVolume = mouseFaceCut.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
+                Require(mouseFaceCutVolume > 0 && mouseFaceCutVolume < 48000, "manual mouse face cut did not subtract into the selected solid");
+                ValidateManualProvenance(mouseFaceCut.Response, "sketchExtrudeCut", "circle");
+
+                var mouseFaceAddJob = NewJob(tempRoot, "manual-mouse-face-add");
+                File.WriteAllBytes(Path.Combine(mouseFaceAddJob, "input", "base.step"), rectangleBytes);
+                var mouseFaceAdd = await InvokeAdapterAsync(
+                    harness!,
+                    derivedImageId!,
+                    mouseFaceAddJob,
+                    ManualMouseFaceSketchExtrudeAddRequest("base", rectangleDigest, depthMm: 5));
+                RequireSuccess(mouseFaceAdd.Process, "manual mouse face add");
+                RequireSuccessResponse(mouseFaceAdd.Response, "manualSketchExtrudeAdd");
+                var mouseFaceAddVolume = mouseFaceAdd.Response.GetProperty("measurement").GetProperty("volumeMm3").GetDouble();
+                Require(mouseFaceAddVolume > 48000, "manual mouse face add did not fuse into the selected solid");
+                ValidateManualProvenance(mouseFaceAdd.Response, "sketchExtrudeAdd", "polygon");
+                RequireApproximately(mouseFaceAdd.Response.GetProperty("provenance").GetProperty("sourceVolumeMm3").GetDouble(), 48000, 1e-9, "manual mouse face add source provenance");
+
                 var cutJob = NewJob(tempRoot, "manual-rectangle-cut");
                 File.WriteAllBytes(Path.Combine(cutJob, "input", "base.step"), rectangleBytes);
                 var cut = await InvokeAdapterAsync(
@@ -1368,6 +1429,101 @@ if not writer.Transfer(document) or writer.Write("/photon-output/assembly.step")
         }, JsonOptions);
     }
 
+    private static string ManualMouseSketchExtrudeAddRequest(double depthMm) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualSketchExtrudeAdd",
+            profile = new
+            {
+                kind = "polygon",
+                originMm = new { x = 0d, y = 0d, z = 0d },
+                xDirection = new { x = 1d, y = 0d, z = 0d },
+                normal = new { x = 0d, y = 0d, z = 1d },
+                points = new[]
+                {
+                    new { x = 0d, y = 0d }, new { x = 12d, y = 0d }, new { x = 12d, y = 6d }, new { x = 0d, y = 6d },
+                },
+            },
+            depthMm,
+        }, JsonOptions);
+
+    private static string ManualMouseFaceSketchExtrudeCutRequest(string inputSlot, string digest, double depthMm) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualSketchExtrudeCut",
+            source = new { inputSlot, expectedDigest = digest },
+            profile = new
+            {
+                kind = "circle",
+                originMm = new { x = 0d, y = 0d, z = 30d },
+                xDirection = new { x = 1d, y = 0d, z = 0d },
+                normal = new { x = 0d, y = 0d, z = -1d },
+                points = new[] { new { x = 0d, y = 0d }, new { x = 4d, y = 0d } },
+            },
+            depthMm,
+        }, JsonOptions);
+
+    private static string ManualMouseDatumSketchExtrudeAddRequest(double depthMm) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualSketchExtrudeAdd",
+            profile = new
+            {
+                kind = "polygon",
+                originMm = new { x = 0d, y = 0d, z = 0d },
+                xDirection = new { x = 1d, y = 0d, z = 0d },
+                normal = new { x = 0d, y = -1d, z = 0d },
+                points = new[]
+                {
+                    new { x = 0d, y = 0d }, new { x = 12d, y = 0d }, new { x = 12d, y = 6d }, new { x = 0d, y = 6d },
+                },
+            },
+            depthMm,
+        }, JsonOptions);
+
+    private static string ManualMouseFaceSketchExtrudeAddRequest(string inputSlot, string digest, double depthMm) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualSketchExtrudeAdd",
+            source = new { inputSlot, expectedDigest = digest },
+            profile = new
+            {
+                kind = "polygon",
+                originMm = new { x = 0d, y = 0d, z = 30d },
+                xDirection = new { x = 1d, y = 0d, z = 0d },
+                normal = new { x = 0d, y = 0d, z = 1d },
+                points = new[]
+                {
+                    new { x = 5d, y = 5d }, new { x = 15d, y = 5d }, new { x = 15d, y = 15d }, new { x = 5d, y = 15d },
+                },
+            },
+            depthMm,
+        }, JsonOptions);
+
+    private static string ManualMouseFilletedSketchExtrudeAddRequest(double depthMm) =>
+        JsonSerializer.Serialize(new
+        {
+            schema = RequestSchema,
+            operation = "manualSketchExtrudeAdd",
+            profile = new
+            {
+                kind = "filletedPolygon",
+                originMm = new { x = 0d, y = 0d, z = 0d },
+                xDirection = new { x = 1d, y = 0d, z = 0d },
+                normal = new { x = 0d, y = 0d, z = 1d },
+                points = new[]
+                {
+                    new { x = 0d, y = 0d }, new { x = 20d, y = 0d }, new { x = 20d, y = 10d }, new { x = 0d, y = 10d },
+                },
+                cornerRadiiMm = new[] { 2d, 0d, 0d, 0d },
+            },
+            depthMm,
+        }, JsonOptions);
+
     private static string ManualHoleCutRequest(
         string inputSlot, string digest, double radiusMm, double depthMm, double xMm, double yMm, double zMm) =>
         JsonSerializer.Serialize(new
@@ -1601,7 +1757,22 @@ if not writer.Transfer(document) or writer.Write("/photon-output/assembly.step")
         if (expectedProfileKind is null) return;
         var profile = provenance.GetProperty("profile");
         Require(profile.GetProperty("kind").GetString() == expectedProfileKind, "manual profile kind drifted");
-        Require(profile.GetProperty("plane").GetString() == "xy", "manual profile plane drifted");
+        if (profile.TryGetProperty("plane", out var plane))
+        {
+            Require(plane.GetString() == "xy", "manual profile plane drifted");
+            return;
+        }
+        RequireExactKeys(profile, expectedProfileKind == "filletedPolygon"
+            ? ["cornerRadiiMm", "kind", "normal", "originMm", "points", "xDirection"]
+            : ["kind", "normal", "originMm", "points", "xDirection"]);
+        RequireExactKeys(profile.GetProperty("originMm"), "x", "y", "z");
+        RequireExactKeys(profile.GetProperty("xDirection"), "x", "y", "z");
+        RequireExactKeys(profile.GetProperty("normal"), "x", "y", "z");
+        if (expectedProfileKind == "filletedPolygon")
+        {
+            var radii = profile.GetProperty("cornerRadiiMm");
+            Require(radii.ValueKind == JsonValueKind.Array && radii.GetArrayLength() == profile.GetProperty("points").GetArrayLength(), "manual fillet radii provenance drifted");
+        }
     }
 
     private static void ValidateManualPatternProvenance(

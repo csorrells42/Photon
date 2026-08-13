@@ -14,14 +14,14 @@ internal sealed record VerifiedManualEvidence(
 
 internal static class ManualEvidenceVerifier
 {
-    internal const string AcceptedSelectionSha256 = "sha256:bc66e112c2b9f9b404ce156a596c2d898a33901a93ee557f9eceb5c5f72d34e8";
-    private const string AcceptedNormalizedSelectionSha256 = "sha256:beecd99d33b73aee00a4ff65e2b5b53fb61546c93ed731364af7e633f20f1fe6";
-    internal const string AcceptedReceiptSha256 = "sha256:8efb4c11381c5a5daef860d88e0b0ebfc876a608d503181cbbf0045bb3833884";
-    internal const string AcceptedDerivedImageId = "sha256:11225c611b86551574636a1331adb6320217c62d11b7a6992ed15d4b0cc37760";
+    internal const string AcceptedSelectionSha256 = "sha256:6c4975196d2cee7eb94ba84c8cea90a80638f844519670141fc2ba6d15c53a82";
+    private const string AcceptedNormalizedSelectionSha256 = "sha256:6c4975196d2cee7eb94ba84c8cea90a80638f844519670141fc2ba6d15c53a82";
+    internal const string AcceptedReceiptSha256 = "sha256:988c067ac29c5daf312c676bf65febcdfedc4f99459a2070157817b25a839965";
+    internal const string AcceptedDerivedImageId = "sha256:f84e4993c74cf87463175744d6da09e16f87038a924b013709078d1b038230c0";
     internal const string AcceptedBaseImageId = "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703";
-    internal const string AcceptedAdapterSha256 = "sha256:b0594ef6364b8dde1983df8a5f0f364c54ac3d124fd3ef922f236dc954a32dc8";
-    internal const string AcceptedRequestSchemaSha256 = "sha256:b94c5da7099e524c8596a4201b6f045f2561bae18e235883b81161e0d05f1a72";
-    internal const string AcceptedResponseSchemaSha256 = "sha256:eb1250be329a51bb5dd94b0697232b746983404a7c594832c5d02dab55099497";
+    internal const string AcceptedAdapterSha256 = "sha256:c322688d06fc5c796aa6b99920f1efaa7af43f6e46ccadf01d64c408c550c835";
+    internal const string AcceptedRequestSchemaSha256 = "sha256:93b0e36cd8310651ae530c77aae994a11a2d3fbab6b03d9ef1a30193a0f392f9";
+    internal const string AcceptedResponseSchemaSha256 = "sha256:740bf73ee0961efc07e31c290966124af78fddb0f352009c5f48571d9581ab9a";
     private const int MaximumEvidenceBytes = 1024 * 1024;
 
     internal static async ValueTask<VerifiedManualEvidence> VerifyAsync(

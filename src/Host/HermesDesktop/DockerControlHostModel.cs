@@ -15,6 +15,7 @@ internal enum DockerControlMutationKind
     StartService,
     StopService,
     RestartService,
+    RepairService,
     UnloadModel,
 }
 
@@ -107,6 +108,18 @@ internal interface IDockerControlRunner : IAsyncDisposable
     Task<DockerControlHostSnapshot> CaptureAsync(CancellationToken cancellationToken);
     Task<DockerControlLogs> ReadLogsAsync(DockerControlService service, int maximumLines, CancellationToken cancellationToken);
     Task<DockerControlMutationOutcome> ExecuteAsync(DockerControlMutation mutation, CancellationToken cancellationToken);
+}
+
+internal interface IDockerControlAvailability
+{
+    bool IsAvailable { get; }
+}
+
+internal interface IStreamingDockerControlRunner
+{
+    Task<DockerControlHostSnapshot> CaptureStreamingAsync(
+        Action<DockerControlHostSnapshot> observe,
+        CancellationToken cancellationToken);
 }
 
 internal sealed class DockerControlUnavailableException(string code, string safeMessage) : Exception(safeMessage)

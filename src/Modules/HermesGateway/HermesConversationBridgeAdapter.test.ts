@@ -76,7 +76,7 @@ describe('Hermes conversation bridge adapter', () => {
     const submitTurn = vi.fn(async () => snapshot)
     const observe = vi.fn(async () => snapshot)
     try {
-      const unregister = registerHermesConversationBridge({ snapshot: () => snapshot, submitTurn, interrupt: async () => snapshot, observe })
+      const unregister = registerHermesConversationBridge({ snapshot: () => snapshot, submitTurn, interrupt: async () => snapshot, newSession: async () => snapshot, observe })
       expect(listener).not.toBeNull()
       const dispatch = listener as unknown as (event: MessageEvent) => void
       dispatch({ data: {

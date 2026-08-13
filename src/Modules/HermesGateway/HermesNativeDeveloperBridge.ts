@@ -4,8 +4,9 @@ import type {
   DeveloperConfiguration,
   DeveloperServicesDescription,
 } from '../DeveloperServices/DesktopDeveloperServicesClient'
+import { runWindowsAdministratorOperation } from './DesktopWindowsAdministratorClient'
 
-type NativeDeveloperOperation = 'describe' | 'build' | 'analyze' | 'targets' | 'run' | 'stop'
+type NativeDeveloperOperation = 'describe' | 'build' | 'analyze' | 'targets' | 'run' | 'stop' | 'administrator'
 
 type NativeDeveloperClient = {
   describe(): Promise<DeveloperServicesDescription>
@@ -38,6 +39,8 @@ type NativeDeveloperRequest = {
   programPath?: string
   arguments: string[]
   configuration: DeveloperConfiguration
+  script?: string
+  reason?: string
 }
 
 function text(value: unknown, maximum: number) {
@@ -73,7 +76,7 @@ export function normalizeNativeDeveloperRequest(event: HermesGatewayEvent): Nati
   const operation = text(event.payload?.action, 32).toLowerCase()
   const configuration = event.payload?.configuration === 'Release' ? 'Release' : 'Debug'
   if (!/^[a-f0-9]{8}$/i.test(requestId)
-    || !['describe', 'build', 'analyze', 'targets', 'run', 'stop'].includes(operation)) return null
+    || !['describe', 'build', 'analyze', 'targets', 'run', 'stop', 'administrator'].includes(operation)) return null
   const args = programArguments(event.payload?.arguments)
   if (args === null) return null
   if (operation === 'describe' || operation === 'targets' || operation === 'stop') {
@@ -82,6 +85,13 @@ export function normalizeNativeDeveloperRequest(event: HermesGatewayEvent): Nati
   if (operation === 'run') {
     const program = programPath(event.payload?.program_path)
     return program ? { requestId, operation, programPath: program, arguments: args, configuration } : null
+  }
+  if (operation === 'administrator') {
+    const script = text(event.payload?.script, 16 * 1_024)
+    const reason = text(event.payload?.reason, 512)
+    return script && reason
+      ? { requestId, operation, arguments: args, configuration, script, reason }
+      : null
   }
   const project = workspacePath(event.payload?.project_path)
   return project ? { requestId, operation: operation as NativeDeveloperOperation, projectPath: project, arguments: args, configuration } : null
@@ -173,6 +183,17 @@ export async function handleNativeDeveloperRequest(
         state: snapshot.state,
         output: text(snapshot.output, 256 * 1024),
         error: snapshot.error || undefined,
+      }
+    } else if (request.operation === 'administrator') {
+      const elevated = await runWindowsAdministratorOperation(request.script!, request.reason!)
+      result = {
+        ok: elevated.succeeded,
+        operation: 'administrator',
+        code: elevated.code,
+        message: elevated.message,
+        ...(elevated.exitCode === undefined ? {} : { exitCode: elevated.exitCode }),
+        output: elevated.output,
+        outputTruncated: elevated.outputTruncated,
       }
     } else {
       await debuggerController.disconnect()

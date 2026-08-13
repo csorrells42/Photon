@@ -17,7 +17,8 @@ const snapshot = {
 
 describe('HermesSpeechOutputLiveAdapter', () => {
   it('normalizes only an exact local Kokoro snapshot', () => {
-    expect(normalizeHermesSpeechOutputSnapshot(snapshot)).toEqual(snapshot)
+    expect(normalizeHermesSpeechOutputSnapshot(snapshot)).toMatchObject(snapshot)
+    expect(normalizeHermesSpeechOutputSnapshot(snapshot).voices.map((voice) => voice.id)).toEqual(['af_heart', 'am_michael'])
     expect(() => normalizeHermesSpeechOutputSnapshot({
       ...snapshot,
       settings: { ...snapshot.settings, provider: 'cloud' },
@@ -28,11 +29,24 @@ describe('HermesSpeechOutputLiveAdapter', () => {
     const fetcher = vi.fn(async () => response(snapshot))
     const adapter = new HermesSpeechOutputLiveAdapter(fetcher)
 
-    await expect(adapter.read('work:voice')).resolves.toEqual(snapshot)
+    await expect(adapter.read('work:voice')).resolves.toMatchObject(snapshot)
     expect(fetcher).toHaveBeenCalledWith(
       '/api/audio/local-voice/settings?profile=work%3Avoice',
       expect.objectContaining({ credentials: 'include' }),
     )
+  })
+
+  it('projects the full pinned voice inventory supplied by the local host', () => {
+    const normalized = normalizeHermesSpeechOutputSnapshot({
+      ...snapshot,
+      voices: ['af_heart', 'am_michael', 'jf_gongitsune', 'zf_xiaoxiao'],
+    })
+
+    expect(normalized.voices).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'af_heart', description: 'American English female voice' }),
+      expect.objectContaining({ id: 'jf_gongitsune', description: 'Japanese female voice' }),
+      expect.objectContaining({ id: 'zf_xiaoxiao', description: 'Mandarin Chinese female voice' }),
+    ]))
   })
 
   it('previews only a validated local WAV using exact voice controls', async () => {
@@ -61,6 +75,25 @@ describe('HermesSpeechOutputLiveAdapter', () => {
       }),
     }))
     expect(playAudio).toHaveBeenCalledWith('data:audio/wav;base64,UklGRg==')
+  })
+
+  it('plays a valid local Kokoro MP3 returned by an older runtime', async () => {
+    const playAudio = vi.fn(async () => undefined)
+    const fetcher = vi.fn(async () => response({
+      ok: true,
+      provider: 'kokoro',
+      mime_type: 'audio/mpeg',
+      data_url: 'data:audio/mpeg;base64,SUQzBA==',
+    }))
+    const adapter = new HermesSpeechOutputLiveAdapter(fetcher, playAudio)
+
+    await expect(adapter.preview({
+      contractVersion: 1,
+      profileId: 'default',
+      requestId: 'preview:legacy-mp3',
+      settings: snapshot.settings,
+    }, new AbortController().signal)).resolves.toEqual({ status: 'accepted', reason: 'preview_complete' })
+    expect(playAudio).toHaveBeenCalledWith('data:audio/mpeg;base64,SUQzBA==')
   })
 
   it('saves exact revision-bound settings and projects stale revisions', async () => {

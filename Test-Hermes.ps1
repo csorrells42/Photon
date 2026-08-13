@@ -3,6 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $bundleRoot = $PSScriptRoot
+$logsPath = Join-Path $bundleRoot 'logs'
 $settingsPath = Join-Path $bundleRoot 'launcher.settings.json'
 $identityPath = Join-Path $bundleRoot 'logs\runtime-identity.json'
 $checks = [Collections.Generic.List[object]]::new()
@@ -31,12 +32,21 @@ function Test-OwnedPort {
 
 $requiredFiles = @(
     'docker-compose.yml', 'launcher.settings.json', 'Launch-Hermes.ps1', 'Shutdown-Hermes.ps1',
-    'Update-Hermes.ps1', 'Test-Hermes.ps1', 'Show-HermesBridge.ps1', 'src\package-lock.json',
+    'Update-Hermes.ps1', 'Test-Hermes.ps1', 'Show-HermesBridge.ps1', 'Photon-McpGateway.ps1',
+    'mcp-profiles\profiles.lock.json', 'mcp-profiles\photon-engineering-discovery.yaml',
+    'mcp-profiles\photon-relentless-repair.yaml', 'src\package-lock.json',
     'tests\Install-Hermes.Smoke.ps1', 'tests\Shutdown-Hermes.Smoke.ps1', 'tests\Update-Hermes.Smoke.ps1'
 )
 $missingFiles = @($requiredFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $bundleRoot $_) -PathType Leaf) })
 if ($missingFiles.Count) { Add-Check 'Bundle files' 'ERROR' ("Missing: " + ($missingFiles -join ', ')) }
 else { Add-Check 'Bundle files' 'OK' "$($requiredFiles.Count) required files are present." }
+
+try {
+    . (Join-Path $bundleRoot 'Photon-McpGateway.ps1')
+    Assert-PhotonMcpProfileAssets | Out-Null
+    Add-Check 'Photon MCP profiles' 'OK' 'Both Docker MCP profiles match their SHA-256 receipts.'
+}
+catch { Add-Check 'Photon MCP profiles' 'ERROR' $_.Exception.Message }
 
 $settings = $null
 try {
@@ -122,7 +132,27 @@ try {
 catch { Add-Check 'Hermes gateway' 'ERROR' 'The status endpoint is not ready on 127.0.0.1:9119.' }
 
 Test-OwnedPort -Component 'Serena MCP' -Port 9121 -ExpectedCommandPattern 'serena|start-mcp-server'
+Test-OwnedPort -Component 'Photon Docker MCP' -Port 9131 -ExpectedCommandPattern 'docker-mcp|mcp gateway run'
 Test-OwnedPort -Component 'Workbench web' -Port 4173 -ExpectedCommandPattern 'vite|4173'
+
+if ($dockerReady -and $containerState -eq 'running') {
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $mcpOutput = @(& $docker.Source exec hermes hermes mcp test photon_docker_gateway 2>$null)
+        $mcpExitCode = $LASTEXITCODE
+        $mcpText = $mcpOutput -join [Environment]::NewLine
+        $trust = ((& $docker.Source exec hermes hermes config get mcp_servers.photon_docker_gateway.trust 2>$null) -join '').Trim()
+    }
+    finally { $ErrorActionPreference = $previousErrorAction }
+    if ($mcpExitCode -eq 0 -and $mcpText -match 'Connected' -and $mcpText -match 'Tools discovered:\s*[1-9][0-9]*' -and $trust -ceq 'untrusted') {
+        Add-Check 'Photon MCP in Hermes' 'OK' 'Hermes discovered authenticated Docker tools with approval gating enabled.'
+    } else {
+        Add-Check 'Photon MCP in Hermes' 'ERROR' 'Hermes could not verify the authenticated, approval-gated Docker MCP catalog.'
+    }
+} else {
+    Add-Check 'Photon MCP in Hermes' 'ERROR' 'Docker MCP readiness cannot be checked until Hermes is running.'
+}
 
 try {
     $bridgeHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:8972/health' -TimeoutSec 5

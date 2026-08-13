@@ -1,18 +1,68 @@
-import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Globe2, LoaderCircle, MapPinned, Plus, RotateCw, Route, Search, X } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ArrowLeft, ArrowRight, Bookmark, ChevronDown, ChevronUp, Globe2, LoaderCircle, MapPinned, Plus, RotateCw, Route, Search, Star, Trash2, X } from 'lucide-react'
 import { desktopBrowserClient, tryNormalizeBrowserAddress, type BrowserSurfaceState } from './DesktopBrowserClient'
 import './BrowserWorkspace.css'
 
 export type BrowserTab = { id: string; url: string; title: string; state?: BrowserSurfaceState; pendingOpenRequestId?: string; requestKey?: string }
-export type BrowserOpenRequest = { nonce: number; url: string; label?: string; key?: string }
+export type BrowserOpenRequest = { nonce: number; url: string; label?: string; key?: string; bookmark?: boolean }
+export type BrowserBookmark = { id: string; title: string; url: string }
+export type BrowserWorkspaceMode = 'browser' | 'maps'
 export type GoogleMapsTravelMode = 'driving' | 'walking' | 'bicycling' | 'transit'
 export const HERMES_HELP_BROWSER_REQUEST = Object.freeze({
   key: 'hermes-help',
   label: 'Hermes Help',
   url: 'https://hermes-agent.nousresearch.com/docs/',
+  bookmark: true,
 })
 
 const googleMapsTravelModes = new Set<GoogleMapsTravelMode>(['driving', 'walking', 'bicycling', 'transit'])
+const browserBookmarksStorageKey = 'phos.browser.bookmarks.v1'
+const maximumBrowserBookmarks = 256
+
+function bookmarkableUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null
+  } catch {
+    return null
+  }
+}
+
+function loadBrowserBookmarks(): BrowserBookmark[] {
+  try {
+    const raw = window.localStorage.getItem(browserBookmarksStorageKey)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const seen = new Set<string>()
+    const bookmarks: BrowserBookmark[] = []
+    for (const candidate of parsed) {
+      if (!candidate || typeof candidate !== 'object') continue
+      const value = candidate as Partial<BrowserBookmark>
+      const url = typeof value.url === 'string' ? bookmarkableUrl(value.url) : null
+      if (!url || seen.has(url)) continue
+      seen.add(url)
+      bookmarks.push({
+        id: typeof value.id === 'string' && value.id.length <= 128 ? value.id : crypto.randomUUID(),
+        title: typeof value.title === 'string' && value.title.trim() ? value.title.trim().slice(0, 256) : new URL(url).hostname,
+        url,
+      })
+      if (bookmarks.length >= maximumBrowserBookmarks) break
+    }
+    return bookmarks
+  } catch {
+    return []
+  }
+}
+
+function upsertBrowserBookmark(current: BrowserBookmark[], rawUrl: string, rawTitle?: string) {
+  const url = bookmarkableUrl(rawUrl)
+  if (!url) return current
+  const title = rawTitle?.trim().slice(0, 256) || new URL(url).hostname
+  const existing = current.find((bookmark) => bookmark.url === url)
+  if (existing) return current.map((bookmark) => bookmark.id === existing.id ? { ...bookmark, title } : bookmark)
+  return [{ id: crypto.randomUUID(), title, url }, ...current].slice(0, maximumBrowserBookmarks)
+}
 
 function boundedMapsText(value: string, required: boolean) {
   const text = value.normalize('NFKC').trim()
@@ -46,8 +96,8 @@ export function browserRequestTabId(tabs: readonly BrowserTab[], request: Browse
   return tabs.find((tab) => tab.requestKey === request.key)?.id ?? null
 }
 
-export function BrowserMapsPanel({ onNavigate, onError, initiallyExpanded = false }: { onNavigate: (url: string) => void; onError: (message: string) => void; initiallyExpanded?: boolean }) {
-  const [expanded, setExpanded] = useState(initiallyExpanded)
+export function BrowserMapsPanel({ onNavigate, onError, alwaysExpanded = false, initiallyExpanded = false }: { onNavigate: (url: string) => void; onError: (message: string) => void; alwaysExpanded?: boolean; initiallyExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(alwaysExpanded || initiallyExpanded)
   const [place, setPlace] = useState('')
   const [origin, setOrigin] = useState('')
   const [destination, setDestination] = useState('')
@@ -68,8 +118,8 @@ export function BrowserMapsPanel({ onNavigate, onError, initiallyExpanded = fals
   }
 
   return <section className={`browser-maps ${expanded ? 'expanded' : ''}`} aria-label="Google Maps tools">
-    <button className="browser-maps-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-      <MapPinned size={14} /><span><strong>Google Maps</strong><small>Search places or plan a route in this browser</small></span>{expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+    <button className="browser-maps-toggle" type="button" aria-expanded={alwaysExpanded || expanded} disabled={alwaysExpanded} onClick={() => setExpanded((value) => !value)}>
+      <MapPinned size={14} /><span><strong>Google Maps</strong><small>Search places or plan a route in this browser</small></span>{!alwaysExpanded && (expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />)}
     </button>
     {expanded && <div className="browser-maps-controls">
       <form onSubmit={(event) => { event.preventDefault(); searchMaps() }}>
@@ -88,22 +138,56 @@ export function BrowserMapsPanel({ onNavigate, onError, initiallyExpanded = fals
 }
 
 const newTab = (url = 'about:blank'): BrowserTab => ({ id: crypto.randomUUID(), url, title: 'New tab' })
+const googleMapsTabUrl = 'https://www.google.com/maps/'
+const googleMapsTabKey = 'google-maps'
 let retainedTabs: BrowserTab[] | null = null
-let retainedActiveId: string | null = null
+const retainedActiveIds: Record<BrowserWorkspaceMode, string | null> = { browser: null, maps: null }
 
-export function BrowserWorkspace({ openRequest, onOpenRequestHandled }: { openRequest?: BrowserOpenRequest | null; onOpenRequestHandled?: (nonce: number) => void }) {
+export function BrowserWorkspace({ mode = 'browser', openRequest, onOpenRequestHandled }: { mode?: BrowserWorkspaceMode; openRequest?: BrowserOpenRequest | null; onOpenRequestHandled?: (nonce: number) => void }) {
   const [tabs, setTabs] = useState<BrowserTab[]>(() => retainedTabs ?? [newTab()])
-  const [activeId, setActiveId] = useState(() => retainedActiveId && tabs.some((tab) => tab.id === retainedActiveId) ? retainedActiveId : tabs[0].id)
+  const [activeId, setActiveId] = useState(() => {
+    const retainedActiveId = retainedActiveIds[mode]
+    return retainedActiveId && tabs.some((tab) => tab.id === retainedActiveId) ? retainedActiveId : tabs[0].id
+  })
   const [address, setAddress] = useState('')
   const [error, setError] = useState('')
+  const [externalAuthentication, setExternalAuthentication] = useState<{ tabId: string; message: string } | null>(null)
+  const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>(loadBrowserBookmarks)
+  const [bookmarksOpen, setBookmarksOpen] = useState(() => loadBrowserBookmarks().length > 0)
   const surfaceRef = useRef<HTMLDivElement>(null)
+  const tabStripRef = useRef<HTMLDivElement>(null)
   const handledOpenRequest = useRef<number | null>(null)
+  const activeIdRef = useRef(activeId)
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0]
 
-  function openTab(rawUrl = 'about:blank') {
+  useEffect(() => {
+    if (mode !== 'maps') return
+    const existing = tabs.find((tab) => tab.requestKey === googleMapsTabKey)
+    if (existing) {
+      setActiveId(existing.id)
+      setAddress(existing.url)
+      return
+    }
+    const mapsTab = { ...newTab(googleMapsTabUrl), title: 'Google Maps', requestKey: googleMapsTabKey }
+    setTabs((current) => current.some((tab) => tab.requestKey === googleMapsTabKey) ? current : [...current, mapsTab])
+    setActiveId(mapsTab.id)
+    setAddress(mapsTab.url)
+  }, [mode])
+
+  useEffect(() => { activeIdRef.current = activeId }, [activeId])
+
+  function openTab(rawUrl = 'about:blank', requestKey?: string, label?: string) {
     const url = tryNormalizeBrowserAddress(rawUrl)
-    if (!url) { setError('That address is not a supported HTTP or HTTPS destination.'); return }
-    const tab = newTab(url)
+    if (!url) { setError('That address could not be opened.'); return }
+    if (requestKey) {
+      const existing = tabs.find((tab) => tab.requestKey === requestKey)
+      if (existing) {
+        setActiveId(existing.id)
+        setAddress(existing.url === 'about:blank' ? '' : existing.url)
+        return
+      }
+    }
+    const tab = { ...newTab(url), ...(requestKey ? { requestKey } : {}), ...(label ? { title: label.slice(0, 256) } : {}) }
     setTabs((current) => [...current, tab])
     setActiveId(tab.id)
     setAddress(url === 'about:blank' ? '' : url)
@@ -129,20 +213,35 @@ export function BrowserWorkspace({ openRequest, onOpenRequestHandled }: { openRe
 
   useEffect(() => {
     retainedTabs = tabs
-    retainedActiveId = activeId
-  }, [activeId, tabs])
+    retainedActiveIds[mode] = activeId
+  }, [activeId, mode, tabs])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(browserBookmarksStorageKey, JSON.stringify(bookmarks))
+    } catch {
+      // A full or disabled browser store must not make browsing unavailable.
+    }
+  }, [bookmarks])
 
   useEffect(() => {
     const removeState = desktopBrowserClient.onState((state) => {
-      setTabs((current) => current.map((tab) => tab.id === state.tabId ? { ...tab, url: state.url, title: state.title || tab.title, state } : tab))
-      if (state.tabId === activeId && state.url !== 'about:blank') setAddress(state.url)
+      // `state.url` is intentionally only a display-safe projection from the
+      // native host.  Keep the tab's requested URL so an existing Google Maps
+      // route (or any deep link) survives a resize, panel remount, or tab switch.
+      setTabs((current) => current.map((tab) => tab.id === state.tabId ? { ...tab, title: state.title || tab.title, state } : tab))
+      if (state.tabId === activeIdRef.current && state.url !== 'about:blank') {
+        const requested = retainedTabs?.find((tab) => tab.id === state.tabId)?.url
+        setAddress(requested && requested !== 'about:blank' ? requested : state.url)
+      }
     })
     const removeOpen = desktopBrowserClient.onOpenRequested(openRequestedTab)
+    const removeExternalAuthentication = desktopBrowserClient.onExternalAuthentication((request) => {
+      if (request.tabId === activeIdRef.current) setExternalAuthentication(request)
+    })
     const removeError = desktopBrowserClient.onError(setError)
-    const openForPhoton = (event: Event) => openTab(String((event as CustomEvent<unknown>).detail ?? ''))
-    window.addEventListener('photos-browser-open', openForPhoton)
-    return () => { removeState(); removeOpen(); removeError(); window.removeEventListener('photos-browser-open', openForPhoton); desktopBrowserClient.hide() }
-  }, [activeId])
+    return () => { removeState(); removeOpen(); removeExternalAuthentication(); removeError() }
+  }, [])
 
   useEffect(() => {
     if (!openRequest || handledOpenRequest.current === openRequest.nonce) return
@@ -155,14 +254,18 @@ export function BrowserWorkspace({ openRequest, onOpenRequestHandled }: { openRe
     }
     const existingId = browserRequestTabId(tabs, openRequest)
     if (existingId) {
-      const existing = tabs.find((tab) => tab.id === existingId)!
+      setTabs((current) => current.map((tab) => tab.id === existingId ? { ...tab, url, title: openRequest.label?.trim().slice(0, 256) || tab.title } : tab))
       setActiveId(existingId)
-      setAddress(existing.url === 'about:blank' ? '' : existing.url)
+      setAddress(url === 'about:blank' ? '' : url)
     } else {
       const tab = { ...newTab(url), title: openRequest.label?.trim().slice(0, 256) || 'New tab', requestKey: openRequest.key }
       setTabs((current) => [...current, tab])
       setActiveId(tab.id)
       setAddress(url === 'about:blank' ? '' : url)
+    }
+    if (openRequest.bookmark) {
+      setBookmarks((current) => upsertBrowserBookmark(current, url, openRequest.label))
+      setBookmarksOpen(true)
     }
     onOpenRequestHandled?.(openRequest.nonce)
   }, [onOpenRequestHandled, openRequest, tabs])
@@ -176,45 +279,116 @@ export function BrowserWorkspace({ openRequest, onOpenRequestHandled }: { openRe
     }
   }, [activeId])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const surface = surfaceRef.current
     if (!surface || !active) return
-    const place = () => desktopBrowserClient.show(surface.getBoundingClientRect(), active.id, active.url)
-    place()
-    const observer = new ResizeObserver(place)
+    let frame = 0
+    const place = () => {
+      frame = 0
+      if (!surface.isConnected) return
+      desktopBrowserClient.show(surface.getBoundingClientRect(), active.id, active.url)
+    }
+    const schedulePlace = () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(place)
+    }
+    schedulePlace()
+    const observer = new ResizeObserver(schedulePlace)
     observer.observe(surface)
-    window.addEventListener('resize', place)
-    return () => { observer.disconnect(); window.removeEventListener('resize', place) }
+    window.addEventListener('resize', schedulePlace)
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      observer.disconnect()
+      window.removeEventListener('resize', schedulePlace)
+    }
   }, [activeId, active?.url])
+
+  useEffect(() => () => desktopBrowserClient.hide(), [])
+
+  useEffect(() => {
+    const selected = tabStripRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    selected?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeId, tabs.length])
 
   function navigate() {
     const url = tryNormalizeBrowserAddress(address)
-    if (!url) { setError('That address is not a supported HTTP or HTTPS destination.'); return }
+    if (!url) { setError('That address could not be opened.'); return }
     navigateTo(url)
   }
 
   function navigateTo(url: string) {
     setError('')
+    setExternalAuthentication(null)
     setAddress(url === 'about:blank' ? '' : url)
     setTabs((current) => current.map((tab) => tab.id === activeId ? { ...tab, url } : tab))
     desktopBrowserClient.navigate(activeId, url)
   }
 
+  function bookmarkCurrentPage() {
+    if (!active) return
+    setBookmarks((current) => upsertBrowserBookmark(current, active.url, active.title))
+    setBookmarksOpen(true)
+  }
+
+  function retryActivePage() {
+    if (!active) return
+    setError('')
+    setExternalAuthentication(null)
+    desktopBrowserClient.reload(active.id)
+  }
+
   if (!desktopBrowserClient.available) return <main className="browser-workspace unavailable"><Globe2 size={34} /><strong>Browser tabs require the desktop app</strong><p>External sites stay isolated from Workbench native capabilities.</p></main>
 
-  return <main className="browser-workspace">
-    <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
+  return <main className={`browser-workspace ${mode === 'maps' ? 'maps-workspace' : ''}`}>
+    {mode === 'browser' && <div className="browser-tabs" ref={tabStripRef} role="tablist" aria-label="Browser tabs">
       {tabs.map((tab) => <button className={tab.id === activeId ? 'active' : ''} role="tab" aria-selected={tab.id === activeId} key={tab.id} onClick={() => setActiveId(tab.id)}><Globe2 size={12} /><span>{tab.title || 'New tab'}</span>{tab.state?.loading && <LoaderCircle className="spin" size={11} />}<i role="button" aria-label={`Close ${tab.title || 'tab'}`} onClick={(event) => { event.stopPropagation(); closeTab(tab.id) }}><X size={11} /></i></button>)}
       <button className="browser-new-tab" aria-label="New browser tab" onClick={() => openTab()}><Plus size={14} /></button>
+    </div>}
+    {mode === 'browser' && <div className="browser-toolbar-region">
+      <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigate() }}>
+        <button type="button" aria-label="Back" disabled={!active?.state?.canGoBack} onClick={() => desktopBrowserClient.back(activeId)}><ArrowLeft size={15} /></button>
+        <button type="button" aria-label="Forward" disabled={!active?.state?.canGoForward} onClick={() => desktopBrowserClient.forward(activeId)}><ArrowRight size={15} /></button>
+        <button type="button" aria-label={active?.state?.loading ? 'Stop' : 'Reload'} onClick={() => active?.state?.loading ? desktopBrowserClient.stop(activeId) : desktopBrowserClient.reload(activeId)}>{active?.state?.loading ? <X size={14} /> : <RotateCw size={14} />}</button>
+        <label><Search size={14} /><input aria-label="Address or search" placeholder="Search or enter an address" value={address} onChange={(event) => setAddress(event.target.value)} /></label>
+        {mode === 'browser' && <>
+          <button type="button" aria-label="Bookmark this page" disabled={!active || !bookmarkableUrl(active.url)} onClick={bookmarkCurrentPage}><Star size={14} fill={bookmarks.some((bookmark) => bookmark.url === bookmarkableUrl(active?.url ?? '')) ? 'currentColor' : 'none'} /></button>
+          <button type="button" aria-label="Show bookmarks" aria-expanded={bookmarksOpen} onClick={() => setBookmarksOpen((value) => !value)}><Bookmark size={14} /></button>
+        </>}
+      </form>
+      {mode === 'browser' && bookmarksOpen && <section className="browser-bookmarks" aria-label="Browser bookmarks">
+        <header><strong>Bookmarks</strong><span>{bookmarks.length}</span></header>
+        {bookmarks.length === 0
+          ? <p>Bookmark a page and it will remain here after Photon restarts.</p>
+          : <div>{bookmarks.map((bookmark) => <article key={bookmark.id}>
+              <button type="button" onClick={() => navigateTo(bookmark.url)}><Globe2 size={12} /><span><strong>{bookmark.title}</strong><small>{new URL(bookmark.url).hostname}</small></span></button>
+              <button type="button" aria-label={`Remove ${bookmark.title}`} onClick={() => setBookmarks((current) => current.filter((candidate) => candidate.id !== bookmark.id))}><Trash2 size={12} /></button>
+            </article>)}</div>}
+      </section>}
+    </div>}
+    {mode === 'maps' && <BrowserMapsPanel onNavigate={navigateTo} onError={setError} alwaysExpanded />}
+    {error && <div className="browser-error" role="status">{error}<button aria-label="Dismiss browser error" onClick={() => setError('')}><X size={12} /></button></div>}
+    <div className="browser-native-surface" ref={surfaceRef}>
+      {externalAuthentication
+        ? <section className="browser-recovery" aria-live="polite">
+            <Globe2 size={34} />
+            <strong>Complete Google sign-in in your browser</strong>
+            <p>{externalAuthentication.message} Photon does not receive your Google password or browser session.</p>
+            <div>
+              <button type="button" onClick={() => navigateTo(active?.url ?? 'about:blank')}><ArrowLeft size={13} /> Return to Claude</button>
+              <button type="button" onClick={() => setExternalAuthentication(null)}><X size={13} /> I’ll finish later</button>
+            </div>
+          </section>
+        : error
+        ? <section className="browser-recovery" aria-live="polite">
+            <Globe2 size={34} />
+            <strong>This page is unavailable</strong>
+            <p>{error}</p>
+            <div>
+              <button type="button" onClick={retryActivePage}><RotateCw size={13} /> Retry page</button>
+              <button type="button" onClick={() => { setError(''); setAddress('') }}><Search size={13} /> Enter another address</button>
+            </div>
+          </section>
+        : active?.url === 'about:blank' && <div className="browser-blank"><Globe2 size={32} /><strong>Browse from the Workbench</strong><small>Sites are isolated from files, terminal, credentials, and agent bridges.</small></div>}
     </div>
-    <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigate() }}>
-      <button type="button" aria-label="Back" disabled={!active?.state?.canGoBack} onClick={() => desktopBrowserClient.back(activeId)}><ArrowLeft size={15} /></button>
-      <button type="button" aria-label="Forward" disabled={!active?.state?.canGoForward} onClick={() => desktopBrowserClient.forward(activeId)}><ArrowRight size={15} /></button>
-      <button type="button" aria-label={active?.state?.loading ? 'Stop' : 'Reload'} onClick={() => active?.state?.loading ? desktopBrowserClient.stop(activeId) : desktopBrowserClient.reload(activeId)}>{active?.state?.loading ? <X size={14} /> : <RotateCw size={14} />}</button>
-      <label><Search size={14} /><input aria-label="Address or search" placeholder="Search or enter an address" value={address} onChange={(event) => setAddress(event.target.value)} /></label>
-    </form>
-    <BrowserMapsPanel onNavigate={navigateTo} onError={setError} />
-    {error && <div className="browser-error" role="status">{error}<button onClick={() => setError('')}><X size={12} /></button></div>}
-    <div className="browser-native-surface" ref={surfaceRef}>{active?.url === 'about:blank' && <div className="browser-blank"><Globe2 size={32} /><strong>Browse from the Workbench</strong><small>Sites are isolated from files, terminal, credentials, and agent bridges.</small></div>}</div>
   </main>
 }

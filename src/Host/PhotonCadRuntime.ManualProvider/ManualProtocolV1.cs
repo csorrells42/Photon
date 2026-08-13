@@ -23,14 +23,15 @@ internal static class ManualProtocolV1
             {
                 case PhotonCadManualOperationKind.SketchExtrudeAdd:
                     writer.WriteString("operation", "manualSketchExtrudeAdd");
-                    WriteProfile(writer, RequireSketch(command));
-                    writer.WriteNumber("depthMm", RequireSketch(command).DepthMm);
+                    if (!command.CreatesEntity) WriteSource(writer, source);
+                    WriteAnyProfile(writer, command.Execution);
+                    writer.WriteNumber("depthMm", SketchDepth(command.Execution));
                     break;
                 case PhotonCadManualOperationKind.SketchExtrudeCut:
                     writer.WriteString("operation", "manualSketchExtrudeCut");
                     WriteSource(writer, source);
-                    WriteProfile(writer, RequireSketch(command));
-                    writer.WriteNumber("depthMm", RequireSketch(command).DepthMm);
+                    WriteAnyProfile(writer, command.Execution);
+                    writer.WriteNumber("depthMm", SketchDepth(command.Execution));
                     break;
                 case PhotonCadManualOperationKind.HoleCut:
                     writer.WriteString("operation", "manualHoleCut");
@@ -154,6 +155,54 @@ internal static class ManualProtocolV1
         writer.WriteEndObject();
     }
 
+    private static void WriteAnyProfile(Utf8JsonWriter writer, ManualExecutionParameters execution)
+    {
+        if (execution is ManualSketchParameters sketch)
+        {
+            WriteProfile(writer, sketch);
+            return;
+        }
+        if (execution is not ManualMouseSketchParameters mouse) throw Failure("manual_sketch_parameters_missing");
+        var mouseSketch = mouse.Sketch;
+        writer.WriteStartObject("profile");
+        writer.WriteString("kind", mouseSketch.ProfileKind);
+        WriteVector(writer, "originMm", mouseSketch.OriginXMm, mouseSketch.OriginYMm, mouseSketch.OriginZMm);
+        WriteVector(writer, "xDirection", mouseSketch.XDirectionX, mouseSketch.XDirectionY, mouseSketch.XDirectionZ);
+        WriteVector(writer, "normal", mouseSketch.NormalX, mouseSketch.NormalY, mouseSketch.NormalZ);
+        writer.WriteStartArray("points");
+        foreach (var point in mouseSketch.Points)
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("x", point.XMm);
+            writer.WriteNumber("y", point.YMm);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        if (StringComparer.Ordinal.Equals(mouseSketch.ProfileKind, "filletedPolygon"))
+        {
+            writer.WriteStartArray("cornerRadiiMm");
+            foreach (var radius in mouseSketch.CornerRadiiMm) writer.WriteNumberValue(radius);
+            writer.WriteEndArray();
+        }
+        writer.WriteEndObject();
+    }
+
+    private static void WriteVector(Utf8JsonWriter writer, string property, double x, double y, double z)
+    {
+        writer.WriteStartObject(property);
+        writer.WriteNumber("x", x);
+        writer.WriteNumber("y", y);
+        writer.WriteNumber("z", z);
+        writer.WriteEndObject();
+    }
+
+    private static double SketchDepth(ManualExecutionParameters execution) => execution switch
+    {
+        ManualSketchParameters sketch => sketch.DepthMm,
+        ManualMouseSketchParameters mouse => mouse.DepthMm,
+        _ => throw Failure("manual_sketch_parameters_missing"),
+    };
+
     private static ManualSketchParameters RequireSketch(PhotonCadManualCommand command) =>
         command.Execution as ManualSketchParameters
         ?? throw Failure("manual_sketch_parameters_missing");
@@ -166,19 +215,24 @@ internal static class ManualProtocolV1
             PhotonCadManualOperationKind.SketchExtrudeAdd => "sketchExtrudeAdd",
             PhotonCadManualOperationKind.SketchExtrudeCut => "sketchExtrudeCut",
             PhotonCadManualOperationKind.HoleCut => "holeCut",
+            PhotonCadManualOperationKind.LinearPattern => "linearPattern",
+            PhotonCadManualOperationKind.CircularPattern => "circularPattern",
             _ => throw Failure("manual_operation_not_installed"),
         });
         switch (command.Kind)
         {
             case PhotonCadManualOperationKind.SketchExtrudeAdd:
-                Exact(provenance, "generator", "kind", "profile", "depthMm");
-                ValidateProfile(provenance.GetProperty("profile"), RequireSketch(command));
-                RequireExactNumber(provenance, "depthMm", RequireSketch(command).DepthMm);
+                Exact(provenance, command.CreatesEntity
+                    ? ["generator", "kind", "profile", "depthMm"]
+                    : ["generator", "kind", "profile", "depthMm", "sourceVolumeMm3"]);
+                ValidateAnyProfile(provenance.GetProperty("profile"), command.Execution);
+                RequireExactNumber(provenance, "depthMm", SketchDepth(command.Execution));
+                if (!command.CreatesEntity) _ = Number(provenance, "sourceVolumeMm3", double.Epsilon, double.MaxValue);
                 break;
             case PhotonCadManualOperationKind.SketchExtrudeCut:
                 Exact(provenance, "generator", "kind", "profile", "depthMm", "sourceVolumeMm3");
-                ValidateProfile(provenance.GetProperty("profile"), RequireSketch(command));
-                RequireExactNumber(provenance, "depthMm", RequireSketch(command).DepthMm);
+                ValidateAnyProfile(provenance.GetProperty("profile"), command.Execution);
+                RequireExactNumber(provenance, "depthMm", SketchDepth(command.Execution));
                 _ = Number(provenance, "sourceVolumeMm3", double.Epsilon, double.MaxValue);
                 break;
             case PhotonCadManualOperationKind.HoleCut:
@@ -237,6 +291,57 @@ internal static class ManualProtocolV1
         }
         RequireString(value, "kind", expected.ProfileKind);
         RequireString(value, "plane", expected.Plane);
+    }
+
+    private static void ValidateAnyProfile(JsonElement value, ManualExecutionParameters execution)
+    {
+        if (execution is ManualSketchParameters sketch)
+        {
+            ValidateProfile(value, sketch);
+            return;
+        }
+        if (execution is not ManualMouseSketchParameters mouse) throw Failure("manual_sketch_parameters_missing");
+        var expected = mouse.Sketch;
+        Exact(value, StringComparer.Ordinal.Equals(expected.ProfileKind, "filletedPolygon")
+            ? ["cornerRadiiMm", "kind", "normal", "originMm", "points", "xDirection"]
+            : ["kind", "normal", "originMm", "points", "xDirection"]);
+        RequireString(value, "kind", expected.ProfileKind);
+        ValidateVector(value.GetProperty("originMm"), expected.OriginXMm, expected.OriginYMm, expected.OriginZMm);
+        ValidateVector(value.GetProperty("xDirection"), expected.XDirectionX, expected.XDirectionY, expected.XDirectionZ);
+        ValidateVector(value.GetProperty("normal"), expected.NormalX, expected.NormalY, expected.NormalZ);
+        var points = value.GetProperty("points");
+        if (points.ValueKind != JsonValueKind.Array || points.GetArrayLength() != expected.Points.Count)
+            throw Failure("manual_response_parameter_mismatch");
+        var index = 0;
+        foreach (var point in points.EnumerateArray())
+        {
+            Exact(point, "x", "y");
+            RequireExactNumber(point, "x", expected.Points[index].XMm);
+            RequireExactNumber(point, "y", expected.Points[index].YMm);
+            index++;
+        }
+        if (StringComparer.Ordinal.Equals(expected.ProfileKind, "filletedPolygon"))
+        {
+            var radii = value.GetProperty("cornerRadiiMm");
+            if (radii.ValueKind != JsonValueKind.Array || radii.GetArrayLength() != expected.CornerRadiiMm.Count)
+                throw Failure("manual_response_parameter_mismatch");
+            var radiusIndex = 0;
+            foreach (var radius in radii.EnumerateArray())
+            {
+                if (radius.ValueKind != JsonValueKind.Number || !radius.TryGetDouble(out var millimeters)
+                    || !double.IsFinite(millimeters) || Math.Abs(millimeters - expected.CornerRadiiMm[radiusIndex]) > 0.000000001)
+                    throw Failure("manual_response_parameter_mismatch");
+                radiusIndex++;
+            }
+        }
+    }
+
+    private static void ValidateVector(JsonElement value, double x, double y, double z)
+    {
+        Exact(value, "x", "y", "z");
+        RequireExactNumber(value, "x", x);
+        RequireExactNumber(value, "y", y);
+        RequireExactNumber(value, "z", z);
     }
 
     private static JsonDocument Parse(ReadOnlyMemory<byte> payload)

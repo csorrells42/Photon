@@ -43,6 +43,34 @@ describe('Docker Control normalization', () => {
     }
   })
 
+  it('accepts native nullable absence without weakening invalid-value rejection', () => {
+    const native = snapshot() as unknown as {
+      lastWorkflow: unknown
+      services: Array<Record<string, unknown>>
+      modelRunner: { models: Array<Record<string, unknown>> }
+    }
+    native.lastWorkflow = null
+    Object.assign(native.services[1], {
+      version: null,
+      containerId: null,
+      image: null,
+      resources: null,
+    })
+    Object.assign(native.modelRunner.models[0], {
+      size: null,
+      parameters: null,
+    })
+
+    const normalized = normalizeDockerSnapshot(native)
+    expect(normalized).not.toBeNull()
+    expect(normalized?.lastWorkflow).toBeUndefined()
+    expect(normalized?.services[1]).toMatchObject({ id: 'serena', image: undefined, resources: undefined })
+    expect(normalized?.modelRunner?.models[0]).toMatchObject({ size: undefined, parameters: undefined })
+
+    native.services[1].containerId = 'not-a-container-id'
+    expect(normalizeDockerSnapshot(native)).toBeNull()
+  })
+
   it('rejects non-loopback ports, duplicate services, invalid identity, and invented states', () => {
     const publicPort = snapshot()
     publicPort.services[0].ports[0].address = '0.0.0.0'

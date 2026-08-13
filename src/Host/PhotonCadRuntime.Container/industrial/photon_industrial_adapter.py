@@ -954,29 +954,79 @@ def _manual_profile_solid(profile_request: object, depth_value: object) -> tuple
     depth = _finite_number(depth_value, 0.000001, 1_000_000.0)
     profile = _require_object(profile_request)
     kind = profile.get("kind")
-    if profile.get("plane") != "xy":
-        raise ProtocolFailure("invalid-parameter")
     if build123d is None:
         raise ProtocolFailure("dependency-unavailable")
     try:
         with build123d.BuildPart() as part:
-            with build123d.BuildSketch(build123d.Plane.XY):
+            if "plane" in profile:
+                if profile.get("plane") != "xy":
+                    raise ProtocolFailure("invalid-parameter")
+                plane = build123d.Plane.XY
+                frame: dict[str, object] | None = None
+            else:
+                _exact_keys(profile, {"kind", "originMm", "xDirection", "normal", "points"}
+                            | ({"cornerRadiiMm"} if kind == "filletedPolygon" else set()))
+                origin = _manual_vector(profile["originMm"])
+                x_direction = _manual_unit_vector(profile["xDirection"])
+                normal = _manual_unit_vector(profile["normal"])
+                if abs(sum(x_direction[index] * normal[index] for index in range(3))) > 1e-8:
+                    raise ProtocolFailure("invalid-parameter")
+                plane = build123d.Plane(origin=origin, x_dir=x_direction, z_dir=normal)
+                frame = {
+                    "originMm": {"x": origin[0], "y": origin[1], "z": origin[2]},
+                    "xDirection": {"x": x_direction[0], "y": x_direction[1], "z": x_direction[2]},
+                    "normal": {"x": normal[0], "y": normal[1], "z": normal[2]},
+                }
+            with build123d.BuildSketch(plane):
                 if kind == "rectangle":
-                    _exact_keys(profile, {"kind", "plane", "widthMm", "heightMm"})
-                    width = _finite_number(profile["widthMm"], 0.000001, 1_000_000.0)
-                    height = _finite_number(profile["heightMm"], 0.000001, 1_000_000.0)
-                    build123d.Rectangle(width, height)
-                    provenance: dict[str, object] = {
-                        "heightMm": height,
-                        "kind": "rectangle",
-                        "plane": "xy",
-                        "widthMm": width,
-                    }
+                    if frame is None:
+                        _exact_keys(profile, {"kind", "plane", "widthMm", "heightMm"})
+                        width = _finite_number(profile["widthMm"], 0.000001, 1_000_000.0)
+                        height = _finite_number(profile["heightMm"], 0.000001, 1_000_000.0)
+                        build123d.Rectangle(width, height)
+                        provenance: dict[str, object] = {"heightMm": height, "kind": "rectangle", "plane": "xy", "widthMm": width}
+                    else:
+                        points = _manual_profile_points(profile["points"], 2)
+                        width = abs(points[1][0] - points[0][0])
+                        height = abs(points[1][1] - points[0][1])
+                        if width <= 0 or height <= 0:
+                            raise ProtocolFailure("invalid-parameter")
+                        center = ((points[1][0] + points[0][0]) / 2, (points[1][1] + points[0][1]) / 2)
+                        with build123d.Locations(center):
+                            build123d.Rectangle(width, height)
+                        provenance = {"kind": "rectangle", "points": _manual_points_provenance(points), **frame}
                 elif kind == "circle":
-                    _exact_keys(profile, {"kind", "plane", "radiusMm"})
-                    radius = _finite_number(profile["radiusMm"], 0.000001, 1_000_000.0)
-                    build123d.Circle(radius)
-                    provenance = {"kind": "circle", "plane": "xy", "radiusMm": radius}
+                    if frame is None:
+                        _exact_keys(profile, {"kind", "plane", "radiusMm"})
+                        radius = _finite_number(profile["radiusMm"], 0.000001, 1_000_000.0)
+                        build123d.Circle(radius)
+                        provenance = {"kind": "circle", "plane": "xy", "radiusMm": radius}
+                    else:
+                        points = _manual_profile_points(profile["points"], 2)
+                        radius = math.dist(points[0], points[1])
+                        if radius <= 0:
+                            raise ProtocolFailure("invalid-parameter")
+                        with build123d.Locations(points[0]):
+                            build123d.Circle(radius)
+                        provenance = {"kind": "circle", "points": _manual_points_provenance(points), **frame}
+                elif kind in {"polygon", "filletedPolygon"} and frame is not None:
+                    points = _manual_profile_points(profile["points"], 3)
+                    if len(points) > 64 or abs(sum(points[index][0] * points[(index + 1) % len(points)][1] - points[(index + 1) % len(points)][0] * points[index][1] for index in range(len(points)))) <= 1e-8:
+                        raise ProtocolFailure("invalid-parameter")
+                    if kind == "filletedPolygon":
+                        radii = _manual_corner_radii(profile["cornerRadiiMm"], len(points))
+                        with build123d.BuildLine():
+                            build123d.FilletPolyline(*points, radius=radii, close=True)
+                        build123d.make_face()
+                        provenance = {
+                            "kind": "filletedPolygon",
+                            "points": _manual_points_provenance(points),
+                            "cornerRadiiMm": radii,
+                            **frame,
+                        }
+                    else:
+                        build123d.Polygon(*points)
+                        provenance = {"kind": "polygon", "points": _manual_points_provenance(points), **frame}
                 else:
                     raise ProtocolFailure("invalid-parameter")
             build123d.extrude(amount=depth)
@@ -985,6 +1035,51 @@ def _manual_profile_solid(profile_request: object, depth_value: object) -> tuple
         raise
     except Exception as exception:
         raise ProtocolFailure("operation-failed") from exception
+
+
+def _manual_vector(value: object) -> tuple[float, float, float]:
+    vector = _require_object(value)
+    _exact_keys(vector, {"x", "y", "z"})
+    return (
+        _finite_number(vector["x"], -1_000_000.0, 1_000_000.0),
+        _finite_number(vector["y"], -1_000_000.0, 1_000_000.0),
+        _finite_number(vector["z"], -1_000_000.0, 1_000_000.0),
+    )
+
+
+def _manual_unit_vector(value: object) -> tuple[float, float, float]:
+    vector = _manual_vector(value)
+    length = math.sqrt(sum(component * component for component in vector))
+    if not math.isfinite(length) or abs(length - 1.0) > 1e-6:
+        raise ProtocolFailure("invalid-parameter")
+    return vector
+
+
+def _manual_profile_points(value: object, minimum: int) -> list[tuple[float, float]]:
+    if not isinstance(value, list) or len(value) < minimum or len(value) > 64:
+        raise ProtocolFailure("invalid-parameter")
+    points: list[tuple[float, float]] = []
+    for raw in value:
+        point = _require_object(raw)
+        _exact_keys(point, {"x", "y"})
+        candidate = (_finite_number(point["x"], -1_000_000.0, 1_000_000.0), _finite_number(point["y"], -1_000_000.0, 1_000_000.0))
+        if candidate in points:
+            raise ProtocolFailure("invalid-parameter")
+        points.append(candidate)
+    return points
+
+
+def _manual_corner_radii(value: object, expected_count: int) -> list[float]:
+    if not isinstance(value, list) or len(value) != expected_count:
+        raise ProtocolFailure("invalid-parameter")
+    radii = [_finite_number(raw, 0.0, 1_000_000.0) for raw in value]
+    if not any(radius > 0 for radius in radii):
+        raise ProtocolFailure("invalid-parameter")
+    return radii
+
+
+def _manual_points_provenance(points: list[tuple[float, float]]) -> list[dict[str, float]]:
+    return [{"x": point[0], "y": point[1]} for point in points]
 
 
 def _manual_response(operation: str, shape: object, provenance: dict[str, object]) -> dict[str, object]:
@@ -1000,8 +1095,23 @@ def _manual_response(operation: str, shape: object, provenance: dict[str, object
 
 
 def _manual_sketch_extrude_add(request: dict[str, object]) -> dict[str, object]:
-    _exact_keys(request, {"schema", "operation", "profile", "depthMm"})
+    expected = {"schema", "operation", "profile", "depthMm"}
+    if "source" in request:
+        expected.add("source")
+    _exact_keys(request, expected)
     shape, profile, depth = _manual_profile_solid(request["profile"], request["depthMm"])
+    if "source" in request:
+        base, base_receipt = _manual_source(request)
+        try:
+            shape = base.fuse(shape)
+        except Exception as exception:
+            raise ProtocolFailure("operation-failed") from exception
+        return _manual_response(
+            "manualSketchExtrudeAdd",
+            shape,
+            {"generator": "manual", "kind": "sketchExtrudeAdd", "profile": profile,
+             "depthMm": depth, "sourceVolumeMm3": base_receipt["volumeMm3"]},
+        )
     return _manual_response(
         "manualSketchExtrudeAdd",
         shape,

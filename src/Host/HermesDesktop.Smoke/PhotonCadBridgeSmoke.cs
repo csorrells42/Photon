@@ -852,7 +852,7 @@ internal static class PhotonCadBridgeSmoke
         && StringComparer.Ordinal.Equals(provenance.BundleId, "photon.cad.industrial.container.v1")
         && StringComparer.Ordinal.Equals(
             provenance.BundleManifestSha256,
-            "sha256:12dcd086d95759f47a892def58e2e7a85e4107ad5c0c1a83cdccd1b2f415e4da")
+            "sha256:0a040d32ec2750c555cd9bc6b092d5d2ce0a75f2fa963a7b603bcecbad67fd42")
         && StringComparer.Ordinal.Equals(provenance.Source.Package, "photon-cad-industrial")
         && StringComparer.Ordinal.Equals(provenance.Source.Version, "0.1.0")
         && StringComparer.Ordinal.Equals(provenance.Source.Digest, PhotonCadBridge.IndustrialImageSha256)

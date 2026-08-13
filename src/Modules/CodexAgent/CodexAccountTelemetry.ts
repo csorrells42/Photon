@@ -4,6 +4,8 @@ export type CodexAccountTelemetry = {
   chatGptLinked: boolean
   label: string
   usedPercent?: number
+  weeklyUsedPercent?: number
+  weeklyResetAt?: number
   lifetimeTokens?: number
 }
 

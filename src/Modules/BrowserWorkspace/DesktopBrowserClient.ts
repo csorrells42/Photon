@@ -24,14 +24,15 @@ export function tryNormalizeBrowserAddress(value: string): string | null {
   if (trimmed.length > 4_096 || /[\u0000-\u001f\u007f]/u.test(trimmed)) return null
   try {
     const explicit = new URL(trimmed)
-    if ((explicit.protocol === 'http:' || explicit.protocol === 'https:') && !explicit.username && !explicit.password) return explicit.href
-    return null
+    if (explicit.protocol !== 'http:' && explicit.protocol !== 'https:') return null
+    if (explicit.username || explicit.password) return null
+    return explicit.href
   } catch { /* Treat it as a hostname or search below. */ }
   if (/^[a-z][a-z0-9+.-]*:/iu.test(trimmed)) return null
   if (/^[\w.-]+\.[a-z]{2,}(?:[/:?#].*)?$/i.test(trimmed)) {
     try {
       const hostname = new URL(`https://${trimmed}`)
-      return hostname.username || hostname.password ? null : hostname.href
+      return hostname.href
     } catch { return null }
   }
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`
@@ -45,6 +46,7 @@ export class DesktopBrowserClient {
   private connected: Bridge | null = null
   private readonly listeners = new Set<(state: BrowserSurfaceState) => void>()
   private readonly openListeners = new Set<(request: { requestId: string; url: string }) => void>()
+  private readonly externalAuthenticationListeners = new Set<(request: { tabId: string; message: string }) => void>()
   private readonly errorListeners = new Set<(message: string) => void>()
   private readonly receive = (event: MessageEvent) => {
     const raw = event.data as Record<string, unknown> | null
@@ -59,8 +61,12 @@ export class DesktopBrowserClient {
       const url = bounded(raw.url, 4_096)
       const requestId = bounded(raw.requestId, 128)
       if (url && requestId) this.openListeners.forEach((listener) => listener({ requestId, url }))
+    } else if (raw.type === 'browser.externalAuthentication') {
+      const tabId = bounded(raw.tabId, 128)
+      const message = bounded(raw.message, 1_024)
+      if (tabId && message) this.externalAuthenticationListeners.forEach((listener) => listener({ tabId, message }))
     } else if (raw.type === 'browser.error') {
-      const message = bounded(raw.message, 1_024) || 'The embedded browser reported an error.'
+      const message = bounded(raw.message, 1_024)
       this.errorListeners.forEach((listener) => listener(message))
     }
   }
@@ -68,6 +74,7 @@ export class DesktopBrowserClient {
   get available() { return bridge() !== null }
   onState(listener: (state: BrowserSurfaceState) => void) { this.ensure(); this.listeners.add(listener); return () => this.listeners.delete(listener) }
   onOpenRequested(listener: (request: { requestId: string; url: string }) => void) { this.ensure(); this.openListeners.add(listener); return () => this.openListeners.delete(listener) }
+  onExternalAuthentication(listener: (request: { tabId: string; message: string }) => void) { this.ensure(); this.externalAuthenticationListeners.add(listener); return () => this.externalAuthenticationListeners.delete(listener) }
   onError(listener: (message: string) => void) { this.ensure(); this.errorListeners.add(listener); return () => this.errorListeners.delete(listener) }
   show(rect: DOMRect, tabId: string, initialUrl: string) { this.post('browser.surface.show', { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height), tabId, url: normalizeBrowserAddress(initialUrl) }) }
   hide() { this.post('browser.surface.hide') }

@@ -12,6 +12,7 @@ import {
   type HermesSpeechOutputPreviewRequest,
   type HermesSpeechOutputSaveRequest,
   type HermesSpeechOutputSettings,
+  type HermesSpeechOutputVoice,
   type HermesSpeechOutputVoiceId,
 } from './contracts'
 import './HermesSpeechOutputSettingsSection.css'
@@ -30,6 +31,7 @@ export type HermesSpeechOutputSettingsSectionProps = {
   profileId: string
   revision: string
   settings: HermesSpeechOutputSettings
+  voices?: readonly HermesSpeechOutputVoice[]
 }
 
 type WorkingAction = 'preview' | 'save'
@@ -53,13 +55,14 @@ export function HermesSpeechOutputSettingsSection({
   profileId,
   revision,
   settings,
+  voices = HERMES_SPEECH_OUTPUT_VOICES,
 }: HermesSpeechOutputSettingsSectionProps) {
   const [working, setWorking] = useState<WorkingAction | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const operationRef = useRef<{ abort: AbortController; generation: number } | null>(null)
   const generationRef = useRef(0)
   const exactSettings = assertHermesSpeechOutputSettings(settings)
-  const selectedVoice = HERMES_SPEECH_OUTPUT_VOICES.find((voice) => voice.id === exactSettings.voiceId)
+  const selectedVoice = voices.find((voice) => voice.id === exactSettings.voiceId)
 
   function cancelCurrent() {
     generationRef.current += 1
@@ -137,7 +140,7 @@ export function HermesSpeechOutputSettingsSection({
             disabled={disabled || working !== null}
             onChange={(event) => update({ ...exactSettings, voiceId: event.target.value as HermesSpeechOutputVoiceId })}
           >
-            {HERMES_SPEECH_OUTPUT_VOICES.map((voice) => (
+            {voices.map((voice) => (
               <option key={voice.id} value={voice.id}>{voice.label} — {voice.description}</option>
             ))}
           </select>

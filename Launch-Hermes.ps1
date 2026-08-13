@@ -24,6 +24,68 @@ if ($runtimeGenerationScript.Count -ne 1) {
 . ([string]$runtimeGenerationScript[0])
 
 New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
+$photonMcpLifecycleScript = Join-Path $bundleRoot 'Photon-McpGateway.ps1'
+if (-not (Test-Path -LiteralPath $photonMcpLifecycleScript -PathType Leaf)) {
+    throw 'Photon Docker MCP lifecycle support is missing. Reinstall Phos Agape Aphthartos.'
+}
+. $photonMcpLifecycleScript
+
+if (-not ('HermesLauncherWindowProbe' -as [type])) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class HermesLauncherWindowProbe
+{
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    public static bool HasVisibleTopLevelWindow(int expectedProcessId)
+    {
+        var found = false;
+        EnumWindows((hWnd, _) =>
+        {
+            uint processId;
+            GetWindowThreadProcessId(hWnd, out processId);
+            if (processId == (uint)expectedProcessId && IsWindow(hWnd) && IsWindowVisible(hWnd))
+            {
+                found = true;
+                return false;
+            }
+
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+}
+'@
+}
+
+function Test-HermesDesktopWindow {
+    param([Parameter(Mandatory)][Diagnostics.Process]$Process)
+
+    $Process.Refresh()
+    if ($Process.HasExited -or -not $Process.Responding) { return $false }
+    # MainWindowHandle is the process-owned WPF top-level window that an operator
+    # can actually see and use. A transient or auxiliary visible window is not
+    # sufficient evidence that the desktop survived startup.
+    if ($Process.MainWindowHandle -eq [IntPtr]::Zero) { return $false }
+    return [HermesLauncherWindowProbe]::HasVisibleTopLevelWindow($Process.Id)
+}
 
 function Resolve-HermesWorkspacePath {
     param([AllowNull()][string]$ConfiguredPath)
@@ -182,17 +244,15 @@ function Start-AssistantConversationBus {
     $pidPath = Join-Path $logsPath 'assistant-bus.pid'
     if (Test-LocalPort -Port $assistantBusPort) {
         $listener = Get-NetTCPConnection -LocalPort $assistantBusPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-        $trackedPid = 0
-        $tracked = (Test-Path -LiteralPath $pidPath -PathType Leaf) -and
-            [int]::TryParse(([IO.File]::ReadAllText($pidPath).Trim()), [ref]$trackedPid)
         $process = if ($listener) { Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
-        $owned = $tracked -and $listener -and $trackedPid -eq $listener.OwningProcess -and $process -and
+        $owned = $listener -and $process -and
             [string]$process.CommandLine -match '(^|\s|\")serve(\s|\"|$)'
         try { $owned = $owned -and [IO.Path]::GetFullPath([string]$process.ExecutablePath) -eq $executable }
         catch { $owned = $false }
         if (-not $owned -or -not (Test-AssistantBusHealth)) {
             throw "Port $assistantBusPort is not owned by the verified Assistant Conversation Bus."
         }
+        [IO.File]::WriteAllText($pidPath, [string]$listener.OwningProcess)
         Write-ProcessIdentity -ProcessId $listener.OwningProcess -Name 'assistant-bus' -Port $assistantBusPort
         return
     }
@@ -346,7 +406,17 @@ function Start-ConfiguredClient {
         $trackedPid = 0
         if ([int]::TryParse(([IO.File]::ReadAllText($clientPidPath).Trim()), [ref]$trackedPid)) {
             $tracked = Get-Process -Id $trackedPid -ErrorAction SilentlyContinue
-            if ($tracked -and [IO.Path]::GetFullPath($tracked.Path) -eq [IO.Path]::GetFullPath($executable)) { return $true }
+            if ($tracked -and [IO.Path]::GetFullPath($tracked.Path) -eq [IO.Path]::GetFullPath($executable)) {
+                if (Test-HermesDesktopWindow -Process $tracked) {
+                    # A transient startup HWND is not proof that the desktop is
+                    # still usable. Recheck after the WebView has had time to
+                    # initialize; a windowless process must be replaced.
+                    Start-Sleep -Seconds 3
+                    if (Test-HermesDesktopWindow -Process $tracked) { return $true }
+                }
+                Stop-Process -Id $tracked.Id -ErrorAction Stop
+                $tracked.WaitForExit()
+            }
         }
     }
     $env:HERMES_WORKSPACE_PATH = $script:workspacePath
@@ -356,7 +426,26 @@ function Start-ConfiguredClient {
     $process = Start-Process -FilePath $executable -WorkingDirectory $workingDirectory -PassThru
     [IO.File]::WriteAllText($clientPidPath, [string]$process.Id)
     Write-ProcessIdentity -ProcessId $process.Id -Name 'client'
-    return $true
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $usableSince = $null
+    do {
+        Start-Sleep -Milliseconds 200
+        $process.Refresh()
+        if ($process.HasExited) { throw 'The desktop client exited before its window opened.' }
+        if (Test-HermesDesktopWindow -Process $process) {
+            if ($null -eq $usableSince) {
+                $usableSince = [DateTime]::UtcNow
+            }
+            elseif (([DateTime]::UtcNow - $usableSince).TotalSeconds -ge 3) {
+                return $true
+            }
+        }
+        else {
+            $usableSince = $null
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+    throw 'The desktop client did not open a usable window.'
 }
 
 function Resolve-ConfiguredWorkbenchUrl {
@@ -636,6 +725,7 @@ if ($SecuritySmoke) {
         catch { $rejected = $true }
         if (-not $rejected) { throw 'Launcher broad workspace rejection smoke failed.' }
     }
+    Test-PhotonMcpGatewaySecuritySmoke
     Write-Host 'Launcher endpoint and process-ownership security smoke passed.' -ForegroundColor Green
     return
 }
@@ -647,16 +737,18 @@ try {
     $env:HERMES_WORKSPACE_PATH = $script:workspacePath
     $script:workbenchUrl = Get-ConfiguredWorkbenchUrl
     Start-DockerDesktop
+    $photonMcpGatewayStarted = Start-PhotonMcpGateway -WorkspacePath $script:workspacePath
     Start-Serena
     $env:HERMES_IMAGE_REFERENCE = Get-HermesLaunchImageReference
     & docker compose up -d --remove-orphans
     if ($LASTEXITCODE -ne 0) { throw 'Docker Compose failed to start Hermes.' }
 
     $serenaConfigurationChanged = Ensure-SerenaMcpConfiguration
+    $photonMcpConfigurationChanged = Ensure-PhotonMcpHermesConfiguration
     $visionConfigurationChanged = Ensure-HermesVisionConfiguration
     $workspaceConfigurationChanged = Ensure-HermesWorkspaceConfiguration
-    if ($serenaConfigurationChanged -or $visionConfigurationChanged -or $workspaceConfigurationChanged -or $script:serenaProcessStarted) {
-        Write-Host 'Refreshing Hermes with the current Serena and vision configuration...' -ForegroundColor Cyan
+    if ($serenaConfigurationChanged -or $photonMcpConfigurationChanged -or $photonMcpGatewayStarted -or $visionConfigurationChanged -or $workspaceConfigurationChanged -or $script:serenaProcessStarted) {
+        Write-Host 'Refreshing Hermes with the current Serena, Docker MCP, and vision configuration...' -ForegroundColor Cyan
         & docker restart hermes | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Hermes could not refresh its local integration configuration.' }
     }
@@ -670,7 +762,7 @@ try {
             Start-Process $script:workbenchUrl
         }
     }
-    Write-Host 'Photon, Serena, the Assistant Conversation Bus, and Phos Agape Aphthartos are running.' -ForegroundColor Green
+    Write-Host 'Photon, Docker MCP tools, Serena, the Assistant Conversation Bus, and Phos Agape Aphthartos are running.' -ForegroundColor Green
 }
 finally {
     Pop-Location

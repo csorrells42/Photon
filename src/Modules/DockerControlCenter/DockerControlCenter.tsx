@@ -19,6 +19,7 @@ import {
   Square,
   TerminalSquare,
   Workflow,
+  Wrench,
 } from 'lucide-react'
 import { DockerControlController } from './DockerControlController'
 import type {
@@ -60,15 +61,24 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
   const canMutate = state.status === 'ready' && state.snapshot !== null && !mutationBusy
   const loadedModels = state.snapshot?.modelRunner?.models.filter((model) => model.loaded).length ?? 0
   const runningServices = state.snapshot?.services.filter((service) => service.state === 'running').length ?? 0
-  const serviceRollupState: DockerObservedState = !state.snapshot?.services.length
-    ? 'unknown'
-    : runningServices === state.snapshot.services.length
-      ? 'running'
-      : 'degraded'
+  const serviceMonitorState: DockerObservedState = state.snapshot?.services.length ? 'running' : 'unknown'
 
   useEffect(() => {
     if (state.status === 'idle') void ownedController.refresh()
   }, [ownedController, state.status])
+
+  useEffect(() => {
+    if (state.status === 'refreshing' || state.mutationStatus !== 'idle') return
+    const needsRecovery = state.status === 'error'
+      || state.status === 'unavailable'
+      || state.snapshot?.engine.state !== 'running'
+      || state.snapshot?.compose.state === 'degraded'
+    const timeout = window.setTimeout(() => {
+      const current = ownedController.getSnapshot()
+      if (current.status !== 'refreshing' && current.mutationStatus === 'idle') void ownedController.refresh()
+    }, needsRecovery ? 10_000 : 60_000)
+    return () => window.clearTimeout(timeout)
+  }, [ownedController, state.mutationStatus, state.snapshot?.compose.state, state.snapshot?.engine.state, state.snapshot?.observedAtUtc, state.status])
 
   useEffect(() => {
     setConfirmed(false)
@@ -94,7 +104,7 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
           <div>
             <p className="docker-control__eyebrow">Docker status</p>
             <h2>Docker Control Center</h2>
-            <p>Health, resources, local models, and reviewed lifecycle controls for Photon services.</p>
+            <p>Live health, resources, local models, and service controls.</p>
           </div>
         </div>
         <div className="docker-control__header-actions">
@@ -118,10 +128,10 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
         </div>
       ) : (
         <>
-          <section className="docker-control__overview" aria-label="Stack identity">
+          <section className="docker-control__overview" aria-label="Live system status">
             <StatusCard icon={<Server size={18} />} title="Docker engine" state={state.snapshot.engine.state} detail={state.snapshot.engine.version ?? 'Version not reported'} />
             <StatusCard icon={<Workflow size={18} />} title="Compose stack" state={state.snapshot.compose.state} detail={state.snapshot.compose.runtimeProtocol ?? 'Runtime protocol not reported'} />
-            <StatusCard icon={<Activity size={18} />} title="Approved services" state={serviceRollupState} detail={`${runningServices} of ${state.snapshot.services.length} running`} />
+            <StatusCard icon={<Activity size={18} />} title="Service monitors" state={serviceMonitorState} detail={`${state.snapshot.services.length} independent probes · ${runningServices} running`} />
             <StatusCard icon={<Bot size={18} />} title="Local inference" state={state.snapshot.modelRunner?.state ?? 'unavailable'} detail={`${loadedModels} model${loadedModels === 1 ? '' : 's'} loaded`} />
           </section>
 
@@ -139,8 +149,8 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
           </section>
 
           <div className="docker-control__columns">
-            <section className="docker-control__services" aria-label="Approved services">
-              <h3>Approved services</h3>
+            <section className="docker-control__services" aria-label="Live services">
+              <h3>Live services</h3>
               {state.snapshot.services.length ? (
                 <div className="docker-control__service-tabs" role="tablist" aria-label="Docker services">
                   {state.snapshot.services.map((service, index, services) => (
@@ -160,7 +170,7 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
                     </button>
                   ))}
                 </div>
-              ) : <p className="docker-control__missing">No approved service evidence was returned.</p>}
+              ) : <p className="docker-control__missing">No live services were found.</p>}
             </section>
 
             <section
@@ -176,9 +186,11 @@ export function DockerControlCenter({ controller: suppliedController, adapter }:
                   canStart={canMutate && state.operations.startService && selected.manageable === true}
                   canStop={canMutate && state.operations.stopService && selected.manageable === true}
                   canRestart={canMutate && state.operations.restartService && selected.manageable === true}
+                  canRepair={canMutate && state.operations.repairService && selected.manageable === true}
                   onStart={() => request({ kind: 'start-service', service: selected.id })}
                   onStop={() => request({ kind: 'stop-service', service: selected.id })}
                   onRestart={() => request({ kind: 'restart-service', service: selected.id })}
+                  onRepair={() => request({ kind: 'repair-service', service: selected.id })}
                 />
               ) : <p className="docker-control__missing">No selected service snapshot.</p>}
             </section>
@@ -276,38 +288,43 @@ function ServiceDetail({
   canStart,
   canStop,
   canRestart,
+  canRepair,
   onStart,
   onStop,
   onRestart,
+  onRepair,
 }: {
   service: DockerProductServiceSnapshot
   canStart: boolean
   canStop: boolean
   canRestart: boolean
+  canRepair: boolean
   onStart(): void
   onStop(): void
   onRestart(): void
+  onRepair(): void
 }) {
   return (
     <>
       <div className="docker-control__section-heading">
-        <div className="docker-control__detail-title"><ServiceIcon service={service.id} /><div><p className="docker-control__eyebrow">Approved service</p><h3>{serviceLabels[service.id]}</h3></div></div>
+        <div className="docker-control__detail-title"><ServiceIcon service={service.id} /><div><p className="docker-control__eyebrow">{service.manageable ? 'Docker service' : 'Host service'}</p><h3>{serviceLabels[service.id]}</h3></div></div>
         <div className="docker-control__service-actions">
           <button type="button" disabled={!canStart || service.state === 'running'} onClick={onStart}><Play size={13} aria-hidden="true" />Review start</button>
           <button type="button" disabled={!canStop || service.state === 'stopped' || service.state === 'unavailable'} onClick={onStop}><Square size={12} aria-hidden="true" />Review stop</button>
           <button type="button" disabled={!canRestart || (service.state !== 'running' && service.state !== 'degraded')} onClick={onRestart}><RotateCw size={13} aria-hidden="true" />Review restart</button>
+          <button type="button" disabled={!canRepair} onClick={onRepair}><Wrench size={13} aria-hidden="true" />Repair service</button>
         </div>
       </div>
       <dl className="docker-control__facts">
         <div><dt>State</dt><dd>{stateLabels[service.state]}</dd></div>
         <div><dt>Health</dt><dd>{service.health}</dd></div>
-        <div><dt>Managed here</dt><dd>{service.manageable ? 'Yes' : 'No'}</dd></div>
-        <div><dt>Container ID</dt><dd><code>{service.containerId ?? 'Not running'}</code></dd></div>
+        <div><dt>Control authority</dt><dd>{service.manageable ? 'Docker' : 'Launcher'}</dd></div>
+        {service.manageable ? <div><dt>Container ID</dt><dd><code>{service.containerId ?? 'Not running'}</code></dd></div> : null}
         <div><dt>Version</dt><dd>{service.version ?? 'Not reported'}</dd></div>
-        <div><dt>Image verification</dt><dd>{service.image?.verification ?? 'Not reported'}</dd></div>
+        {service.manageable ? <><div><dt>Image verification</dt><dd>{service.image?.verification ?? 'Not reported'}</dd></div>
         <div><dt>Exact image ID</dt><dd><code>{service.image?.imageId ?? 'Not reported'}</code></dd></div>
         <div><dt>Approved digest</dt><dd><code>{service.image?.approvedDigest ?? 'Not reported'}</code></dd></div>
-        <div><dt>OCI revision</dt><dd><code>{service.image?.ociRevision ?? 'Not reported'}</code></dd></div>
+        <div><dt>OCI revision</dt><dd><code>{service.image?.ociRevision ?? 'Not reported'}</code></dd></div></> : null}
       </dl>
       <h4>Loopback ports</h4>
       {service.ports.length ? <ul>{service.ports.map((port) => <li key={`${port.address}-${port.hostPort}-${port.containerPort}-${port.protocol}`}><code>{port.address}:{port.hostPort}</code> → {port.containerPort}/{port.protocol}</li>)}</ul> : <p className="docker-control__missing">No loopback ports reported.</p>}

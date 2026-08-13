@@ -11,8 +11,11 @@
         Icon="Assets/photon-mark.png"
         Background="{StaticResource WindowBackground}">
   <Grid Background="{StaticResource WindowBackground}">
-    <wv2:WebView2 x:Name="WorkbenchView" Visibility="Hidden" />
-    <wv2:WebView2 x:Name="BrowserView" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+    <!-- Both surfaces must participate in the WPF compositor. Mixing native
+         HWND WebView children with renderer controls caused white browser
+         slabs and stale child windows that intercepted unrelated clicks. -->
+    <wv2:WebView2CompositionControl x:Name="WorkbenchView" Visibility="Hidden" />
+    <wv2:WebView2CompositionControl x:Name="BrowserView" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
     <Border x:Name="LoadingSurface" Background="#090B12">
       <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
         <Border Width="64" Height="64" CornerRadius="18" Margin="0,0,0,18" ClipToBounds="True">

@@ -20,6 +20,7 @@ type NaturalVoiceAudio = {
   onerror: (() => void) | null
   pause: () => void
   play: () => Promise<void>
+  setSinkId?: (deviceId: string) => Promise<void>
 }
 
 type NaturalVoiceDependencies = {
@@ -30,7 +31,7 @@ type NaturalVoiceDependencies = {
 type NaturalVoiceResponse = {
   ok: true
   data_url: string
-  mime_type: 'audio/wav'
+  mime_type: string
   provider: 'kokoro'
 }
 
@@ -39,9 +40,9 @@ function isNaturalVoiceResponse(value: unknown): value is NaturalVoiceResponse {
   const candidate = value as Record<string, unknown>
   return candidate.ok === true
     && candidate.provider === 'kokoro'
-    && candidate.mime_type === 'audio/wav'
+    && typeof candidate.mime_type === 'string'
     && typeof candidate.data_url === 'string'
-    && candidate.data_url.startsWith('data:audio/wav;base64,')
+    && /^data:audio\/(?:wav|wave|x-wav|mpeg|mp3|ogg|opus|flac);base64,/.test(candidate.data_url)
     && candidate.data_url.length <= MAX_AUDIO_DATA_URL_LENGTH
 }
 
@@ -123,6 +124,7 @@ export class HermesNaturalVoicePlayer {
       this.active.audio = audio
       audio.onended = () => this.finish(generation)
       audio.onerror = () => this.fail(generation)
+      await applyHermesAudioOutput(audio as unknown as HTMLAudioElement)
       await audio.play()
       if (generation === this.generation && !abort.signal.aborted) {
         publish({ messageId, phase: 'playing' })
@@ -164,3 +166,4 @@ export class HermesNaturalVoicePlayer {
     publish?.({ messageId, phase: 'error' })
   }
 }
+import { applyHermesAudioOutput } from '../HermesSpeechVoice/HermesAudioDevicePreferences'

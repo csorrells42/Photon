@@ -33,7 +33,6 @@ import type { HermesAttachmentKind, HermesStagedAttachment } from './HermesAttac
 import { subscribeHermesAuthChanged } from '../HermesSystem/HermesAuthEvents'
 import {
   canStartHermesChat,
-  HERMES_RECONNECT_DELAYS_MS,
   HermesSessionOpenGeneration,
   isHermesAuthenticationError,
   isHermesMissingSessionError,
@@ -339,15 +338,10 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
 
     const scheduleReconnect = () => {
       if (disposed || reconnecting.current || reconnectTimer !== null || gatewayOpen()) return
-      if (reconnectAttempt >= HERMES_RECONNECT_DELAYS_MS.length) {
-        setConnection('error')
-        setError(`Hermes could not reconnect after ${HERMES_RECONNECT_DELAYS_MS.length} attempts. Verify Docker is running, then use Reconnect Hermes.`)
-        return
-      }
-
       const delay = reconnectDelayMs(reconnectAttempt)
       reconnectAttempt += 1
       setConnection('reconnecting')
+      setError(`Photon is reconnecting automatically · attempt ${reconnectAttempt}.`)
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null
         void attemptReconnect()
@@ -375,7 +369,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
           setConnection('error')
           setError(message)
         } else {
-          setError(`Hermes connection dropped. Reconnect attempt ${reconnectAttempt} of ${HERMES_RECONNECT_DELAYS_MS.length} failed.`)
+          setError(`Photon is reconnecting automatically · attempt ${reconnectAttempt} did not connect yet.`)
           retry = true
         }
       } finally {
@@ -385,7 +379,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     }
 
     const reconnectNow = () => {
-      if (disposed || !hadOpenConnection.current || gatewayOpen()) return
+      if (disposed || gatewayOpen()) return
       clearReconnectTimer()
       reconnectAttempt = 0
       void attemptReconnect()
@@ -401,7 +395,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
         setConnection('reconnecting')
       } else {
         setConnection(state)
-        if (hadOpenConnection.current && (state === 'closed' || state === 'error')) scheduleReconnect()
+        if (state === 'closed' || state === 'error') scheduleReconnect()
       }
     })
     const removeEvent = hermesGateway.onEvent((event) => {

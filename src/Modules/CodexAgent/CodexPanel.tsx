@@ -1,9 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { Bot, Check, Code2, ExternalLink, FileCode2, Loader2, RefreshCw, Send, ShieldCheck, Square, TerminalSquare, X } from 'lucide-react'
 import { CODEX_APP_SERVER_ADAPTER_VERSION, CodexAppServerClient } from './CodexAppServerClient'
 import type { CodexConnectionState, JsonObject, JsonRpcId } from './CodexAppServerClient'
 import { isChatGptAccountType, publishCodexAccountTelemetry } from './CodexAccountTelemetry'
+import {
+  HERMES_CODEX_APPROVAL_REVIEW_EVENT,
+  publishCodexApprovalReviewStatus,
+  readCodexApprovalReviewRequest,
+} from './CodexApprovalReview'
 
 type ChatMessage = { id: string; role: 'user' | 'assistant' | 'system'; text: string }
 type ActivityItem = { id: string; kind: 'command' | 'file' | 'tool'; title: string; detail: string; status: string }
@@ -11,7 +16,15 @@ type ApprovalRequest = { rpcId: JsonRpcId; title: string; reason: string; detail
 type PromptOption = { label: string; description: string }
 type PromptQuestion = { id: string; header: string; question: string; isOther: boolean; isSecret: boolean; options: PromptOption[] }
 type PromptRequest = { rpcId: JsonRpcId; questions: PromptQuestion[] }
-type AccountState = { label: string; authenticated: boolean; chatGptLinked: boolean; usedPercent?: number; lifetimeTokens?: number }
+type AccountState = {
+  label: string
+  authenticated: boolean
+  chatGptLinked: boolean
+  usedPercent?: number
+  weeklyUsedPercent?: number
+  weeklyResetAt?: number
+  lifetimeTokens?: number
+}
 type DeviceLogin = { verificationUrl: string; userCode: string }
 
 function object(value: unknown): JsonObject | null { return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : null }
@@ -125,8 +138,18 @@ export function CodexPanel({ active, dockControls }: { active: boolean; dockCont
       try {
         const limits = object(await client.request('account/rateLimits/read'))
         const primary = object(object(limits?.rateLimits)?.primary)
+        const secondary = object(object(limits?.rateLimits)?.secondary)
         const usedPercent = number(primary?.usedPercent)
-        if (usedPercent !== undefined) setAccount((current) => ({ ...current, usedPercent }))
+        const secondaryUsedPercent = number(secondary?.usedPercent)
+        const primaryWindowMinutes = number(primary?.windowDurationMins)
+        const secondaryWindowMinutes = number(secondary?.windowDurationMins)
+        const primaryIsWeekly = primaryWindowMinutes !== undefined && primaryWindowMinutes >= 6 * 24 * 60
+        const secondaryIsWeekly = secondaryWindowMinutes !== undefined && secondaryWindowMinutes >= 6 * 24 * 60
+        const weeklyUsedPercent = secondaryIsWeekly
+          ? secondaryUsedPercent
+          : primaryIsWeekly ? usedPercent : undefined
+        const weeklyResetAt = number((secondaryIsWeekly ? secondary : primaryIsWeekly ? primary : null)?.resetsAt)
+        setAccount((current) => ({ ...current, usedPercent, weeklyUsedPercent, weeklyResetAt }))
       } catch { }
       try {
         const usage = object(await client.request('account/usage/read'))
@@ -240,35 +263,77 @@ export function CodexPanel({ active, dockControls }: { active: boolean; dockCont
     requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }))
   }, [active, messages, activities, approvals, prompt])
 
-  async function sendMessage(event: FormEvent) {
-    event.preventDefault()
-    const message = draft.trim()
+  const startCodexTurn = useCallback(async (message: string) => {
     const client = clientRef.current
-    if (!client || !message || busy || !ready || !account.authenticated) return
-    setDraft('')
+    if (!client || !message || busy || !ready || !account.authenticated || connection !== 'open') {
+      throw new Error('Codex is not ready to review this command yet.')
+    }
     setError(null)
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', text: message }])
     setBusy(true)
+    let threadId = threadRef.current
+    if (!threadId) {
+      const result = object(await client.request('thread/start', {
+        cwd: workspaceRef.current,
+        approvalPolicy: 'on-request',
+        sandbox: 'workspace-write',
+        personality: 'friendly',
+        serviceName: 'hermes_workbench',
+      }))
+      threadId = text(object(result?.thread)?.id)
+      if (!threadId) throw new Error('Codex did not return a thread id.')
+      threadRef.current = threadId
+    }
+    await client.request('turn/start', { threadId, input: [{ type: 'text', text: message, text_elements: [] }] })
+  }, [account.authenticated, busy, connection, ready])
+
+  async function sendMessage(event: FormEvent) {
+    event.preventDefault()
+    const message = draft.trim()
+    if (!message) return
+    setDraft('')
     try {
-      let threadId = threadRef.current
-      if (!threadId) {
-        const result = object(await client.request('thread/start', {
-          cwd: workspaceRef.current,
-          approvalPolicy: 'on-request',
-          sandbox: 'workspace-write',
-          personality: 'friendly',
-          serviceName: 'hermes_workbench',
-        }))
-        threadId = text(object(result?.thread)?.id)
-        if (!threadId) throw new Error('Codex did not return a thread id.')
-        threadRef.current = threadId
-      }
-      await client.request('turn/start', { threadId, input: [{ type: 'text', text: message, text_elements: [] }] })
+      await startCodexTurn(message)
     } catch (exception) {
       setBusy(false)
+      setDraft(message)
       setError(exception instanceof Error ? exception.message : 'Could not start the Codex turn.')
     }
   }
+
+  useEffect(() => {
+    const review = (event: Event) => {
+      const request = readCodexApprovalReviewRequest(event)
+      if (!request) return
+
+      if (!ready || !account.authenticated || connection !== 'open' || busy) {
+        setDraft(request.prompt)
+        setError('Codex review is prepared in the composer. Send it when Codex is ready.')
+        publishCodexApprovalReviewStatus({
+          requestId: request.requestId,
+          status: 'prepared',
+          message: 'Codex review prepared; send it when Codex is ready.',
+        })
+        return
+      }
+
+      void startCodexTurn(request.prompt).then(() => {
+        publishCodexApprovalReviewStatus({
+          requestId: request.requestId,
+          status: 'sent',
+          message: 'Sent to Codex for explanation. Nothing was approved or executed.',
+        })
+      }).catch((exception) => {
+        const message = exception instanceof Error ? exception.message : 'Codex could not review the command.'
+        setDraft(request.prompt)
+        setBusy(false)
+        setError(message)
+        publishCodexApprovalReviewStatus({ requestId: request.requestId, status: 'failed', message })
+      })
+    }
+    window.addEventListener(HERMES_CODEX_APPROVAL_REVIEW_EVENT, review)
+    return () => window.removeEventListener(HERMES_CODEX_APPROVAL_REVIEW_EVENT, review)
+  }, [account.authenticated, busy, connection, ready, startCodexTurn])
 
   async function startLogin() {
     const client = clientRef.current

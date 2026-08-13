@@ -35,6 +35,10 @@ public sealed class BridgeApiClient : IDisposable
         BridgeConnectionSettings settings, CancellationToken cancellationToken = default) =>
         ExecuteAsync(settings.Endpoint, HttpMethod.Post, "v1/interrupt", settings.Authentication, null, cancellationToken);
 
+    public Task<BridgeCommandResult> NewSessionAsync(
+        BridgeConnectionSettings settings, CancellationToken cancellationToken = default) =>
+        ExecuteAsync(settings.Endpoint, HttpMethod.Post, "v1/new", settings.Authentication, null, cancellationToken);
+
     public Task<BridgeCommandResult> SendAsync(
         BridgeConnectionSettings settings, string text, CancellationToken cancellationToken = default)
     {

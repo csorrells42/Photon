@@ -24,6 +24,11 @@ if ($runtimeGenerationScript.Count -ne 1) {
 . ([string]$runtimeGenerationScript[0])
 
 New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
+$photonMcpLifecycleScript = Join-Path $bundleRoot 'Photon-McpGateway.ps1'
+if (-not (Test-Path -LiteralPath $photonMcpLifecycleScript -PathType Leaf)) {
+    throw 'Photon Docker MCP lifecycle support is missing. Reinstall Phos Agape Aphthartos.'
+}
+. $photonMcpLifecycleScript
 
 function Resolve-HermesWorkspacePath {
     param([AllowNull()][string]$ConfiguredPath)
@@ -636,6 +641,7 @@ if ($SecuritySmoke) {
         catch { $rejected = $true }
         if (-not $rejected) { throw 'Launcher broad workspace rejection smoke failed.' }
     }
+    Test-PhotonMcpGatewaySecuritySmoke
     Write-Host 'Launcher endpoint and process-ownership security smoke passed.' -ForegroundColor Green
     return
 }
@@ -647,16 +653,18 @@ try {
     $env:HERMES_WORKSPACE_PATH = $script:workspacePath
     $script:workbenchUrl = Get-ConfiguredWorkbenchUrl
     Start-DockerDesktop
+    $photonMcpGatewayStarted = Start-PhotonMcpGateway -WorkspacePath $script:workspacePath
     Start-Serena
     $env:HERMES_IMAGE_REFERENCE = Get-HermesLaunchImageReference
     & docker compose up -d --remove-orphans
     if ($LASTEXITCODE -ne 0) { throw 'Docker Compose failed to start Hermes.' }
 
     $serenaConfigurationChanged = Ensure-SerenaMcpConfiguration
+    $photonMcpConfigurationChanged = Ensure-PhotonMcpHermesConfiguration
     $visionConfigurationChanged = Ensure-HermesVisionConfiguration
     $workspaceConfigurationChanged = Ensure-HermesWorkspaceConfiguration
-    if ($serenaConfigurationChanged -or $visionConfigurationChanged -or $workspaceConfigurationChanged -or $script:serenaProcessStarted) {
-        Write-Host 'Refreshing Hermes with the current Serena and vision configuration...' -ForegroundColor Cyan
+    if ($serenaConfigurationChanged -or $photonMcpConfigurationChanged -or $photonMcpGatewayStarted -or $visionConfigurationChanged -or $workspaceConfigurationChanged -or $script:serenaProcessStarted) {
+        Write-Host 'Refreshing Hermes with the current Serena, Docker MCP, and vision configuration...' -ForegroundColor Cyan
         & docker restart hermes | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Hermes could not refresh its local integration configuration.' }
     }
@@ -670,7 +678,7 @@ try {
             Start-Process $script:workbenchUrl
         }
     }
-    Write-Host 'Photon, Serena, the Assistant Conversation Bus, and Phos Agape Aphthartos are running.' -ForegroundColor Green
+    Write-Host 'Photon, Docker MCP tools, Serena, the Assistant Conversation Bus, and Phos Agape Aphthartos are running.' -ForegroundColor Green
 }
 finally {
     Pop-Location

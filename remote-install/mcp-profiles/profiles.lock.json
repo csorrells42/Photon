@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "photon-engineering-discovery",
+      "file": "photon-engineering-discovery.yaml",
+      "sha256": "4A72830592E70BCFEB44ED09726692926027AB408664DB8CAAAB6BD5ED164224"
+    },
+    {
+      "id": "photon-relentless-repair",
+      "file": "photon-relentless-repair.yaml",
+      "sha256": "F17549334A414C21F5AA5C7587C4D7FEEE89AE844E1D61A23C3A175E14EF39C5"
+    }
+  ]
+}

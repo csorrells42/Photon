@@ -52,7 +52,7 @@ public sealed class PhotonCadManualProviderRuntime
             PhotonCadManualOperationKind.SketchExtrudeAdd,
             PhotonCadManualCapabilityIds.SketchExtrudeAdd,
             requestId, sessionId, projectId, baseRevision, newEntityId, createsEntity: true,
-            new ManualSketchParameters("rectangle", "xy", profileWidthMm, profileHeightMm, 0, extrusionDepthMm),
+            new ManualSketchParameters("rectangle", "xy", profileWidthMm, profileHeightMm, 0, extrusionDepthMm, 0, 0, 0, []),
             [
                 ProfileKind("rectangle"), Choice("sketchPlane", plane), Number("profileWidthMm", profileWidthMm),
                 Number("profileHeightMm", profileHeightMm), Number("extrusionDepthMm", extrusionDepthMm),
@@ -64,7 +64,7 @@ public sealed class PhotonCadManualProviderRuntime
             PhotonCadManualOperationKind.SketchExtrudeAdd,
             PhotonCadManualCapabilityIds.SketchExtrudeAdd,
             requestId, sessionId, projectId, baseRevision, newEntityId, createsEntity: true,
-            new ManualSketchParameters("circle", "xy", 0, 0, profileRadiusMm, extrusionDepthMm),
+            new ManualSketchParameters("circle", "xy", 0, 0, profileRadiusMm, extrusionDepthMm, 0, 0, 0, []),
             [
                 ProfileKind("circle"), Choice("sketchPlane", plane), Number("profileRadiusMm", profileRadiusMm),
                 Number("extrusionDepthMm", extrusionDepthMm),
@@ -76,11 +76,38 @@ public sealed class PhotonCadManualProviderRuntime
             PhotonCadManualOperationKind.SketchExtrudeCut,
             PhotonCadManualCapabilityIds.SketchExtrudeCut,
             requestId, sessionId, projectId, baseRevision, targetEntityId, NewFeatureId(), createsEntity: false,
-            new ManualSketchParameters("rectangle", "xy", profileWidthMm, profileHeightMm, 0, cutDepthMm),
+            new ManualSketchParameters("rectangle", "xy", profileWidthMm, profileHeightMm, 0, cutDepthMm, 0, 0, 0, []),
             [
                 ProfileKind("rectangle"), Choice("sketchPlane", plane), Number("profileWidthMm", profileWidthMm),
                 Number("profileHeightMm", profileHeightMm), Number("cutDepthMm", cutDepthMm),
             ]);
+
+    public PhotonCadManualBoundMutation BindMouseSketchExtrudeAdd(
+        string requestId, string sessionId, string projectId, long baseRevision, string targetEntityId,
+        PhotonCadManualMouseSketch sketch, double extrusionDepthMm, string sketchInput, bool joinsExistingSolid = false)
+    {
+        ValidateMouseSketch(sketch);
+        return Bind(
+            PhotonCadManualOperationKind.SketchExtrudeAdd,
+            PhotonCadManualCapabilityIds.MouseSketchExtrudeAdd,
+            requestId, sessionId, projectId, baseRevision, targetEntityId,
+            joinsExistingSolid ? NewFeatureId() : null, createsEntity: !joinsExistingSolid,
+            new ManualMouseSketchParameters(sketch, extrusionDepthMm),
+            [Text("sketch", sketchInput), Number("extrusionDepthMm", extrusionDepthMm)]);
+    }
+
+    public PhotonCadManualBoundMutation BindMouseSketchExtrudeCut(
+        string requestId, string sessionId, string projectId, long baseRevision, string targetEntityId,
+        PhotonCadManualMouseSketch sketch, double cutDepthMm, string sketchInput)
+    {
+        ValidateMouseSketch(sketch);
+        return Bind(
+            PhotonCadManualOperationKind.SketchExtrudeCut,
+            PhotonCadManualCapabilityIds.MouseSketchExtrudeCut,
+            requestId, sessionId, projectId, baseRevision, targetEntityId, NewFeatureId(), createsEntity: false,
+            new ManualMouseSketchParameters(sketch, cutDepthMm),
+            [Text("sketch", sketchInput), Number("cutDepthMm", cutDepthMm)]);
+    }
 
     public PhotonCadManualBoundMutation BindHoleCut(
         string requestId, string sessionId, string projectId, long baseRevision, string targetEntityId,
@@ -178,6 +205,83 @@ public sealed class PhotonCadManualProviderRuntime
         return new PhotonCadSyncOperationInput("profileKind", PhotonCadSyncInputValue.Choice(value));
     }
 
+    private static PhotonCadSyncOperationInput Text(string id, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 8_192 || value.Any(char.IsControl))
+            throw new ArgumentException("manual_sketch_text_invalid", nameof(value));
+        return new PhotonCadSyncOperationInput(id, PhotonCadSyncInputValue.Text(value));
+    }
+
+    /// <summary>
+    /// Checks the renderer-independent sketch packet before it can enter the sealed geometry
+    /// authority. The container repeats these checks; keeping them here prevents malformed mouse
+    /// input from becoming a persisted operation request or a costly container invocation.
+    /// </summary>
+    private static void ValidateMouseSketch(PhotonCadManualMouseSketch sketch)
+    {
+        ArgumentNullException.ThrowIfNull(sketch);
+        ArgumentNullException.ThrowIfNull(sketch.Points);
+        ArgumentNullException.ThrowIfNull(sketch.CornerRadiiMm);
+        if (sketch.ProfileKind is not ("rectangle" or "circle" or "polygon" or "filletedPolygon"))
+            throw new ArgumentException("manual_mouse_sketch_profile_invalid", nameof(sketch));
+        if (!FiniteBounded(sketch.OriginXMm) || !FiniteBounded(sketch.OriginYMm) || !FiniteBounded(sketch.OriginZMm)
+            || !IsUnitVector(sketch.XDirectionX, sketch.XDirectionY, sketch.XDirectionZ)
+            || !IsUnitVector(sketch.NormalX, sketch.NormalY, sketch.NormalZ)
+            || Math.Abs(sketch.XDirectionX * sketch.NormalX
+                + sketch.XDirectionY * sketch.NormalY
+                + sketch.XDirectionZ * sketch.NormalZ) > 1e-8)
+            throw new ArgumentException("manual_mouse_sketch_frame_invalid", nameof(sketch));
+
+        var expectedPoints = sketch.ProfileKind is "rectangle" or "circle" ? 2 : -1;
+        if ((expectedPoints >= 0 && sketch.Points.Count != expectedPoints)
+            || (expectedPoints < 0 && sketch.Points.Count is < 3 or > 64)
+            || sketch.Points.Any(point => !FiniteBounded(point.XMm) || !FiniteBounded(point.YMm))
+            || sketch.Points.Distinct().Count() != sketch.Points.Count)
+            throw new ArgumentException("manual_mouse_sketch_points_invalid", nameof(sketch));
+
+        if (sketch.ProfileKind == "rectangle"
+            && (BitConverter.DoubleToInt64Bits(sketch.Points[0].XMm) == BitConverter.DoubleToInt64Bits(sketch.Points[1].XMm)
+                || BitConverter.DoubleToInt64Bits(sketch.Points[0].YMm) == BitConverter.DoubleToInt64Bits(sketch.Points[1].YMm)))
+            throw new ArgumentException("manual_mouse_sketch_rectangle_invalid", nameof(sketch));
+        if (sketch.ProfileKind == "circle"
+            && Math.Sqrt(Math.Pow(sketch.Points[1].XMm - sketch.Points[0].XMm, 2)
+                + Math.Pow(sketch.Points[1].YMm - sketch.Points[0].YMm, 2)) <= double.Epsilon)
+            throw new ArgumentException("manual_mouse_sketch_circle_invalid", nameof(sketch));
+        if (sketch.ProfileKind is "polygon" or "filletedPolygon"
+            && Math.Abs(SignedAreaTwice(sketch.Points)) <= 1e-8)
+            throw new ArgumentException("manual_mouse_sketch_polygon_invalid", nameof(sketch));
+
+        if (sketch.ProfileKind == "filletedPolygon")
+        {
+            if (sketch.CornerRadiiMm.Count != sketch.Points.Count
+                || sketch.CornerRadiiMm.Any(radius => !double.IsFinite(radius) || radius < 0 || radius > MaximumDimensionMm)
+                || !sketch.CornerRadiiMm.Any(radius => radius > 0))
+                throw new ArgumentException("manual_mouse_sketch_corner_radii_invalid", nameof(sketch));
+        }
+        else if (sketch.CornerRadiiMm.Count != 0)
+        {
+            throw new ArgumentException("manual_mouse_sketch_corner_radii_unexpected", nameof(sketch));
+        }
+    }
+
+    private static bool FiniteBounded(double value) =>
+        double.IsFinite(value) && value >= -MaximumDimensionMm && value <= MaximumDimensionMm;
+
+    private static bool IsUnitVector(double x, double y, double z) =>
+        FiniteBounded(x) && FiniteBounded(y) && FiniteBounded(z)
+        && Math.Abs(Math.Sqrt(x * x + y * y + z * z) - 1) <= 1e-6;
+
+    private static double SignedAreaTwice(IReadOnlyList<ManualSketchPoint> points)
+    {
+        var area = 0d;
+        for (var index = 0; index < points.Count; index++)
+        {
+            var next = points[(index + 1) % points.Count];
+            area += points[index].XMm * next.YMm - next.XMm * points[index].YMm;
+        }
+        return area;
+    }
+
     private static PhotonCadSyncOperationInput Entity(string id, string value) =>
         new(id, PhotonCadSyncInputValue.Entity(value));
 
@@ -211,8 +315,10 @@ public sealed class PhotonCadManualProviderRuntime
                 : authorityUnavailable);
         return
         [
-            Entry(PhotonCadManualCapabilityIds.SketchExtrudeAdd, PhotonCadManualOperationKind.SketchExtrudeAdd, "Sketch + extrude", "Create a bounded rectangle or circle profile on XY and add one solid."),
-            Entry(PhotonCadManualCapabilityIds.SketchExtrudeCut, PhotonCadManualOperationKind.SketchExtrudeCut, "Sketch cut", "Cut a bounded rectangular XY profile through one existing solid."),
+            Entry(PhotonCadManualCapabilityIds.SketchExtrudeAdd, PhotonCadManualOperationKind.SketchExtrudeAdd, "Sketch + extrude", "Create a bounded rectangle or circle profile on a principal sketch plane and add one solid."),
+            Entry(PhotonCadManualCapabilityIds.SketchExtrudeCut, PhotonCadManualOperationKind.SketchExtrudeCut, "Sketch cut", "Cut a bounded rectangular profile through one existing solid."),
+            Entry(PhotonCadManualCapabilityIds.MouseSketchExtrudeAdd, PhotonCadManualOperationKind.SketchExtrudeAdd, "Mouse sketch + extrude", "Create a line-loop, circle, or box on a datum plane or model face and add one solid."),
+            Entry(PhotonCadManualCapabilityIds.MouseSketchExtrudeCut, PhotonCadManualOperationKind.SketchExtrudeCut, "Mouse sketch cut", "Create a line-loop, circle, or box on a model face and cut one existing solid."),
             Entry(PhotonCadManualCapabilityIds.HoleCut, PhotonCadManualOperationKind.HoleCut, "Hole", "Cut a cylindrical hole into one existing solid."),
             Entry(PhotonCadManualCapabilityIds.Fillet, PhotonCadManualOperationKind.Fillet, "Fillet", "Round selected stable edge identifiers on one existing solid."),
             Entry(PhotonCadManualCapabilityIds.Chamfer, PhotonCadManualOperationKind.Chamfer, "Chamfer", "Chamfer selected stable edge identifiers on one existing solid."),

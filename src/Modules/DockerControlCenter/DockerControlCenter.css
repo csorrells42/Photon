@@ -31,8 +31,13 @@
 .docker-control__status-card span, .docker-control__status-card small { color: #8290a8; }
 .docker-control__status-card strong { font-size: 15px; }
 .docker-control__actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.docker-control__columns { display: grid; grid-template-columns: minmax(180px, .32fr) minmax(0, 1fr); gap: 10px; min-height: 260px; }
+.docker-control__columns { align-items: stretch; display: grid; grid-template-columns: minmax(180px, .32fr) minmax(0, 1fr); grid-template-rows: max-content; gap: 10px; min-height: 260px; }
 .docker-control__services, .docker-control__service-detail, .docker-control__evidence, .docker-control__model-runner, .docker-control__logs { border: 1px solid #273146; background: linear-gradient(145deg, rgba(16,22,33,.98), rgba(12,17,27,.98)); border-radius: 11px; padding: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.1); }
+.docker-control__columns > *, .docker-control__service-detail { box-sizing: border-box; min-width: 0; }
+.docker-control__service-detail { align-self: stretch; display: flex; flex-direction: column; overflow: visible; }
+.docker-control__service-detail > h4 { margin-top: 10px; }
+.docker-control__service-detail > ul { margin: 7px 0 10px; padding-left: 22px; }
+.docker-control__service-detail > .docker-control__missing { line-height: 1.45; margin: 6px 0 2px; }
 .docker-control__services h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #8996ad; margin-bottom: 9px; }
 .docker-control__service-tabs { display: grid; gap: 6px; }
 .docker-control__service-tabs button { display: flex; align-items: center; justify-content: space-between; text-align: left; width: 100%; padding: 9px; }
@@ -51,7 +56,7 @@
 .docker-control dt { align-items: center; color: #7f8ca4; display: flex; font-size: 10px; gap: 5px; text-transform: uppercase; }
 .docker-control dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 .docker-control code { color: #aebcff; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; overflow-wrap: anywhere; }
-.docker-control__evidence { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; }
+.docker-control__evidence { clear: both; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; position: relative; }
 .docker-control__evidence h3, .docker-control__logs h3 { font-size: 13px; margin-bottom: 8px; }
 .docker-control__evidence p { color: #aeb8ca; font-size: 12px; margin: 4px 0; overflow-wrap: anywhere; }
 .docker-control__missing { color: #77859d !important; font-size: 12px; }

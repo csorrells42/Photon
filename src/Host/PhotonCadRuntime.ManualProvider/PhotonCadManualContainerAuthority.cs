@@ -155,7 +155,8 @@ internal sealed class PhotonCadManualContainerAuthority : IPhotonCadManualGeomet
                     RequireNumber(operation, "profileWidthMm"),
                     RequireNumber(operation, "profileHeightMm"),
                     0,
-                    RequireNumber(operation, "cutDepthMm"))),
+                    RequireNumber(operation, "cutDepthMm"),
+                    0, 0, 0, [])),
             PhotonCadManualCapabilityIds.HoleCut => new ManualReplayFeature(
                 PhotonCadManualOperationKind.HoleCut,
                 new ManualHoleParameters(

@@ -40,9 +40,15 @@ describe('HermesProfileRuntimeWorkspace labels and safe rendering', () => {
       />,
     )
 
-    expect(markup).toContain('Live read-only beta')
+    expect(markup).toContain('Verified live profile facts. Change, grant, import, and export controls are intentionally unavailable.')
+    expect(markup).not.toContain('Live read-only beta')
     expect(markup).toContain('INSPECTED PROFILE')
     expect(markup).toContain('Inspect profile facts')
+    expect(markup).toContain('aria-labelledby="hpr-workspace-title"')
+    expect(markup).toContain('aria-describedby="hpr-workspace-summary"')
+    expect(markup).toContain('aria-label="Terminal boundary"')
+    expect(markup).toContain('Workbench and Hermes agent execution remain separate.')
+    expect(markup).toContain('aria-labelledby="hpr-documents-heading"')
     expect(markup).toContain('aria-describedby="hpr-read-only-profile-help"')
     expect(markup).not.toContain('disabled="" aria-describedby="hpr-read-only-profile-help"')
     expect(markup).toContain('It does not change the active Hermes profile.')
@@ -62,6 +68,37 @@ describe('HermesProfileRuntimeWorkspace labels and safe rendering', () => {
       'Validate and preview import',
       'Prepare secret-free export',
       'Confirm typed intent',
+    ]) expect(markup).not.toContain(unsupported)
+  })
+
+  it('renders only genuinely mounted capabilities in safe-live mode', async () => {
+    const adapter = new DeterministicHermesProfileRuntimeAdapter()
+    const snapshot = (await adapter.load(createRequestContext('profile-main', 'render:safe-live'), new AbortController().signal)).value
+    const markup = renderToStaticMarkup(
+      <HermesProfileRuntimeWorkspace
+        adapter={adapter}
+        initialSnapshot={snapshot}
+        interactionMode="read-write"
+        surfaceMode="safe-live"
+      />,
+    )
+
+    expect(markup).toContain('SOUL identity document')
+    expect(markup).toContain('Default model for future sessions')
+    expect(markup).toContain('Save model assignment')
+    expect(markup).toContain('Backend selection and status')
+    expect(markup).toContain('Preview delete')
+    for (const unsupported of [
+      'Persona, soul, and context',
+      'Save persona',
+      'Save context',
+      'Project path intent',
+      'Worktree path intent',
+      'Intent note',
+      'Status and permission intents',
+      'OAuth, credential pool, and endpoint status',
+      'Non-secret configuration',
+      'Import and export',
     ]) expect(markup).not.toContain(unsupported)
   })
 })

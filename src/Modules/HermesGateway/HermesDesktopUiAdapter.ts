@@ -1,7 +1,7 @@
 import type { HermesGatewayEvent } from './HermesGatewayClient'
 
 export type HermesDesktopUiAction =
-  | { kind: 'open-preview'; url: string; label: string }
+  | { kind: 'open-preview'; url: string; label: string; bookmark?: true }
   | { kind: 'open-workspace-file'; path: string; label: string }
   | { kind: 'reveal-pane'; pane: 'chat' | 'files' | 'terminal' | 'review' | 'sessions' }
 
@@ -64,7 +64,7 @@ export function normalizeHermesDesktopUiAction(event: HermesGatewayEvent): Herme
   if (event.type === 'preview.open') {
     const url = normalizeHermesPreviewUrl(event.payload?.url)
     const label = boundedText(event.payload?.label, 256)
-    if (url) return { kind: 'open-preview', url, label }
+    if (url) return { kind: 'open-preview', url, label, ...(event.payload?.bookmark === true ? { bookmark: true as const } : {}) }
     const path = normalizeHermesWorkspacePreviewPath(event.payload?.url)
     return path ? { kind: 'open-workspace-file', path, label } : null
   }

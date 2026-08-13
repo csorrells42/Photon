@@ -8,6 +8,8 @@ public static class PhotonCadManualCapabilityIds
 {
     public const string SketchExtrudeAdd = "manual.solid.extrude.add.v1";
     public const string SketchExtrudeCut = "manual.solid.extrude.cut.v1";
+    public const string MouseSketchExtrudeAdd = "manual.solid.mouse-sketch.add.v1";
+    public const string MouseSketchExtrudeCut = "manual.solid.mouse-sketch.cut.v1";
     public const string HoleCut = "manual.solid.hole.cut.v1";
     public const string Fillet = "manual.edge.fillet.v1";
     public const string Chamfer = "manual.edge.chamfer.v1";
@@ -95,12 +97,41 @@ public sealed class PhotonCadManualCommand
 
 internal abstract record ManualExecutionParameters;
 
+public sealed record ManualSketchPoint(double XMm, double YMm);
+
+/// <summary>
+/// Bounded geometric data captured by the native sketch canvas. It contains
+/// only local dimensions and a workplane frame; it never carries meshes,
+/// paths, source code, or user-supplied CAD scripts.
+/// </summary>
+public sealed record PhotonCadManualMouseSketch(
+    string ProfileKind,
+    IReadOnlyList<ManualSketchPoint> Points,
+    IReadOnlyList<double> CornerRadiiMm,
+    double OriginXMm,
+    double OriginYMm,
+    double OriginZMm,
+    double XDirectionX,
+    double XDirectionY,
+    double XDirectionZ,
+    double NormalX,
+    double NormalY,
+    double NormalZ);
+
 internal sealed record ManualSketchParameters(
     string ProfileKind,
     string Plane,
     double WidthMm,
     double HeightMm,
     double RadiusMm,
+    double DepthMm,
+    double OriginXMm,
+    double OriginYMm,
+    double OriginZMm,
+    IReadOnlyList<ManualSketchPoint> Points) : ManualExecutionParameters;
+
+internal sealed record ManualMouseSketchParameters(
+    PhotonCadManualMouseSketch Sketch,
     double DepthMm) : ManualExecutionParameters;
 
 internal sealed record ManualHoleParameters(

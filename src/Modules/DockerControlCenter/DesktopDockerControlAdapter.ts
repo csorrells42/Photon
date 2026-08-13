@@ -28,6 +28,7 @@ type Pending = {
   signal?: AbortSignal
   abort?: () => void
   timeout?: ReturnType<typeof setTimeout>
+  onSnapshotProgress?: DockerControlExecution['onSnapshotProgress']
 }
 
 type UnknownRecord = Record<string, unknown>
@@ -61,7 +62,7 @@ function normalizeDescription(value: unknown): DockerControlDescription | null {
       : null
   if (!normalizedAvailability || typeof operations.startStack !== 'boolean' || typeof operations.stopStack !== 'boolean'
     || typeof operations.startService !== 'boolean' || typeof operations.stopService !== 'boolean'
-    || typeof operations.restartService !== 'boolean' || operations.loadModel !== false
+    || typeof operations.restartService !== 'boolean' || typeof operations.repairService !== 'boolean' || operations.loadModel !== false
     || typeof operations.unloadModel !== 'boolean' || operations.update !== false) return null
   return {
     protocolVersion: DOCKER_CONTROL_PROTOCOL_VERSION,
@@ -73,6 +74,7 @@ function normalizeDescription(value: unknown): DockerControlDescription | null {
       startService: operations.startService,
       stopService: operations.stopService,
       restartService: operations.restartService,
+      repairService: operations.repairService,
       loadModel: false,
       unloadModel: operations.unloadModel,
       update: false,
@@ -107,6 +109,11 @@ export class DesktopDockerControlAdapter implements DockerControlAdapter {
     if (!pending) return
     if (frame.type === 'dockerControl.error') {
       this.finish(id, pending, undefined, new Error(normalizeDockerMessage(frame.message, 'Docker Control Center failed safely.')))
+      return
+    }
+    if (pending.kind === 'snapshot' && frame.type === 'dockerControl.snapshot.progress') {
+      const snapshot = normalizeDockerSnapshot(frame.value)
+      if (snapshot) pending.onSnapshotProgress?.(snapshot)
       return
     }
     const value = frame.value
@@ -206,7 +213,7 @@ export class DesktopDockerControlAdapter implements DockerControlAdapter {
     if (execution.signal.aborted) return Promise.reject(new DOMException('Docker Control Center request aborted.', 'AbortError'))
     return new Promise<unknown>((resolve, reject) => {
       if (this.pending.has(id)) { reject(new Error('A Docker Control Center request with this identifier is already pending.')); return }
-      const pending: Pending = { kind, service, review, resolve, reject, signal: execution.signal }
+      const pending: Pending = { kind, service, review, resolve, reject, signal: execution.signal, onSnapshotProgress: execution.onSnapshotProgress }
       pending.abort = () => this.finish(id, pending, undefined, new DOMException('Docker Control Center request aborted.', 'AbortError'))
       execution.signal.addEventListener('abort', pending.abort, { once: true })
       pending.timeout = setTimeout(() => this.finish(id, pending, undefined, new Error('Docker Control Center request timed out.')), 45_000)
@@ -249,7 +256,7 @@ function projectIntent(value: unknown): DockerMutationReviewRequest['intent'] | 
   const raw = record(value)
   if (!raw) return null
   if (raw.kind === 'start-stack' || raw.kind === 'stop-stack' || raw.kind === 'request-update') return { kind: raw.kind }
-  if ((raw.kind === 'start-service' || raw.kind === 'stop-service' || raw.kind === 'restart-service') && isService(raw.service)) {
+  if ((raw.kind === 'start-service' || raw.kind === 'stop-service' || raw.kind === 'restart-service' || raw.kind === 'repair-service') && isService(raw.service)) {
     return { kind: raw.kind, service: raw.service }
   }
   return raw.kind === 'unload-model' && typeof raw.model === 'string'

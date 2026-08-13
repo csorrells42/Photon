@@ -12,31 +12,58 @@ internal sealed class AccountLinkBridge
 
     public AccountLinkBridge(Action<object> postMessage) => _postMessage = postMessage;
 
-    public async Task PostStatusAsync(int version, string? requestId)
+    public async Task PostStatusAsync(int version, string? requestId, string? provider = null)
     {
         if (!TryEnvelope(version, requestId, out var id)) return;
+        var requestedProvider = provider?.Trim().ToLowerInvariant();
+        if (requestedProvider is not null and not ("claude" or "antigravity" or "google-cloud"))
+        {
+            PostError(id, "invalid_provider", "The subscription provider was not recognized.");
+            return;
+        }
+
+        var accounts = new List<object>();
         var googleCloud = new GoogleCloudCliAccount();
-        var claude = FindExecutable("claude", new[]
+        if (requestedProvider is null or "claude")
         {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "claude.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "claude.cmd"),
-        });
-        var antigravity = FindExecutable("agy", new[]
+            var claude = FindExecutable("claude", new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "claude.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "claude.cmd"),
+            });
+            var claudeLinked = claude is not null && await IsClaudeLinkedAsync(claude);
+            accounts.Add(new { provider = "claude", installed = claude is not null, linked = claudeLinked, status = claude is null ? "Install Claude Code to monitor its subscription account." : claudeLinked ? "Claude Code reports an authenticated subscription account." : "Claude Code is installed; open its official sign-in flow." });
+        }
+        if (requestedProvider is null or "antigravity")
         {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "agy", "bin", "agy.exe"),
-        });
-        var claudeLinked = claude is not null && await IsClaudeLinkedAsync(claude);
+            var antigravity = FindAntigravityExecutable();
+            var antigravityRunning = IsProcessRunning("Antigravity");
+            var setupRecorded = HasAntigravityLocalSetup();
+            accounts.Add(new
+            {
+                provider = "antigravity",
+                installed = antigravity is not null,
+                linked = false,
+                trackingAvailable = false,
+                status = antigravity is null
+                    ? "Install Google Antigravity to use its official Google sign-in."
+                    : antigravityRunning
+                        ? "Google Antigravity is running. Photon rechecked it, but the official client does not expose a subscription-account or allowance status to verify."
+                        : setupRecorded
+                            ? "Google Antigravity has local setup state. Its Google account and subscription allowance are only available inside the official client."
+                            : "Google Antigravity is installed. Open its official client to complete Google sign-in; it does not publish an account status for Photon to verify.",
+            });
+        }
+        if (requestedProvider is null or "google-cloud")
+        {
+            accounts.Add(new { provider = "google-cloud", installed = googleCloud.IsInstalled, linked = googleCloud.HasApplicationDefaultCredentials, status = !googleCloud.IsInstalled ? "Install the official Google Cloud CLI to connect project-level Gemini telemetry." : googleCloud.HasApplicationDefaultCredentials ? "Google Application Default Credentials are present; Refresh validates telemetry access." : "Google Cloud CLI is installed; link Application Default Credentials to enable Gemini telemetry." });
+        }
         _postMessage(new
         {
             type = "accountLink.status.result",
             version = ProtocolVersion,
             requestId = id,
-            accounts = new[]
-            {
-                new { provider = "claude", installed = claude is not null, linked = claudeLinked, status = claude is null ? "Install Claude Code to enable secure account linking." : claudeLinked ? "Claude Code reports an authenticated account." : "Claude Code is installed; sign in to link the account." },
-                new { provider = "antigravity", installed = antigravity is not null, linked = false, status = antigravity is null ? "Install Google Antigravity CLI to enable account linking." : "Antigravity is installed; open its official sign-in flow to link the account." },
-                new { provider = "google-cloud", installed = googleCloud.IsInstalled, linked = googleCloud.HasApplicationDefaultCredentials, status = !googleCloud.IsInstalled ? "Install the official Google Cloud CLI to connect project-level Gemini telemetry." : googleCloud.HasApplicationDefaultCredentials ? "Google Application Default Credentials are present; Refresh validates telemetry access." : "Google Cloud CLI is installed; link Application Default Credentials to enable Gemini telemetry." },
-            },
+            accounts,
         });
     }
 
@@ -64,10 +91,7 @@ internal sealed class AccountLinkBridge
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "claude.exe"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "claude.cmd"),
             }),
-            "antigravity" => FindExecutable("agy", new[]
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "agy", "bin", "agy.exe"),
-            }),
+            "antigravity" => FindAntigravityExecutable(),
             _ => null,
         };
         if (executable is null)
@@ -89,8 +113,21 @@ internal sealed class AccountLinkBridge
                 start.ArgumentList.Add("auth");
                 start.ArgumentList.Add("login");
             }
-            Process.Start(start);
-            _postMessage(new { type = "accountLink.open.result", version = ProtocolVersion, requestId = id, provider = normalized, opened = true });
+            using var process = Process.Start(start);
+            if (process is null)
+            {
+                PostError(id, "launch_failed", "The provider's official sign-in client could not be opened.");
+                return;
+            }
+            _postMessage(new
+            {
+                type = "accountLink.open.result",
+                version = ProtocolVersion,
+                requestId = id,
+                provider = normalized,
+                opened = true,
+                openedAtUtc = DateTimeOffset.UtcNow,
+            });
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -169,6 +206,42 @@ internal sealed class AccountLinkBridge
             }
         }
         return null;
+    }
+
+    private static string? FindAntigravityExecutable() => FindExecutable("agy", new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Antigravity", "Antigravity.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "agy", "bin", "agy.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini", "antigravity-cli", "bin", "agy.exe"),
+    });
+
+    private static bool HasAntigravityLocalSetup()
+    {
+        try
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            return File.Exists(Path.Combine(appData, "Antigravity", "app_storage.json"))
+                || File.Exists(Path.Combine(userProfile, ".gemini", "antigravity", "antigravity_state.pbtxt"));
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsProcessRunning(string processName)
+    {
+        try
+        {
+            var processes = Process.GetProcessesByName(processName);
+            try { return processes.Any(process => !process.HasExited); }
+            finally { foreach (var process in processes) process.Dispose(); }
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private bool TryEnvelope(int version, string? requestId, out string id)

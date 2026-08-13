@@ -2,6 +2,9 @@
 .hermes-connections__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .hermes-connections__header h2 { margin: 6px 0; font-size: 22px; }
 .hermes-connections__header p { max-width: 720px; margin: 0; color: var(--text-secondary, #aeb6ca); line-height: 1.5; }
+.hermes-connections__section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; border-top: 1px solid #2d3549; padding-top: 18px; }
+.hermes-connections__section-heading h3 { margin: 6px 0 4px; font-size: 17px; }
+.hermes-connections__section-heading p { max-width: 760px; margin: 0; color: var(--text-secondary, #aeb6ca); line-height: 1.45; }
 .hermes-connections__eyebrow { display: inline-flex; align-items: center; gap: 6px; color: #9cb8ff; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .hermes-connections button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid #39425c; border-radius: 7px; background: #1c2230; color: inherit; padding: 8px 11px; font: inherit; cursor: pointer; }
 .hermes-connections button:hover:not(:disabled) { border-color: #6f8fff; background: #242d41; }

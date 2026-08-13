@@ -25,9 +25,11 @@ export type HermesProfileRuntimeWorkspaceProps = {
   initialSnapshot?: ProfileRuntimeSnapshot
   onExport?: (profileExport: ProfileExport) => void
   interactionMode?: HermesProfileRuntimeWorkspaceInteractionMode
+  surfaceMode?: HermesProfileRuntimeWorkspaceSurfaceMode
 }
 
 export type HermesProfileRuntimeWorkspaceInteractionMode = 'read-write' | 'read-only'
+export type HermesProfileRuntimeWorkspaceSurfaceMode = 'full' | 'safe-live'
 
 function message(reason: unknown) {
   if (reason instanceof DOMException && reason.name === 'AbortError') return 'Operation cancelled.'
@@ -44,8 +46,10 @@ export function HermesProfileRuntimeWorkspace({
   initialSnapshot,
   onExport,
   interactionMode = 'read-write',
+  surfaceMode = 'full',
 }: HermesProfileRuntimeWorkspaceProps) {
   const readOnly = interactionMode === 'read-only'
+  const safeLive = surfaceMode === 'safe-live'
   const adapter = useMemo(() => suppliedAdapter ?? new DeterministicHermesProfileRuntimeAdapter(), [suppliedAdapter])
   const coordinator = useMemo(() => new HermesProfileRuntimeCoordinator(), [adapter])
   const [profileId, setProfileId] = useState(initialSnapshot?.profileId ?? initialProfileId)
@@ -105,7 +109,8 @@ export function HermesProfileRuntimeWorkspace({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [busy, previewAction])
 
-  const dirtyDocuments = snapshot?.documents.some((item) => documents[item.kind] !== item.text) ?? false
+  const visibleDocuments = snapshot?.documents.filter((item) => !safeLive || item.kind === 'soul') ?? []
+  const dirtyDocuments = visibleDocuments.some((item) => documents[item.kind] !== item.text)
   const dirtyIntent = snapshot ? JSON.stringify(intent) !== JSON.stringify(snapshot.intent) : false
   const dirtyConfiguration = snapshot ? JSON.stringify(configuration) !== JSON.stringify(snapshot.configuration) : false
   const isDirty = dirtyDocuments || dirtyIntent || dirtyConfiguration
@@ -131,7 +136,7 @@ export function HermesProfileRuntimeWorkspace({
   async function saveIntent() {
     if (!snapshot) return
     const next = await run('save-intent', () => coordinator.execute('save-intent', profileId, snapshot.revision, (context, signal) => adapter.saveIntent({ ...context, intent }, signal)))
-    if (next) { sync(next); setNotice('Profile model, project, and worktree intents saved.') }
+    if (next) { sync(next); setNotice(safeLive ? 'Profile model assignment saved.' : 'Profile model, project, and worktree intents saved.') }
   }
 
   async function saveConfiguration() {
@@ -203,21 +208,18 @@ export function HermesProfileRuntimeWorkspace({
   }
 
   return (
-    <section className="hpr-workspace" aria-busy={busy ? 'true' : 'false'}>
+    <section className="hpr-workspace" aria-labelledby="hpr-workspace-title" aria-describedby="hpr-workspace-summary" aria-busy={busy ? 'true' : 'false'}>
       <header className="hpr-hero">
-        <div><small>HERMES PROFILE RUNTIME</small><h2>Profile-scoped settings and tool runtime</h2><p>{readOnly ? 'Verified live profile facts. Change, grant, import, and export controls are intentionally unavailable.' : 'Versioned, host-neutral controls. No live Hermes operations, credential values, or implicit grants.'}</p></div>
+        <div><small>HERMES PROFILE RUNTIME</small><h2 id="hpr-workspace-title">Profile-scoped settings and tool runtime</h2><p id="hpr-workspace-summary">{readOnly ? 'Verified live profile facts. Change, grant, import, and export controls are intentionally unavailable.' : safeLive ? 'Versioned controls for real profile lifecycle, SOUL, model assignment, and terminal selection. Unsupported surfaces stay hidden.' : 'Versioned, host-neutral controls. No live Hermes operations, credential values, or implicit grants.'}</p></div>
         <span className={statusClass(snapshot?.availability ?? 'unavailable')}>{snapshot?.availability ?? 'loading'}</span>
       </header>
 
-      {readOnly ? <aside className="hpr-separation" aria-label="Read-only profile runtime">
-        <strong>Live read-only beta</strong>
-        <span>Workbench can inspect verified profile facts but cannot change or export them from this surface.</span>
-      </aside> : null}
-
-      <aside className="hpr-separation" aria-label="Terminal boundary">
-        <strong>Two different terminals</strong>
-        <span><b>Native Workbench terminal:</b> ConPTY-backed developer terminal, outside this module.</span>
-        <span><b>Hermes agent terminal backend:</b> {readOnly ? 'live status only; selection is unavailable here.' : 'tool-execution backend selected below.'}</span>
+      <aside className="hpr-boundary" aria-label="Terminal boundary">
+        <div><strong>Terminal boundary</strong><span>Workbench and Hermes agent execution remain separate.</span></div>
+        <dl>
+          <div><dt>Native Workbench terminal:</dt><dd>ConPTY-backed developer terminal, outside this module.</dd></div>
+          <div><dt>Hermes agent terminal backend:</dt><dd>{readOnly ? 'Live status only; selection is unavailable here.' : 'Tool-execution backend selected below.'}</dd></div>
+        </dl>
       </aside>
 
       {error && <div className="hpr-alert hpr-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError(null)}>Dismiss</button></div>}
@@ -225,8 +227,8 @@ export function HermesProfileRuntimeWorkspace({
       {busy && <div className="hpr-pending" role="status"><span>Pending: {busy}</span><button type="button" onClick={cancelPending}>Cancel operation</button></div>}
 
       {!snapshot ? <div className="hpr-empty"><strong>Profile runtime unavailable</strong><p>{busy ? 'Loading a profile-scoped snapshot…' : 'The adapter did not provide a snapshot.'}</p></div> : <>
-        <section className="hpr-panel hpr-profile-panel">
-          <header><div><small>{readOnly ? 'INSPECTED PROFILE' : 'ACTIVE PROFILE'}</small><h3>{snapshot.profiles.find((item) => item.id === profileId)?.name ?? profileId}</h3></div><span>revision {snapshot.revision}</span></header>
+        <section className="hpr-panel hpr-profile-panel" aria-labelledby="hpr-profile-heading">
+          <header><div><small>{readOnly ? 'INSPECTED PROFILE' : 'ACTIVE PROFILE'}</small><h3 id="hpr-profile-heading">{snapshot.profiles.find((item) => item.id === profileId)?.name ?? profileId}</h3></div><span>revision {snapshot.revision}</span></header>
           <label><span>{readOnly ? 'Inspect profile facts' : 'Select active profile'}</span><select value={profileId} onChange={(event) => void (readOnly ? inspectProfile(event.target.value) : changeActive(event.target.value))} disabled={busy !== null} aria-describedby={readOnly ? 'hpr-read-only-profile-help' : undefined}>{snapshot.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.isActive ? ' · active' : ''}</option>)}</select></label>
           {readOnly ? <small id="hpr-read-only-profile-help">Selecting a profile reloads read-only facts. It does not change the active Hermes profile.</small> : <form className="hpr-profile-actions" onSubmit={(event) => void previewMutation(event)}>
             <label><span>Operation</span><select value={mutationKind} onChange={(event) => setMutationKind(event.target.value as typeof mutationKind)}><option value="create">Create</option><option value="clone">Clone current</option><option value="rename">Rename current</option></select></label>
@@ -236,43 +238,43 @@ export function HermesProfileRuntimeWorkspace({
           </form>}
         </section>
 
-        <section className="hpr-panel">
-          <header><div><small>CALLER-OWNED SAVE</small><h3>Persona, soul, and context</h3></div>{dirtyDocuments && <span className="dirty">Unsaved</span>}</header>
-          <div className="hpr-document-grid">{snapshot.documents.map((document) => <label key={document.kind}><span>{document.kind}</span><textarea readOnly={readOnly} value={documents[document.kind] ?? ''} maxLength={document.maximumCharacters} onChange={(event) => setDocuments((current) => ({ ...current, [document.kind]: event.target.value }))} /><small>{(documents[document.kind] ?? '').length.toLocaleString()} / {document.maximumCharacters.toLocaleString()}</small>{readOnly ? null : <button type="button" onClick={() => void saveDocument(document.kind)} disabled={busy !== null || documents[document.kind] === document.text}>Save {document.kind}</button>}</label>)}</div>
+        <section className="hpr-panel" aria-labelledby="hpr-documents-heading">
+          <header><div><small>{safeLive ? 'PROFILE IDENTITY' : 'CALLER-OWNED SAVE'}</small><h3 id="hpr-documents-heading">{safeLive ? 'SOUL identity document' : 'Persona, soul, and context'}</h3></div>{dirtyDocuments && <span className="dirty">Unsaved</span>}</header>
+          <div className="hpr-document-grid">{visibleDocuments.map((document) => <label key={document.kind}><span>{document.kind}</span><textarea readOnly={readOnly} value={documents[document.kind] ?? ''} maxLength={document.maximumCharacters} onChange={(event) => setDocuments((current) => ({ ...current, [document.kind]: event.target.value }))} /><small>{(documents[document.kind] ?? '').length.toLocaleString()} / {document.maximumCharacters.toLocaleString()}</small>{readOnly ? null : <button type="button" onClick={() => void saveDocument(document.kind)} disabled={busy !== null || documents[document.kind] === document.text}>Save {document.kind}</button>}</label>)}</div>
         </section>
 
-        <section className="hpr-panel">
-          <header><div><small>PROFILE INTENTS</small><h3>Model and workspace targets</h3></div>{dirtyIntent && <span className="dirty">Unsaved</span>}</header>
+        <section className="hpr-panel" aria-labelledby="hpr-intents-heading">
+          <header><div><small>{safeLive ? 'MODEL ASSIGNMENT' : 'PROFILE INTENTS'}</small><h3 id="hpr-intents-heading">{safeLive ? 'Default model for future sessions' : 'Model and workspace targets'}</h3></div>{dirtyIntent && <span className="dirty">Unsaved</span>}</header>
           <div className="hpr-field-grid">
-            <label><span>Model ID intent</span><input readOnly={readOnly} value={intent.modelId ?? ''} maxLength={256} onChange={(event) => setIntent((current) => ({ ...current, modelId: event.target.value || null }))} /></label>
-            <label><span>Project path intent</span><input readOnly={readOnly} value={intent.projectPath ?? ''} maxLength={2048} onChange={(event) => setIntent((current) => ({ ...current, projectPath: event.target.value || null }))} /></label>
-            <label><span>Worktree path intent</span><input readOnly={readOnly} value={intent.worktreePath ?? ''} maxLength={2048} onChange={(event) => setIntent((current) => ({ ...current, worktreePath: event.target.value || null }))} /></label>
-            <label><span>Intent note</span><input readOnly={readOnly} value={intent.note} maxLength={2048} onChange={(event) => setIntent((current) => ({ ...current, note: event.target.value }))} /></label>
-          </div>{readOnly ? null : <button type="button" onClick={() => void saveIntent()} disabled={busy !== null || !dirtyIntent}>Save profile intents</button>}
+            <label><span>{safeLive ? 'Provider and model ID' : 'Model ID intent'}</span><input readOnly={readOnly} value={intent.modelId ?? ''} maxLength={256} onChange={(event) => setIntent((current) => ({ ...current, modelId: event.target.value || null }))} /></label>
+            {safeLive ? null : <><label><span>Project path intent</span><input readOnly={readOnly} value={intent.projectPath ?? ''} maxLength={2048} onChange={(event) => setIntent((current) => ({ ...current, projectPath: event.target.value || null }))} /></label>
+              <label><span>Worktree path intent</span><input readOnly={readOnly} value={intent.worktreePath ?? ''} maxLength={2048} onChange={(event) => setIntent((current) => ({ ...current, worktreePath: event.target.value || null }))} /></label>
+              <label><span>Intent note</span><input readOnly={readOnly} value={intent.note} maxLength={2048} onChange={(event) => setIntent((current) => ({ ...current, note: event.target.value }))} /></label></>}
+          </div>{readOnly ? null : <button type="button" onClick={() => void saveIntent()} disabled={busy !== null || !dirtyIntent}>{safeLive ? 'Save model assignment' : 'Save profile intents'}</button>}
         </section>
 
-        <section className="hpr-panel">
-          <header><div><small>HERMES AGENT TERMINAL</small><h3>Backend selection and status</h3></div><span>Not Workbench ConPTY</span></header>
+        <section className="hpr-panel" aria-labelledby="hpr-terminal-heading">
+          <header><div><small>HERMES AGENT TERMINAL</small><h3 id="hpr-terminal-heading">Backend selection and status</h3></div><span>Not Workbench ConPTY</span></header>
           <div className="hpr-card-grid">{snapshot.terminalBackends.map((backend) => <article key={backend.id}><header><strong>{backend.label}</strong><span className={statusClass(backend.availability)}>{backend.availability}</span></header><p>{backend.description}</p><small>{backend.detail}</small>{readOnly ? null : <button type="button" disabled={busy !== null || backend.selected || backend.availability === 'unavailable'} onClick={async () => { const next = await run('terminal-backend', () => coordinator.execute('terminal-backend', profileId, snapshot.revision, (context, signal) => adapter.selectTerminalBackend({ ...context, backendId: backend.id }, signal))); if (next) sync(next) }}>{backend.selected ? 'Selected Hermes backend' : 'Select Hermes backend'}</button>}</article>)}</div>
         </section>
 
-        <section className="hpr-panel">
-          <header><div><small>COMPUTER USE</small><h3>Status and permission intents</h3></div><span className={statusClass(snapshot.computerUse.availability)}>{snapshot.computerUse.availability}</span></header>
+        {safeLive ? null : <section className="hpr-panel" aria-labelledby="hpr-computer-use-heading">
+          <header><div><small>COMPUTER USE</small><h3 id="hpr-computer-use-heading">Status and permission intents</h3></div><span className={statusClass(snapshot.computerUse.availability)}>{snapshot.computerUse.availability}</span></header>
           <p>{snapshot.computerUse.detail}</p><div className="hpr-card-grid">{snapshot.computerUse.permissions.map((permission) => <article key={permission.id}><header><strong>{permission.label}</strong><span className={statusClass(permission.state)}>{permission.state}</span></header><p>{permission.description}</p><small>{permission.disposition}: {permission.detail}</small>{!readOnly && permission.disposition === 'manageable' && permission.state !== 'granted' && <button type="button" onClick={() => void previewPermission(permission.id)} disabled={busy !== null}>Preview permission request</button>}</article>)}</div>
-        </section>
+        </section>}
 
-        <section className="hpr-panel">
-          <header><div><small>PROVIDERS</small><h3>OAuth, credential pool, and endpoint status</h3></div><span>No secret values</span></header>
+        {safeLive ? null : <section className="hpr-panel" aria-labelledby="hpr-providers-heading">
+          <header><div><small>PROVIDERS</small><h3 id="hpr-providers-heading">OAuth, credential pool, and endpoint status</h3></div><span>No secret values</span></header>
           <div className="hpr-card-grid">{snapshot.providers.map((provider) => <article key={provider.id}><header><strong>{provider.label}</strong><span className={statusClass(provider.disposition)}>{provider.disposition}</span></header><dl><dt>OAuth</dt><dd>{provider.oauth}</dd><dt>Credential pool</dt><dd>{provider.credentialPool} · {provider.configuredCredentialSlots} slot(s)</dd><dt>Custom endpoint</dt><dd>{provider.customEndpoint.state}{provider.customEndpoint.origin ? ` · ${provider.customEndpoint.origin}` : ''}</dd></dl><small>{provider.detail}</small></article>)}</div>
-        </section>
+        </section>}
 
-        <section className="hpr-panel">
-          <header><div><small>SCHEMA-DRIVEN</small><h3>Non-secret configuration</h3></div>{dirtyConfiguration && <span className="dirty">Unsaved</span>}</header>
+        {safeLive ? null : <section className="hpr-panel" aria-labelledby="hpr-configuration-heading">
+          <header><div><small>SCHEMA-DRIVEN</small><h3 id="hpr-configuration-heading">Non-secret configuration</h3></div>{dirtyConfiguration && <span className="dirty">Unsaved</span>}</header>
           <div className="hpr-field-grid">{snapshot.configurationSchema.map((field) => <label key={field.key}><span>{field.label} <i>{field.disposition}</i></span>{field.kind === 'boolean' ? <input type="checkbox" checked={configuration[field.key] === true} disabled={readOnly || field.disposition !== 'manageable'} onChange={(event) => setConfiguration((current) => ({ ...current, [field.key]: event.target.checked }))} /> : field.kind === 'enum' ? <select value={String(configuration[field.key] ?? '')} disabled={readOnly || field.disposition !== 'manageable'} onChange={(event) => setConfiguration((current) => ({ ...current, [field.key]: event.target.value }))}>{field.options?.map((option) => <option key={option}>{option}</option>)}</select> : <input readOnly={readOnly} type={field.kind === 'integer' ? 'number' : 'text'} value={String(configuration[field.key] ?? '')} min={field.minimum} max={field.maximum} maxLength={field.maximumLength} disabled={field.disposition !== 'manageable'} onChange={(event) => setConfiguration((current) => ({ ...current, [field.key]: field.kind === 'integer' ? Number(event.target.value) : event.target.value }))} />}<small>{field.description}</small></label>)}</div>{readOnly ? null : <button type="button" onClick={() => void saveConfiguration()} disabled={busy !== null || !dirtyConfiguration}>Save non-secret configuration</button>}
-        </section>
+        </section>}
 
-        {readOnly ? null : <section className="hpr-panel">
-          <header><div><small>BOUNDED TRANSFER</small><h3>Import and export</h3></div><span>JSON · 256 KiB max</span></header>
+        {readOnly || safeLive ? null : <section className="hpr-panel" aria-labelledby="hpr-transfer-heading">
+          <header><div><small>BOUNDED TRANSFER</small><h3 id="hpr-transfer-heading">Import and export</h3></div><span>JSON · 256 KiB max</span></header>
           <label><span>Untrusted profile JSON</span><textarea className="hpr-import" value={importText} maxLength={262144} onChange={(event) => setImportText(event.target.value)} placeholder="Paste hermes-profile-runtime/v1 JSON. Text is never rendered as HTML." /></label>
           <div className="hpr-button-row"><button type="button" onClick={() => void previewImport()} disabled={busy !== null || !importText}>Validate and preview import</button><button type="button" onClick={() => void exportProfile()} disabled={busy !== null}>Prepare secret-free export</button></div>
           {exported && <label><span>{exported.fileName} · {exported.byteCount.toLocaleString()} bytes</span><textarea readOnly value={exported.text} /></label>}

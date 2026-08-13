@@ -62,7 +62,16 @@ export interface PhotonCadViewerProps {
   loadTimeoutMs?: number
   selectedEntityIds?: readonly string[]
   onSelectionChange?: (entityIds: string[]) => void
+  surfacePicking?: boolean
+  onSurfacePick?: (pick: PhotonCadSurfacePick) => void
   className?: string
+}
+
+export type PhotonCadSurfacePick = {
+  entityId: string
+  originMm: { x: number; y: number; z: number }
+  xDirection: { x: number; y: number; z: number }
+  normal: { x: number; y: number; z: number }
 }
 
 type ViewerStatus = 'unavailable' | 'resolving' | 'downloading' | 'parsing' | 'ready' | 'error'
@@ -408,6 +417,8 @@ export function PhotonCadViewer({
   loadTimeoutMs = DEFAULT_LOAD_TIMEOUT_MS,
   selectedEntityIds,
   onSelectionChange,
+  surfacePicking = false,
+  onSurfacePick,
   className = '',
 }: PhotonCadViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -437,6 +448,10 @@ export function PhotonCadViewer({
   controlledSelectionRef.current = selectedEntityIds !== undefined
   const selectionCallbackRef = useRef(onSelectionChange)
   selectionCallbackRef.current = onSelectionChange
+  const surfacePickingRef = useRef(surfacePicking)
+  surfacePickingRef.current = surfacePicking
+  const surfacePickCallbackRef = useRef(onSurfacePick)
+  surfacePickCallbackRef.current = onSurfacePick
   const receiptKey = receipt ? JSON.stringify([
     receipt.previewId,
     receipt.projectId,
@@ -639,6 +654,19 @@ export function PhotonCadViewer({
           let object: Object3D | null = hit.object
           while (object && !active.objectIds.has(object)) object = object.parent
           const id = object ? active.objectIds.get(object) : undefined
+          if (id && surfacePickingRef.current && surfacePickCallbackRef.current && hit.face) {
+            const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
+            const reference = Math.abs(normal.z) < .9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0)
+            const xDirection = reference.clone().cross(normal).normalize()
+            surfacePickCallbackRef.current({
+              entityId: id,
+              originMm: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
+              xDirection: { x: xDirection.x, y: xDirection.y, z: xDirection.z },
+              normal: { x: normal.x, y: normal.y, z: normal.z },
+            })
+            publishSelection([id])
+            return
+          }
           if (id) toggleSelection(id, event.ctrlKey || event.metaKey)
         }
         const contextLost = (event: Event) => {

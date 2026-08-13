@@ -18,7 +18,8 @@ export const HERMES_SPEECH_OUTPUT_VOICES = [
   },
 ] as const
 
-export type HermesSpeechOutputVoiceId = typeof HERMES_SPEECH_OUTPUT_VOICES[number]['id']
+export type HermesSpeechOutputVoice = Readonly<{ id: string; label: string; description: string }>
+export type HermesSpeechOutputVoiceId = string
 
 export type HermesSpeechOutputSettings = Readonly<{
   contractVersion: typeof HERMES_SPEECH_OUTPUT_CONTRACT_VERSION
@@ -62,7 +63,7 @@ export type HermesSpeechOutputSaveRequest = Readonly<{
 }>
 
 const opaqueIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
-const voiceIds = new Set<string>(HERMES_SPEECH_OUTPUT_VOICES.map((voice) => voice.id))
+const voiceIdPattern = /^[a-z]{2}_[a-z0-9_]{1,63}$/
 
 function exactOpaqueId(value: unknown, label: string): string {
   const text = typeof value === 'string' ? value.trim() : ''
@@ -102,7 +103,7 @@ export function assertHermesSpeechOutputSettings(value: unknown): HermesSpeechOu
     || candidate.provider !== HERMES_SPEECH_OUTPUT_PROVIDER
     || candidate.localOnly !== true
     || typeof candidate.voiceId !== 'string'
-    || !voiceIds.has(candidate.voiceId)
+    || !voiceIdPattern.test(candidate.voiceId)
   ) {
     throw new Error('Voice settings are invalid.')
   }

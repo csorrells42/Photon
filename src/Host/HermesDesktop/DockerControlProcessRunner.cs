@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
@@ -9,7 +12,7 @@ using System.Text.RegularExpressions;
 
 namespace HermesDesktop;
 
-internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
+internal sealed partial class DockerControlProcessRunner : IDockerControlRunner, IStreamingDockerControlRunner, IDockerControlAvailability
 {
     private const int MaximumCommandOutputCharacters = 256 * 1024;
     private const int MaximumLogOutputCharacters = 64 * 1024;
@@ -18,6 +21,10 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
     private readonly string _trustedRoot;
     private readonly string _composePath;
     private readonly string _dockerExecutable;
+    private readonly SemaphoreSlim _automaticRecoveryGate = new(1, 1);
+    private readonly object _manualStopGate = new();
+    private readonly HashSet<DockerControlService> _manuallyStoppedServices = [];
+    private static readonly HttpClient LoopbackProbe = new() { Timeout = TimeSpan.FromSeconds(2) };
 
     internal DockerControlProcessRunner(string trustedStackRoot)
     {
@@ -28,55 +35,173 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
         _dockerExecutable = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
     }
 
-    public async Task<DockerControlHostSnapshot> CaptureAsync(CancellationToken cancellationToken)
+    public bool IsAvailable => IsTrustedFile(_composePath) && IsTrustedExecutable(_dockerExecutable);
+
+    public Task<DockerControlHostSnapshot> CaptureAsync(CancellationToken cancellationToken) =>
+        CaptureCoreAsync(null, cancellationToken);
+
+    public Task<DockerControlHostSnapshot> CaptureStreamingAsync(
+        Action<DockerControlHostSnapshot> observe,
+        CancellationToken cancellationToken) =>
+        CaptureCoreAsync(observe ?? throw new ArgumentNullException(nameof(observe)), cancellationToken);
+
+    private async Task<DockerControlHostSnapshot> CaptureCoreAsync(
+        Action<DockerControlHostSnapshot>? observe,
+        CancellationToken cancellationToken)
     {
-        var observedAt = DateTimeOffset.UtcNow;
-        if (!IsTrustedFile(_composePath) || !IsTrustedExecutable(_dockerExecutable))
-            return UnavailableSnapshot(observedAt, File.Exists(_dockerExecutable) ? "unavailable" : "unavailable");
-
-        var engine = await RunAsync(DockerCliOperation.EngineVersion, null, 0, cancellationToken).ConfigureAwait(false);
-        if (engine.ExitCode != 0)
-            return UnavailableSnapshot(observedAt, "unavailable");
-
-        var engineVersion = SafeIdentity(engine.StandardOutput);
-        var configured = await ReadConfiguredServicesAsync(cancellationToken).ConfigureAwait(false);
-        var services = new List<DockerControlServiceEvidence>();
+        var services = new List<DockerControlServiceEvidence> { SerenaEvidence() };
         var volumes = new Dictionary<string, DockerControlVolumeEvidence>(StringComparer.Ordinal)
         {
             ["data"] = new("data", "unknown", true),
             ["workspace"] = new("workspace", "unknown", true),
         };
+        var engineState = "unavailable";
+        string? engineVersion = null;
+        var composeState = "unavailable";
+        DockerControlModelRunner? modelRunner = null;
+        HashSet<string> configured = [];
+        var definitionFingerprint = SafeComposeFingerprint();
 
-        if (configured.Contains("gateway"))
-            services.Add(await ReadComposeServiceAsync(DockerControlService.Hermes, "gateway", ApprovedHermesDigest(), volumes, cancellationToken).ConfigureAwait(false));
-        else
-            services.Add(UnavailableService(DockerControlService.Hermes));
-
-        if (configured.Contains("memory-vector"))
-            services.Add(await ReadComposeServiceAsync(DockerControlService.MemoryVector, "memory-vector", ApprovedServiceDigest("memory-vector"), volumes, cancellationToken).ConfigureAwait(false));
-        else
-            services.Add(UnavailableService(DockerControlService.MemoryVector));
-
-        services.Add(SerenaEvidence());
-        var modelRunner = await ReadModelRunnerAsync(cancellationToken).ConfigureAwait(false);
-
-        var composeState = services.Any(service => service.Manageable && service.State == "degraded")
-            ? "degraded"
-            : services.Any(service => service.Manageable && service.State == "running")
-                ? "running"
-                : configured.Count > 0 ? "stopped" : "unavailable";
-        return new DockerControlHostSnapshot(
-            observedAt,
-            "running",
+        DockerControlHostSnapshot Current() => new(
+            DateTimeOffset.UtcNow,
+            engineState,
             engineVersion,
             composeState,
-            HashFile(_composePath),
+            definitionFingerprint,
             services.FirstOrDefault(service => service.Id == DockerControlService.Hermes)?.Image?.OciRevision,
             RuntimeProtocol,
-            services,
+            services.ToArray(),
             volumes.Values.OrderBy(volume => volume.Role, StringComparer.Ordinal).ToArray(),
             modelRunner,
             null);
+
+        void Emit()
+        {
+            try { observe?.Invoke(Current()); }
+            catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException) { }
+        }
+
+        // Host-supervised services report immediately and never wait on Docker.
+        Emit();
+        if (!IsTrustedFile(_composePath) || !IsTrustedExecutable(_dockerExecutable))
+            return Current();
+
+        var modelRunnerTask = ReadModelRunnerSafelyAsync(cancellationToken);
+        DockerProcessResult engine;
+        try
+        {
+            engine = await RunAsync(DockerCliOperation.EngineVersion, null, 0, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch
+        {
+            modelRunner = await modelRunnerTask.ConfigureAwait(false);
+            Emit();
+            return Current();
+        }
+        if (engine.ExitCode != 0)
+        {
+            modelRunner = await modelRunnerTask.ConfigureAwait(false);
+            Emit();
+            return Current();
+        }
+
+        engineState = "running";
+        engineVersion = SafeIdentity(engine.StandardOutput);
+        Emit();
+
+        try { configured = await ReadConfiguredServicesAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch { configured = []; }
+
+        async Task<(DockerControlServiceEvidence Service, Dictionary<string, DockerControlVolumeEvidence> Volumes)> ReadServiceAsync(
+            DockerControlService id,
+            string composeService,
+            string? digest)
+        {
+            var localVolumes = new Dictionary<string, DockerControlVolumeEvidence>(StringComparer.Ordinal);
+            DockerControlServiceEvidence service;
+            try
+            {
+                service = configured.Contains(composeService)
+                    ? await ReadComposeServiceAsync(id, composeService, digest, localVolumes, cancellationToken).ConfigureAwait(false)
+                    : UnavailableService(id);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch
+            {
+                service = UnavailableService(id);
+            }
+            return (service, localVolumes);
+        }
+
+        var pendingServices = new List<Task<(DockerControlServiceEvidence Service, Dictionary<string, DockerControlVolumeEvidence> Volumes)>>
+        {
+            ReadServiceAsync(DockerControlService.Hermes, "gateway", ApprovedHermesDigest()),
+            ReadServiceAsync(DockerControlService.MemoryVector, "memory-vector", ApprovedServiceDigest("memory-vector")),
+        };
+
+        while (pendingServices.Count > 0)
+        {
+            var completed = await Task.WhenAny(pendingServices).ConfigureAwait(false);
+            pendingServices.Remove(completed);
+            var result = await completed.ConfigureAwait(false);
+            services.RemoveAll(service => service.Id == result.Service.Id);
+            services.Add(result.Service);
+            foreach (var volume in result.Volumes) volumes[volume.Key] = volume.Value;
+            composeState = ComposeState(services, configured);
+            Emit();
+        }
+
+        var recoveryTargets = services
+            .Where(service => service.Manageable && !ServiceReady(service) && configured.Contains(ComposeService(service.Id)))
+            .Select(service => service.Id)
+            .Where(service => !IsManuallyStopped(service))
+            .Distinct()
+            .OrderBy(service => service == DockerControlService.MemoryVector ? 0 : 1)
+            .ToArray();
+
+        if (recoveryTargets.Length > 0 && await _automaticRecoveryGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+        {
+            try
+            {
+                composeState = "degraded";
+                Emit();
+                foreach (var target in recoveryTargets)
+                {
+                    try
+                    {
+                        await RepairServiceAsync(target, cancellationToken).ConfigureAwait(false);
+                        var refreshed = await ProbeServiceAsync(target, cancellationToken).ConfigureAwait(false);
+                        services.RemoveAll(service => service.Id == target);
+                        services.Add(refreshed.Service);
+                        foreach (var volume in refreshed.Volumes) volumes[volume.Key] = volume.Value;
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch { /* Keep the last truthful evidence; the next monitor pass retries. */ }
+                }
+                composeState = ComposeState(services, configured);
+                Emit();
+            }
+            finally
+            {
+                _automaticRecoveryGate.Release();
+            }
+        }
+
+        modelRunner = await modelRunnerTask.ConfigureAwait(false);
+        Emit();
+        return Current();
+    }
+
+    private static string ComposeState(IReadOnlyCollection<DockerControlServiceEvidence> services, IReadOnlyCollection<string> configured)
+    {
+        var managed = services.Where(service => service.Manageable).ToArray();
+        if (managed.Any(service => service.State == "degraded")) return "degraded";
+        var running = managed.Count(service => service.State == "running");
+        if (running == managed.Length && managed.Length > 0) return "running";
+        if (running > 0) return "degraded";
+        return configured.Count > 0 ? "stopped" : "unavailable";
     }
 
     public async Task<DockerControlLogs> ReadLogsAsync(DockerControlService service, int maximumLines, CancellationToken cancellationToken)
@@ -100,7 +225,7 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
 
     public async Task<DockerControlMutationOutcome> ExecuteAsync(DockerControlMutation mutation, CancellationToken cancellationToken)
     {
-        if (mutation.Kind is DockerControlMutationKind.StartService or DockerControlMutationKind.StopService or DockerControlMutationKind.RestartService && mutation.Service is null)
+        if (mutation.Kind is DockerControlMutationKind.StartService or DockerControlMutationKind.StopService or DockerControlMutationKind.RestartService or DockerControlMutationKind.RepairService && mutation.Service is null)
             throw new DockerControlUnavailableException("invalid_mutation", "The reviewed service target is invalid.");
         if (mutation.Kind == DockerControlMutationKind.UnloadModel)
         {
@@ -117,6 +242,20 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
                 throw new DockerControlUnavailableException("service_unavailable", "A reviewed Docker target is no longer configured.");
         }
 
+        if (mutation.Kind == DockerControlMutationKind.RepairService)
+        {
+            await _automaticRecoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                SetManualStopIntent(mutation.Targets, stopped: false);
+                var repaired = await RepairServiceAsync(mutation.Service!.Value, cancellationToken).ConfigureAwait(false);
+                return new(repaired, repaired
+                    ? "The service is running and its health check passed."
+                    : "The service did not become healthy after restart and recreation.");
+            }
+            finally { _automaticRecoveryGate.Release(); }
+        }
+
         var operation = mutation.Kind switch
         {
             DockerControlMutationKind.StartStack => DockerCliOperation.Start,
@@ -126,11 +265,48 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
             DockerControlMutationKind.RestartService => DockerCliOperation.Restart,
             _ => throw new DockerControlUnavailableException("invalid_mutation", "The reviewed Docker operation is invalid."),
         };
-        var result = await RunAsync(operation, mutation.Service, 0, cancellationToken, mutation.Targets).ConfigureAwait(false);
-        var succeeded = result.ExitCode == 0;
-        return new DockerControlMutationOutcome(
-            succeeded,
-            succeeded ? "The reviewed Docker operation completed." : "The reviewed Docker operation failed.");
+        await _automaticRecoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var isStop = mutation.Kind is DockerControlMutationKind.StopStack or DockerControlMutationKind.StopService;
+            if (isStop) SetManualStopIntent(mutation.Targets, stopped: true);
+            else SetManualStopIntent(mutation.Targets, stopped: false);
+
+            DockerProcessResult result;
+            try
+            {
+                result = await RunAsync(operation, mutation.Service, 0, cancellationToken, mutation.Targets).ConfigureAwait(false);
+            }
+            catch
+            {
+                if (isStop) SetManualStopIntent(mutation.Targets, stopped: false);
+                throw;
+            }
+            var succeeded = result.ExitCode == 0;
+            if (!succeeded && isStop) SetManualStopIntent(mutation.Targets, stopped: false);
+            return new DockerControlMutationOutcome(
+                succeeded,
+                succeeded ? "The reviewed Docker operation completed." : "The reviewed Docker operation failed.");
+        }
+        finally { _automaticRecoveryGate.Release(); }
+    }
+
+    private bool IsManuallyStopped(DockerControlService service)
+    {
+        lock (_manualStopGate) return _manuallyStoppedServices.Contains(service);
+    }
+
+    private void SetManualStopIntent(IReadOnlyCollection<DockerControlService> services, bool stopped)
+    {
+        lock (_manualStopGate)
+        {
+            foreach (var service in services)
+            {
+                if (service is not (DockerControlService.Hermes or DockerControlService.MemoryVector)) continue;
+                if (stopped) _manuallyStoppedServices.Add(service);
+                else _manuallyStoppedServices.Remove(service);
+            }
+        }
     }
 
     private async Task<HashSet<string>> ReadConfiguredServicesAsync(CancellationToken cancellationToken)
@@ -144,6 +320,52 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
 
     private async Task<bool> IsComposeServiceConfiguredAsync(string service, CancellationToken cancellationToken) =>
         (await ReadConfiguredServicesAsync(cancellationToken).ConfigureAwait(false)).Contains(service);
+
+    private async Task<(DockerControlServiceEvidence Service, Dictionary<string, DockerControlVolumeEvidence> Volumes)> ProbeServiceAsync(
+        DockerControlService service,
+        CancellationToken cancellationToken)
+    {
+        var volumes = new Dictionary<string, DockerControlVolumeEvidence>(StringComparer.Ordinal);
+        var evidence = await ReadComposeServiceAsync(
+            service,
+            ComposeService(service),
+            service == DockerControlService.Hermes ? ApprovedHermesDigest() : ApprovedServiceDigest("memory-vector"),
+            volumes,
+            cancellationToken).ConfigureAwait(false);
+        return (evidence, volumes);
+    }
+
+    private async Task<bool> RepairServiceAsync(DockerControlService service, CancellationToken cancellationToken)
+    {
+        var current = (await ProbeServiceAsync(service, cancellationToken).ConfigureAwait(false)).Service;
+        if (ServiceReady(current)) return true;
+
+        var firstOperation = current.State == "running" ? DockerCliOperation.Restart : DockerCliOperation.Start;
+        var first = await RunAsync(firstOperation, service, 0, cancellationToken, [service]).ConfigureAwait(false);
+        if (first.ExitCode == 0 && await WaitForServiceReadyAsync(service, TimeSpan.FromSeconds(24), cancellationToken).ConfigureAwait(false))
+            return true;
+
+        var recreate = await RunAsync(DockerCliOperation.Recreate, service, 0, cancellationToken, [service]).ConfigureAwait(false);
+        return recreate.ExitCode == 0
+            && await WaitForServiceReadyAsync(service, TimeSpan.FromSeconds(36), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> WaitForServiceReadyAsync(DockerControlService service, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        do
+        {
+            var evidence = (await ProbeServiceAsync(service, cancellationToken).ConfigureAwait(false)).Service;
+            if (ServiceReady(evidence)) return true;
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+        return false;
+    }
+
+    private static bool ServiceReady(DockerControlServiceEvidence service) =>
+        service.State == "running"
+        && service.Health == "healthy";
 
     private async Task<DockerControlServiceEvidence> ReadComposeServiceAsync(
         DockerControlService id,
@@ -189,7 +411,19 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
             if (stats.ExitCode == 0 && TryFirstJsonObject(stats.StandardOutput, out var statsObject))
                 resources = ReadResources(statsObject);
         }
+        if (id == DockerControlService.Hermes && state == "running")
+            health = await GatewayEndpointReadyAsync(cancellationToken).ConfigureAwait(false) ? "healthy" : "unhealthy";
         return new DockerControlServiceEvidence(id, state, health, containerId, null, image, ports, resources, true);
+    }
+
+    private static async Task<bool> GatewayEndpointReadyAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await LoopbackProbe.GetAsync("http://127.0.0.1:9119/api/status", cancellationToken).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested && exception is (HttpRequestException or TaskCanceledException)) { return false; }
     }
 
     private DockerControlServiceEvidence SerenaEvidence()
@@ -206,14 +440,21 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException) { }
+        var listening = false;
+        try
+        {
+            listening = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(endpoint =>
+                endpoint.Port == 9121 && (IPAddress.IsLoopback(endpoint.Address) || endpoint.Address.Equals(IPAddress.Any) || endpoint.Address.Equals(IPAddress.IPv6Any)));
+        }
+        catch (Exception) { }
         return new DockerControlServiceEvidence(
             DockerControlService.Serena,
-            configured ? "unknown" : "unavailable",
-            "unknown",
+            listening ? "running" : configured ? "stopped" : "unavailable",
+            listening ? "healthy" : configured ? "not-configured" : "unknown",
             null,
             null,
             null,
-            [],
+            listening ? [new DockerControlPort("127.0.0.1", 9121, 9121, "tcp")] : [],
             null,
             false);
     }
@@ -267,6 +508,19 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
             running && models.Any(model => model.Loaded),
             models,
             running ? "Docker Model Runner is available. Loading is not exposed because this CLI has no bounded load-only authority." : "Docker Model Runner is installed but not running.");
+    }
+
+    private async Task<DockerControlModelRunner> ReadModelRunnerSafelyAsync(CancellationToken cancellationToken)
+    {
+        try { return await ReadModelRunnerAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch { return new("unavailable", null, null, null, null, false, [], "Docker Model Runner is temporarily unavailable; monitoring will retry automatically."); }
+    }
+
+    private string? SafeComposeFingerprint()
+    {
+        try { return IsTrustedFile(_composePath) ? HashFile(_composePath) : null; }
+        catch { return null; }
     }
 
     private static IReadOnlyList<DockerControlModel> ReadPulledModels(string json)
@@ -450,6 +704,9 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
                 arguments.Add("stop"); arguments.Add("--timeout"); arguments.Add("20"); AddTargets(arguments, targets); break;
             case DockerCliOperation.Restart:
                 arguments.Add("restart"); arguments.Add("--timeout"); arguments.Add("20"); arguments.Add(ComposeService(service)); break;
+            case DockerCliOperation.Recreate:
+                arguments.Add("up"); arguments.Add("--detach"); arguments.Add("--no-build"); arguments.Add("--pull"); arguments.Add("never");
+                arguments.Add("--no-deps"); arguments.Add("--force-recreate"); AddTargets(arguments, targets); break;
             default: throw new DockerControlUnavailableException("invalid_operation", "The fixed Docker operation is invalid.");
         }
     }
@@ -680,7 +937,7 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner
     {
         EngineVersion, ComposeServices, ComposePs, ComposeContainerId, ContainerInspect, ImageInspect, ContainerStats,
         ModelStatus, ModelVersion, ModelList, ModelPs, ModelDf, ModelUnload,
-        Logs, Start, Stop, Restart,
+        Logs, Start, Stop, Restart, Recreate,
     }
     private sealed record DockerProcessResult(int ExitCode, string StandardOutput, string StandardError, bool Truncated);
     private sealed record BoundedText(string Text, bool Truncated);

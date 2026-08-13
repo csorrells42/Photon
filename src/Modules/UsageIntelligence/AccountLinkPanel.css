@@ -1,0 +1,37 @@
+.ui-account-link-panel {
+  --ui-line: rgba(222, 231, 255, .09);
+  --ui-muted: #8d98ac;
+  --ui-teal: #66ddbd;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #2d3549;
+  border-radius: 12px;
+  color: #e6ebf7;
+  background: linear-gradient(145deg, rgba(18, 24, 37, .96), rgba(12, 17, 27, .96));
+}
+.ui-account-link-panel .ui-panel-heading { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--ui-line); padding: 14px 16px; }
+.ui-account-link-panel .ui-panel-heading > div { min-width: 0; }
+.ui-account-link-panel .ui-panel-heading h2 { margin: 4px 0 0; color: #e7ebf4; font-size: 16px; letter-spacing: -.02em; }
+.ui-account-link-panel .ui-panel-heading p { margin: 4px 0 0; color: var(--ui-muted); font-size: 11px; line-height: 1.4; }
+.ui-account-link-panel .ui-eyebrow { color: #9e8ce8; font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.ui-account-link-panel .ui-account-refresh { min-height: 31px; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; border: 1px solid rgba(150, 126, 241, .3); border-radius: 7px; padding: 0 10px; color: #d2c9f6; background: rgba(111, 84, 204, .14); cursor: pointer; }
+.ui-account-link-panel .ui-account-link-grid { display: grid; grid-template-columns: repeat(4, minmax(190px, 1fr)); gap: 10px; padding: 12px; }
+.ui-account-link-panel .ui-account-link-card { min-width: 0; min-height: 142px; display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 32px; column-gap: 10px; border: 1px solid rgba(226, 233, 255, .08); border-radius: 10px; padding: 11px; background: rgba(255, 255, 255, .022); }
+.ui-account-link-panel .ui-account-link-card.linked { border-color: rgba(78, 203, 164, .27); background: linear-gradient(145deg, rgba(42, 153, 121, .1), rgba(8, 16, 22, .08)); }
+.ui-account-link-panel .ui-account-link-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; color: #a18ee9; background: rgba(124, 94, 220, .14); }
+.ui-account-link-panel .ui-account-link-card.linked .ui-account-link-mark { color: #76d5bb; background: rgba(48, 157, 127, .14); }
+.ui-account-link-panel .ui-account-link-card > div { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.ui-account-link-panel .ui-account-link-card strong { color: #e2e7f1; font-size: 12px; }
+.ui-account-link-panel .ui-account-link-card > div > span { color: #a0aabd; font-size: 10px; line-height: 1.35; }
+.ui-account-link-panel .ui-account-link-card small { color: #68758b; font-size: 9px; line-height: 1.4; }
+.ui-account-link-panel .ui-account-link-card em { display: flex; align-items: flex-start; gap: 6px; color: #a9b6cb; font-size: 10px; font-style: normal; line-height: 1.45; }
+.ui-account-link-panel .ui-account-link-card em svg { flex: 0 0 auto; margin-top: 2px; color: #8c78df; }
+.ui-account-link-panel .ui-account-link-card > button { grid-column: 1 / -1; min-height: 31px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid rgba(151, 127, 242, .27); border-radius: 7px; color: #cfc4f5; background: rgba(111, 83, 206, .12); cursor: pointer; }
+.ui-account-link-panel .ui-account-link-card > button:hover:not(:disabled) { background: rgba(111, 83, 206, .22); }
+.ui-account-link-panel .ui-account-link-card > button:disabled { opacity: .48; cursor: not-allowed; }
+.ui-account-link-panel > footer { min-height: 36px; display: flex; align-items: center; gap: 7px; border-top: 1px solid var(--ui-line); padding: 0 14px; color: #738096; font-size: 9px; }
+.ui-account-link-panel > footer svg { color: var(--ui-teal); }
+.ui-account-link-panel .ui-spin { animation: account-link-spin 1s linear infinite; }
+@keyframes account-link-spin { to { transform: rotate(360deg); } }
+@media (max-width: 1180px) { .ui-account-link-panel .ui-account-link-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); } }
+@media (max-width: 720px) { .ui-account-link-panel .ui-panel-heading { align-items: flex-start; flex-direction: column; } .ui-account-link-panel .ui-account-refresh { width: 100%; justify-content: center; } .ui-account-link-panel .ui-account-link-grid { grid-template-columns: minmax(0, 1fr); } }

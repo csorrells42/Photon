@@ -43,7 +43,8 @@ try {
         'Install-Hermes.ps1', 'Install-NetCoreDbg.ps1', 'Get-NetCoreDbg.ps1', 'Install-RoslynLanguageServer.ps1', 'roslyn-language-server.lock.json',
         'Install-ArduinoToolchain.ps1', 'arduino-toolchain.lock.json', 'Install-OpenSshToolchain.ps1', 'Test-Hermes.ps1',
         'Install-PhotonModels.ps1', 'Install-PhotonCadRuntime.ps1', 'photon-cad-assets.lock.json',
-        'Launch-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1', 'Show-HermesBridge.ps1',
+        'Launch-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1', 'Show-HermesBridge.ps1', 'Photon-McpGateway.ps1',
+        'mcp-profiles\profiles.lock.json', 'mcp-profiles\photon-engineering-discovery.yaml', 'mcp-profiles\photon-relentless-repair.yaml',
         'Invoke-HermesFrontend.ps1', 'README.md', 'THIRD-PARTY-NOTICES.md',
         'licenses\netcoredbg-LICENSE.txt', '.serena\project.yml'
     )
@@ -104,7 +105,7 @@ try {
     New-Item -ItemType Directory -Path $editorStage | Out-Null
     Copy-Item -LiteralPath $editorTasks -Destination (Join-Path $editorStage 'tasks.json') -Force
 
-    $requiredSmokeScripts = @('Install-Hermes.Smoke.ps1', 'Shutdown-Hermes.Smoke.ps1', 'Update-Hermes.Smoke.ps1', 'NetCoreDbg-Provisioning.Smoke.ps1', 'RoslynLanguageServer-Provisioning.Fake.Smoke.ps1', 'ArduinoToolchain-Provisioning.Smoke.ps1', 'OpenSshToolchain-Provisioning.Smoke.ps1', 'PhotonCad-Offline-Assets.Smoke.ps1', 'Memory-Vector-Compose.Smoke.ps1')
+    $requiredSmokeScripts = @('Install-Hermes.Smoke.ps1', 'Shutdown-Hermes.Smoke.ps1', 'Update-Hermes.Smoke.ps1', 'Photon-McpGateway.Smoke.ps1', 'NetCoreDbg-Provisioning.Smoke.ps1', 'RoslynLanguageServer-Provisioning.Fake.Smoke.ps1', 'ArduinoToolchain-Provisioning.Smoke.ps1', 'OpenSshToolchain-Provisioning.Smoke.ps1', 'PhotonCad-Offline-Assets.Smoke.ps1', 'Memory-Vector-Compose.Smoke.ps1')
     $missingSmokeScripts = @($requiredSmokeScripts | Where-Object { -not (Test-Path -LiteralPath (Join-Path $testsSource $_) -PathType Leaf) })
     if ($missingSmokeScripts.Count -gt 0) {
         throw "Hermes Workbench installer smoke scripts were not found: $($missingSmokeScripts -join ', ')"
@@ -268,6 +269,10 @@ try {
             'Hermes-Remote-Install/Test-Hermes.ps1',
             'Hermes-Remote-Install/Launch-Hermes.ps1',
             'Hermes-Remote-Install/Shutdown-Hermes.ps1',
+            'Hermes-Remote-Install/Photon-McpGateway.ps1',
+            'Hermes-Remote-Install/mcp-profiles/profiles.lock.json',
+            'Hermes-Remote-Install/mcp-profiles/photon-engineering-discovery.yaml',
+            'Hermes-Remote-Install/mcp-profiles/photon-relentless-repair.yaml',
             'Hermes-Remote-Install/Update-Hermes.ps1',
             'Hermes-Remote-Install/Show-HermesBridge.ps1',
             'Hermes-Remote-Install/Invoke-HermesFrontend.ps1',
@@ -279,6 +284,7 @@ try {
             'Hermes-Remote-Install/tests/Install-Hermes.Smoke.ps1',
             'Hermes-Remote-Install/tests/Shutdown-Hermes.Smoke.ps1',
             'Hermes-Remote-Install/tests/Update-Hermes.Smoke.ps1',
+            'Hermes-Remote-Install/tests/Photon-McpGateway.Smoke.ps1',
             'Hermes-Remote-Install/tests/NetCoreDbg-Provisioning.Smoke.ps1',
             'Hermes-Remote-Install/tests/RoslynLanguageServer-Provisioning.Fake.Smoke.ps1',
             'Hermes-Remote-Install/tests/ArduinoToolchain-Provisioning.Smoke.ps1',

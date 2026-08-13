@@ -88,6 +88,14 @@ export type PhotonCadPreviewContext = {
   selectedEntityIds: readonly string[]
   stage: PhotonCadWorkspaceStage
   acceptHydratedReceipt: (receipt: PhotonCadPreviewReceipt) => boolean
+  /**
+   * The native preview uses this narrow callback for mouse-created rectangle
+   * and circle profiles.  It keeps the same catalog authorization, project
+   * revision, persistence, and preview-evidence checks as the inspector.
+   */
+  runManualSketch?: (capabilityId: string, inputs: Record<string, PhotonCadInputValue>, targetEntityIds?: readonly string[]) => Promise<boolean>
+  manualSketchReady?: boolean
+  operationBusy?: boolean
 }
 
 export type PhotonCadCommercialPreviewContext = {
@@ -148,6 +156,8 @@ export const PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID = 'assembly.occurrence.
 export const PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID = 'assembly.occurrence.remove.v1'
 export const PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID = 'manual.solid.extrude.add.v1'
 export const PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID = 'manual.solid.extrude.cut.v1'
+export const PHOTON_CAD_MANUAL_MOUSE_ADD_CAPABILITY_ID = 'manual.solid.mouse-sketch.add.v1'
+export const PHOTON_CAD_MANUAL_MOUSE_CUT_CAPABILITY_ID = 'manual.solid.mouse-sketch.cut.v1'
 export const PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID = 'manual.solid.hole.cut.v1'
 export const PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID = 'manual.feature.pattern.linear.v1'
 export const PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID = 'manual.feature.pattern.circular.v1'
@@ -253,6 +263,7 @@ function photonCadManualDesignCapability(capability: PhotonCadCapability) {
 
 function photonCadManualModifyCapabilityId(capabilityId: string) {
   return capabilityId === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+    || capabilityId === PHOTON_CAD_MANUAL_MOUSE_CUT_CAPABILITY_ID
     || capabilityId === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
     || capabilityId === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
     || capabilityId === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID
@@ -623,6 +634,18 @@ function photonCadManualSchemaMatches(capability: PhotonCadCapability) {
       && photonCadManualNumberParameterMatches(parameters.get('profileHeightMm'), true)
       && photonCadManualNumberParameterMatches(parameters.get('cutDepthMm'), true)
   }
+  if (capability.id === PHOTON_CAD_MANUAL_MOUSE_ADD_CAPABILITY_ID) {
+    const sketch = parameters.get('sketch')
+    return capability.operation === 'create' && capability.parameters.length === 2
+      && sketch?.kind === 'text' && sketch.required
+      && photonCadManualNumberParameterMatches(parameters.get('extrusionDepthMm'), true)
+  }
+  if (capability.id === PHOTON_CAD_MANUAL_MOUSE_CUT_CAPABILITY_ID) {
+    const sketch = parameters.get('sketch')
+    return capability.operation === 'modify' && capability.parameters.length === 2
+      && sketch?.kind === 'text' && sketch.required
+      && photonCadManualNumberParameterMatches(parameters.get('cutDepthMm'), true)
+  }
   if (capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID) {
     return capability.operation === 'modify' && capability.parameters.length === 5
       && photonCadManualNumberParameterMatches(parameters.get('diameterMm'), true)
@@ -675,6 +698,8 @@ export function photonCadCapabilityRunnable(capability: PhotonCadCapability) {
   }
   if (capability.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID
     || capability.id === PHOTON_CAD_MANUAL_CUT_CAPABILITY_ID
+    || capability.id === PHOTON_CAD_MANUAL_MOUSE_ADD_CAPABILITY_ID
+    || capability.id === PHOTON_CAD_MANUAL_MOUSE_CUT_CAPABILITY_ID
     || capability.id === PHOTON_CAD_MANUAL_HOLE_CAPABILITY_ID
     || capability.id === PHOTON_CAD_MANUAL_LINEAR_PATTERN_CAPABILITY_ID
     || capability.id === PHOTON_CAD_MANUAL_CIRCULAR_PATTERN_CAPABILITY_ID) {
@@ -758,7 +783,7 @@ export function photonCadAuthorizePersistedScratchRequest(
     const removed = request.targetEntityIds.length === 1 ? photonCadRemovedOccurrenceIds(occurrences, target) : null
     if (!removed || removed.size >= occurrences.length
       || !project.entities.some((entity) => entity.id === target && entity.kind === 'occurrence')) return null
-  } else if (capability.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID) {
+  } else if (capability.id === PHOTON_CAD_MANUAL_ADD_CAPABILITY_ID || capability.id === PHOTON_CAD_MANUAL_MOUSE_ADD_CAPABILITY_ID) {
     if (request.targetEntityIds.length !== 0) return null
   } else if (photonCadManualModifyCapabilityId(capability.id)) {
     const target = request.targetEntityIds[0]
@@ -1203,10 +1228,6 @@ export function PhotonCadWorkspace({
   const selectedCapabilityRunnable = Boolean(selectedCapability && photonCadCapabilityRunnable(selectedCapability))
   const operationReady = catalogReady && Boolean(controller) && persistedScratchAuthorized
     && selectedCapabilityRunnable && currentProject?.mode === 'canonical' && currentProject.units === 'millimeter' && !currentProject.dirty
-  const operationDispatchAuthorizationRef = useRef('')
-  operationDispatchAuthorizationRef.current = operationReady && currentProject && selectedCapabilityAuthorization
-    ? `${selectedCapabilityAuthorization}\n${currentProject.sessionId}\n${currentProject.projectId}\n${currentProject.revision}`
-    : ''
   const operationContinuationAuthorizationRef = useRef('')
   operationContinuationAuthorizationRef.current = photonCadOperationContinuationAuthorizationBinding(
     selectedCapabilityAuthorization,
@@ -1332,8 +1353,33 @@ export function PhotonCadWorkspace({
     })
   }
 
-  async function runOperation() {
-    if (!operationReady || !controller || !currentProject || !selectedCapability || !requiredInputsReady || busy) return
+  async function runOperation(override?: {
+    capabilityId: string
+    inputs: Record<string, PhotonCadInputValue>
+    targetEntityIds?: readonly string[]
+  }): Promise<boolean> {
+    const operationCapability = override
+      ? capabilities.find((capability) => capability.id === override.capabilityId) ?? null
+      : selectedCapability
+    const operationInputs = override?.inputs ?? inputs
+    const operationTargetEntityIds = override?.targetEntityIds
+      ? [...override.targetEntityIds]
+      : operationCapability?.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+        || operationCapability?.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+        || (operationCapability && photonCadManualModifyCapabilityId(operationCapability.id))
+        ? [...selectedEntityIds]
+        : []
+    const overrideInputsReady = Boolean(operationCapability && currentProject
+      && photonCadCapabilityInputsMatch(operationCapability, operationInputs, currentProject)
+      && (operationCapability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+        || operationCapability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+        || photonCadManualModifyCapabilityId(operationCapability.id)
+        ? operationTargetEntityIds.length === 1 && Boolean(currentProject.entities.some((entity) =>
+          entity.id === operationTargetEntityIds[0] && (entity.kind === 'body' || entity.kind === 'part' || entity.kind === 'occurrence')))
+        : operationTargetEntityIds.length === 0))
+    const runnable = Boolean(operationCapability && photonCadCapabilityRunnable(operationCapability))
+    if (!catalogReady || !controller || !currentProject || !operationCapability || !overrideInputsReady || !runnable
+      || !persistedScratchAuthorized || currentProject.mode !== 'canonical' || currentProject.units !== 'millimeter' || currentProject.dirty || busy) return false
     const request: PhotonCadOperationRequest = {
       contractVersion: PHOTON_CAD_CONTRACT_VERSION,
       requestId: requestId('cad-operation'),
@@ -1341,21 +1387,14 @@ export function PhotonCadWorkspace({
       projectId: currentProject.projectId,
       baseRevision: currentProject.revision,
       mode: 'scratch',
-      capabilityId: selectedCapability.id,
-      inputs,
-      targetEntityIds: selectedCapability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
-        || selectedCapability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
-        || photonCadManualModifyCapabilityId(selectedCapability.id)
-        ? [...selectedEntityIds]
-        : [],
+      capabilityId: operationCapability.id,
+      inputs: operationInputs,
+      targetEntityIds: operationTargetEntityIds,
     }
     const authorization = photonCadAuthorizePersistedScratchRequest(effectiveRuntime, currentProject, request)
-    const authorizationBinding = authorization
-      ? `${authorization}\n${request.sessionId}\n${request.projectId}\n${request.baseRevision}`
-      : ''
-    if (!authorization || authorizationBinding !== operationDispatchAuthorizationRef.current) {
+    if (!authorization) {
       setNotice({ kind: 'error', text: 'The host-described catalog or parameter schema is no longer authorized. Design data was not changed.' })
-      return
+      return false
     }
     const generation = ++requestGeneration.current.operation
     const continuationAuthorizationBinding = photonCadOperationContinuationAuthorizationBinding(
@@ -1368,18 +1407,18 @@ export function PhotonCadWorkspace({
     setOperationIssues([])
     try {
       const result = await controller.execute(request)
-      if (!mounted.current || generation !== requestGeneration.current.operation) return
-      if (operationContinuationAuthorizationRef.current !== continuationAuthorizationBinding) {
+      if (!mounted.current || generation !== requestGeneration.current.operation) return false
+      if (!override && operationContinuationAuthorizationRef.current !== continuationAuthorizationBinding) {
         setNotice({ kind: 'error', text: 'The host-described catalog changed while the operation was running. Refresh the project before continuing.' })
-        return
+        return false
       }
       setOperationIssues(result.issues)
       if (result.stale) {
         setNotice({ kind: 'error', text: photonCadReasonText('stale-result') })
       } else if (result.status === 'accepted') {
-        const commit = selectedCapability.id === PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID
-          || selectedCapability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
-          || selectedCapability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
+        const commit = operationCapability.id === PHOTON_CAD_ASSEMBLY_PLACE_CAPABILITY_ID
+          || operationCapability.id === PHOTON_CAD_ASSEMBLY_TRANSFORM_CAPABILITY_ID
+          || operationCapability.id === PHOTON_CAD_ASSEMBLY_REMOVE_CAPABILITY_ID
           ? (() => {
               const snapshot = photonCadAcceptedAssemblySnapshot(request, result, currentProject, previewReceipt)
               return snapshot && result.preview ? { snapshot, preview: result.preview } : null
@@ -1387,7 +1426,7 @@ export function PhotonCadWorkspace({
           : photonCadAcceptedPersistedScratchCommit(request, result, true)
         if (!commit) {
           setNotice({ kind: 'error', text: 'The CAD operation did not return the exact persisted revision, occurrence, and preview evidence. Design data was not changed.' })
-          return
+          return false
         }
         setCurrentProject(commit.snapshot)
         setPreviewReceipt(commit.preview)
@@ -1396,6 +1435,7 @@ export function PhotonCadWorkspace({
           kind: 'status',
           text: 'The host-authorized scratch operation was persisted. Verification and release remain separate human actions.',
         })
+        return true
       } else {
         setNotice({ kind: 'error', text: photonCadReasonText(result.reason) })
       }
@@ -1406,6 +1446,7 @@ export function PhotonCadWorkspace({
     } finally {
       if (mounted.current && generation === requestGeneration.current.operation) setBusy(null)
     }
+    return false
   }
 
   async function runVerification() {
@@ -1785,6 +1826,13 @@ export function PhotonCadWorkspace({
       setPreviewReceipt(receipt)
       return true
     },
+    runManualSketch: (capabilityId, manualInputs, targetEntityIds = []) => runOperation({
+      capabilityId,
+      inputs: manualInputs,
+      targetEntityIds,
+    }),
+    manualSketchReady: activeStage === 'design' && operationReady,
+    operationBusy: busy === 'operation',
   }
 
   return (

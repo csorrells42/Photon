@@ -13,6 +13,7 @@ import {
   Globe2,
   LayoutPanelLeft,
   LifeBuoy,
+  MapPinned,
   Maximize2,
   MessageSquare,
   PanelLeftClose,
@@ -44,8 +45,10 @@ import { DEFAULT_ASSISTANT_DISPLAY_NAME, useAssistantDisplayName } from '../Modu
 import { desktopDocumentClient } from '../Modules/Workspace/DesktopDocumentClient'
 import { BrowserWorkspace, HERMES_HELP_BROWSER_REQUEST } from '../Modules/BrowserWorkspace/BrowserWorkspace'
 import type { BrowserOpenRequest } from '../Modules/BrowserWorkspace/BrowserWorkspace'
+import { desktopBrowserClient } from '../Modules/BrowserWorkspace/DesktopBrowserClient'
 import type { HermesDesktopUiAction } from '../Modules/HermesGateway/HermesDesktopUiAdapter'
 import { workbenchFileStatus } from './WorkbenchFileStatus'
+import { DeferredAppResourceDisposal } from './DeferredAppResourceDisposal'
 import { WorkspaceSearchController, WorkspaceSearchPanel, createDesktopWorkspaceSearchProviders } from '../Modules/WorkspaceSearch'
 import { DesktopDockerControlAdapter } from '../Modules/DockerControlCenter/DesktopDockerControlAdapter'
 import { DockerControlCenter, DockerControlController } from '../Modules/DockerControlCenter'
@@ -84,7 +87,7 @@ import {
 } from './WorkbenchMenuCommands'
 
 type Layout = 'code' | 'chat' | 'split'
-type LeftPanel = 'explorer' | 'search' | 'containers' | 'cad' | 'sessions' | 'sourceControl' | 'run' | 'usage' | 'browser' | 'system'
+type LeftPanel = 'explorer' | 'search' | 'containers' | 'cad' | 'sessions' | 'sourceControl' | 'run' | 'usage' | 'browser' | 'maps' | 'system'
 type AgentPanelId = 'hermes' | 'codex'
 type ShellMenu = 'file' | 'edit' | 'view' | 'help'
 
@@ -109,6 +112,16 @@ function desktopPhotonCadProjectsAvailable() {
   if (typeof window === 'undefined') return false
   const capability = (window as PhotonCadDesktopHost).__HERMES_DESKTOP_HOST__?.capabilities
   return capability?.photonCadProjects === true && capability.photonCadProjectsVersion === 1
+}
+
+function browserPanelForUrl(rawUrl: string): Extract<LeftPanel, 'browser' | 'maps'> {
+  try {
+    const url = new URL(rawUrl)
+    const googleHost = url.hostname === 'google.com' || url.hostname.endsWith('.google.com')
+    return googleHost && url.pathname.startsWith('/maps') ? 'maps' : 'browser'
+  } catch {
+    return 'browser'
+  }
 }
 
 function postDesktopHostMessage(type: 'window.minimize' | 'window.maximize' | 'window.close') {
@@ -239,12 +252,17 @@ export function App() {
   }), [workspaceSearchProviders])
   const dockerControlAdapter = useMemo(() => new DesktopDockerControlAdapter(), [])
   const dockerControlController = useMemo(() => new DockerControlController({ adapter: dockerControlAdapter }), [dockerControlAdapter])
+  const deferredResourceDisposal = useMemo(() => new DeferredAppResourceDisposal(), [])
   const buildErrors = developerBuild.result ? developerBuild.result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length : null
   const buildWarnings = developerBuild.result ? developerBuild.result.diagnostics.filter((diagnostic) => diagnostic.severity === 'warning').length : null
   const selectedFileStatus = workbenchFileStatus(selectedWorkspacePath)
   const editorSurfaceVisible = layout !== 'chat' && (leftPanel === 'explorer' || leftPanel === 'run' || leftPanel === 'sessions')
   const fileCommandsAvailable = editorSurfaceVisible && Boolean(selectedWorkspacePath)
   const terminalVisible = editorSurfaceVisible && terminalOpen
+
+  useEffect(() => {
+    if (layout === 'chat' || (leftPanel !== 'browser' && leftPanel !== 'maps')) desktopBrowserClient.hide()
+  }, [layout, leftPanel])
 
   useEffect(() => {
     const refresh = () => setPhotonCadProjectsAvailable(desktopPhotonCadProjectsAvailable())
@@ -341,6 +359,32 @@ export function App() {
     setOpenMenu(null)
   }, [])
 
+  useEffect(() => {
+    const openBrowserPage = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail
+      const request = typeof detail === 'string'
+        ? { url: detail }
+        : detail && typeof detail === 'object' && !Array.isArray(detail)
+          ? detail as { url?: unknown; label?: unknown; key?: unknown; bookmark?: unknown }
+          : null
+      if (!request || typeof request.url !== 'string') return
+      const url = request.url
+      setLayout('code')
+      const destination = browserPanelForUrl(url)
+      setLeftPanel(destination)
+      setBrowserOpenRequests((current) => [...current, {
+        nonce: ++browserOpenNonceRef.current,
+        url,
+        ...(destination === 'maps' ? { key: 'google-maps' } : {}),
+        ...(typeof request.label === 'string' ? { label: request.label } : {}),
+        ...(typeof request.key === 'string' ? { key: request.key } : {}),
+        ...(request.bookmark === true ? { bookmark: true } : {}),
+      }].slice(-32))
+    }
+    window.addEventListener('photos-browser-open', openBrowserPage)
+    return () => window.removeEventListener('photos-browser-open', openBrowserPage)
+  }, [])
+
   const commandItems = useMemo(() => [
     { label: 'Open File…', detail: 'File', run: () => void openFile() },
     { label: 'Save File', detail: 'File', run: () => runFileCommand('save') },
@@ -382,8 +426,9 @@ export function App() {
   const handleDesktopUiAction = useCallback((action: HermesDesktopUiAction) => {
     if (action.kind === 'open-preview') {
       setLayout('code')
-      setLeftPanel('browser')
-      setBrowserOpenRequests((current) => [...current, { nonce: ++browserOpenNonceRef.current, url: action.url, label: action.label }].slice(-32))
+      const destination = browserPanelForUrl(action.url)
+      setLeftPanel(destination)
+      setBrowserOpenRequests((current) => [...current, { nonce: ++browserOpenNonceRef.current, url: action.url, label: action.label, bookmark: action.bookmark, ...(destination === 'maps' ? { key: 'google-maps' } : {}) }].slice(-32))
       return
     }
     if (action.kind === 'open-workspace-file') {
@@ -401,13 +446,16 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    deferredResourceDisposal.cancel()
     return () => {
-      workspaceSearchController.dispose()
-      workspaceSearchProviders.close()
-      dockerControlController.dispose()
-      dockerControlAdapter.close()
+      deferredResourceDisposal.schedule(() => {
+        workspaceSearchController.dispose()
+        workspaceSearchProviders.close()
+        dockerControlController.dispose()
+        dockerControlAdapter.close()
+      })
     }
-  }, [dockerControlAdapter, dockerControlController, workspaceSearchController, workspaceSearchProviders])
+  }, [deferredResourceDisposal, dockerControlAdapter, dockerControlController, workspaceSearchController, workspaceSearchProviders])
 
   useEffect(() => {
     if (window.location.pathname === '/workbench-auth-complete') {
@@ -654,6 +702,7 @@ export function App() {
           <button aria-label={`${assistantName} sessions`} className={leftPanel === 'sessions' ? 'active' : ''} onClick={() => setLeftPanel('sessions')}><Bot size={22} /></button>
           <button aria-label="Usage intelligence" className={leftPanel === 'usage' ? 'active' : ''} onClick={() => setLeftPanel('usage')}><ChartNoAxesCombined size={22} /></button>
           <button aria-label="Browser" className={leftPanel === 'browser' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('browser') }}><Globe2 size={22} /></button>
+          <button aria-label="Google Maps" className={leftPanel === 'maps' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('maps') }}><MapPinned size={22} /></button>
         </div>
         <div><button aria-label="Settings" className={leftPanel === 'system' ? 'active' : ''} onClick={() => setLeftPanel('system')}><Settings size={22} /></button></div>
       </aside>
@@ -693,7 +742,7 @@ export function App() {
         />
       ) : null}
 
-      {layout !== 'chat' && (leftPanel === 'system' ? <HermesSystemWorkspace accountRequest={accountRequest} /> : leftPanel === 'usage' ? <UsageIntelligenceDashboard /> : leftPanel === 'browser' ? <BrowserWorkspace openRequest={browserOpenRequests[0] ?? null} onOpenRequestHandled={(nonce) => setBrowserOpenRequests((current) => current.filter((request) => request.nonce !== nonce))} /> : leftPanel === 'sourceControl' ? sourceControlPath ? <SourceControlWorkspace workspaceRelativePath={sourceControlPath} /> : <aside className="source-control-closed"><GitBranch size={28} /><strong>No Git repository open</strong><button onClick={() => void openGitRepository()}>Open Git Repository…</button></aside> : leftPanel === 'search' ? <>
+      {layout !== 'chat' && (leftPanel === 'system' ? <HermesSystemWorkspace accountRequest={accountRequest} /> : leftPanel === 'usage' ? <UsageIntelligenceDashboard /> : (leftPanel === 'browser' || leftPanel === 'maps') ? <BrowserWorkspace key={leftPanel} mode={leftPanel} openRequest={browserOpenRequests[0] ?? null} onOpenRequestHandled={(nonce) => setBrowserOpenRequests((current) => current.filter((request) => request.nonce !== nonce))} /> : leftPanel === 'sourceControl' ? sourceControlPath ? <SourceControlWorkspace workspaceRelativePath={sourceControlPath} /> : <aside className="source-control-closed"><GitBranch size={28} /><strong>No Git repository open</strong><button onClick={() => void openGitRepository()}>Open Git Repository…</button></aside> : leftPanel === 'search' ? <>
         <WorkspaceExplorer selectedPath={selectedWorkspacePath} onOpen={(entry) => { setWorkspaceSelection(null); setSelectedWorkspacePath(entry.path) }} />
         <WorkspaceSearchPanel controller={workspaceSearchController} />
       </> : leftPanel === 'containers' ? <>

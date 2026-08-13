@@ -1,10 +1,18 @@
 export const desktopAccountLinkProtocolVersion = 1
 
+export type LocalAccountLinkProvider = 'claude' | 'antigravity' | 'google-cloud'
+
 export type LocalAccountLinkStatus = {
-  provider: 'claude' | 'antigravity' | 'google-cloud'
+  provider: LocalAccountLinkProvider
   installed: boolean
   linked: boolean
+  trackingAvailable: boolean
   status: string
+}
+
+export type LocalAccountLinkOpenResult = {
+  opened: boolean
+  provider: LocalAccountLinkProvider
 }
 
 type WebViewBridge = {
@@ -30,11 +38,12 @@ function normalizeStatus(value: unknown): LocalAccountLinkStatus | null {
     provider: raw.provider,
     installed: raw.installed === true,
     linked: raw.linked === true,
+    trackingAvailable: raw.trackingAvailable === true,
     status: typeof raw.status === 'string' ? raw.status.slice(0, 1_024) : 'Account status unavailable.',
   }
 }
 
-export function requestLocalAccountLinkStatus(): Promise<LocalAccountLinkStatus[]> {
+export function requestLocalAccountLinkStatus(provider?: LocalAccountLinkProvider): Promise<LocalAccountLinkStatus[]> {
   const bridge = host()
   if (!bridge) return Promise.resolve([])
   const id = requestId('account-status')
@@ -56,20 +65,38 @@ export function requestLocalAccountLinkStatus(): Promise<LocalAccountLinkStatus[
     }
     const timeout = window.setTimeout(() => finish([]), 8_000)
     bridge.addEventListener('message', receive)
-    bridge.postMessage({ type: 'accountLink.status', version: desktopAccountLinkProtocolVersion, requestId: id })
+    bridge.postMessage({ type: 'accountLink.status', version: desktopAccountLinkProtocolVersion, requestId: id, provider })
   })
 }
 
-export function openLocalAccountLink(provider: LocalAccountLinkStatus['provider']) {
+export function openLocalAccountLink(provider: LocalAccountLinkStatus['provider']): Promise<LocalAccountLinkOpenResult> {
   const bridge = host()
-  if (!bridge) return false
-  bridge.postMessage({
-    type: 'accountLink.open',
-    version: desktopAccountLinkProtocolVersion,
-    requestId: requestId('account-open'),
-    provider,
+  if (!bridge) return Promise.resolve({ provider, opened: false })
+  const id = requestId('account-open')
+  return new Promise((resolve) => {
+    let finished = false
+    const finish = (opened: boolean) => {
+      if (finished) return
+      finished = true
+      window.clearTimeout(timeout)
+      bridge.removeEventListener('message', receive)
+      resolve({ provider, opened })
+    }
+    const receive = (event: MessageEvent) => {
+      const raw = event.data as Record<string, unknown> | null
+      if (!raw || raw.version !== desktopAccountLinkProtocolVersion || raw.requestId !== id) return
+      if (raw.type === 'accountLink.open.result') finish(raw.opened === true)
+      else if (raw.type === 'accountLink.error') finish(false)
+    }
+    const timeout = window.setTimeout(() => finish(false), 8_000)
+    bridge.addEventListener('message', receive)
+    bridge.postMessage({
+      type: 'accountLink.open',
+      version: desktopAccountLinkProtocolVersion,
+      requestId: id,
+      provider,
+    })
   })
-  return true
 }
 
 export function accountLinkHostAvailable() { return host() !== null }

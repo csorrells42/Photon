@@ -10,8 +10,9 @@ Usage:
   hermes-bridge status
   hermes-bridge send --text <message>
   hermes-bridge interrupt
+  hermes-bridge new
 
-health is unauthenticated. status, send, and interrupt read the bridge code from
+health is unauthenticated. status, send, interrupt, and new read the bridge code from
 %LOCALAPPDATA%\hermes\conversation-bridge.json. send never reads from stdin.
 """;
 
@@ -47,6 +48,10 @@ health is unauthenticated. status, send, and interrupt read the bridge code from
                 case ["interrupt"]:
                     using (var settings = new BridgeSettingsLoader().Load())
                         result = await client.InterruptAsync(settings, cancellationToken).ConfigureAwait(false);
+                    break;
+                case ["new"]:
+                    using (var settings = new BridgeSettingsLoader().Load())
+                        result = await client.NewSessionAsync(settings, cancellationToken).ConfigureAwait(false);
                     break;
                 case ["send", "--text", var text]:
                     using (var settings = new BridgeSettingsLoader().Load())

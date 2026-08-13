@@ -13,6 +13,7 @@ type BridgeController = {
   snapshot: () => HermesBridgeSnapshot
   submitTurn: (text: string) => Promise<HermesBridgeSnapshot>
   interrupt: () => Promise<HermesBridgeSnapshot>
+  newSession: () => Promise<HermesBridgeSnapshot>
   observe: (message: HermesBridgeObservation) => Promise<HermesBridgeSnapshot>
 }
 
@@ -105,12 +106,14 @@ export function registerHermesConversationBridge(controller: BridgeController) {
     if (!message || message.type !== 'conversationBridge.request' || message.version !== HERMES_CONVERSATION_BRIDGE_ADAPTER_VERSION) return
     const requestId = typeof message.requestId === 'string' ? message.requestId : ''
     const operation = typeof message.operation === 'string' ? message.operation : ''
-    if (!requestId || !['snapshot', 'turn', 'interrupt', 'observe'].includes(operation)) return
+    if (!requestId || !['snapshot', 'turn', 'interrupt', 'new', 'observe'].includes(operation)) return
     const payload = message.payload && typeof message.payload === 'object' ? message.payload as Record<string, unknown> : null
     const action = operation === 'snapshot'
       ? Promise.resolve(controller.snapshot())
       : operation === 'interrupt'
         ? controller.interrupt()
+        : operation === 'new'
+          ? controller.newSession()
         : operation === 'observe'
           ? Promise.resolve().then(() => controller.observe(normalizeHermesBridgeObservation(payload)))
         : typeof payload?.text === 'string' && payload.text.trim()

@@ -86,6 +86,7 @@ describe('Hermes runtime compatibility adapter', () => {
       payload: {
         command: 'Remove-Item example.txt',
         description: 'delete a file',
+        reason: 'Remove the obsolete generated fixture before rebuilding.',
         choices: ['once', 'session', 'always', 'deny'],
       },
     }, 'ignored')
@@ -94,11 +95,21 @@ describe('Hermes runtime compatibility adapter', () => {
       requestId: '',
       command: 'Remove-Item example.txt',
       description: 'delete a file',
+      reason: 'Remove the obsolete generated fixture before rebuilding.',
       choices: ['once', 'session', 'always', 'deny'],
       allowPermanent: true,
       smartDenied: false,
       sessionId: 'runtime-7',
     })
+  })
+
+  it('states that approval intent is absent instead of fabricating it', () => {
+    const request = normalizeHermesApproval({
+      type: 'approval.request',
+      payload: { command: 'rm -rf /root', description: 'recursive delete of system directory' },
+    }, 'runtime-unsafe')
+
+    expect(request?.reason).toBeNull()
   })
 
   it('removes permanent approval when the backend forbids it', () => {

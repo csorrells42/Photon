@@ -31,7 +31,7 @@ function adapter(overrides: Partial<DockerControlAdapter> = {}): DockerControlAd
       protocolVersion: DOCKER_CONTROL_PROTOCOL_VERSION,
       availability: { state: 'available' },
       services: ['hermes', 'serena', 'model-runner'],
-      operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, loadModel: false, unloadModel: true, update: false },
+      operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, repairService: true, loadModel: false, unloadModel: true, update: false },
       updateReason: 'derived-runtime-updater-not-integrated',
     } as const)),
     refresh: vi.fn(async () => snapshot()),

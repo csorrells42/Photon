@@ -1,0 +1,444 @@
+version: 1
+id: photon-engineering-discovery
+name: Photon Engineering Discovery
+servers:
+    - type: remote
+      secrets: default
+      endpoint: https://learn.microsoft.com/api/mcp
+      catalog_ref: mcp/docker-mcp-catalog:latest
+      snapshot:
+        server:
+            name: microsoft-learn
+            type: remote
+            image: ""
+            description: Add trusted and up-to-date content from Microsoft Learn to your AI agent.
+            title: Microsoft Learn
+            icon: https://avatars.githubusercontent.com/microsoft?s=64
+            remote:
+                url: https://learn.microsoft.com/api/mcp
+                transport_type: streamable-http
+            tools:
+                - name: microsoft_docs_search
+                  description: Performs semantic search against Microsoft official technical documentation
+                  arguments:
+                    - name: query
+                      type: string
+                      desc: The search query for retrieval
+                - name: microsoft_docs_fetch
+                  description: Fetch and convert a Microsoft documentation page into markdown format
+                  arguments:
+                    - name: url
+                      type: string
+                      desc: URL of the documentation page to read
+                - name: microsoft_code_sample_search
+                  description: Search for official Microsoft code snippets and examples
+                  arguments:
+                    - name: query
+                      type: string
+                      desc: Search query for Microsoft code snippets
+                    - name: language
+                      type: string
+                      desc: Optional programming language filter
+            metadata:
+                category: documentation
+                tags:
+                    - microsoft-learn
+                    - documentation
+                    - remote
+                license: Apache License 2.0
+                owner: docker
+    - type: remote
+      secrets: default
+      endpoint: https://mcp-docs.docker.com/mcp
+      catalog_ref: mcp/docker-mcp-catalog:latest
+      snapshot:
+        server:
+            name: docker-docs
+            type: remote
+            image: ""
+            description: Search and retrieve Docker documentation to help with containerization, Docker Compose, Docker Hub, and related topics.
+            title: Docker Docs
+            icon: https://www.google.com/s2/favicons?domain=docker.com&sz=64
+            readme: https://desktop.docker.com/mcp/catalog/v3/readme/docker-docs.md
+            remote:
+                url: https://mcp-docs.docker.com/mcp
+                transport_type: streamable-http
+            metadata:
+                category: documentation
+                tags:
+                    - documentation
+                    - docker
+                    - containers
+                    - remote
+                license: Apache License 2.0
+                owner: docker
+    - type: image
+      secrets: default
+      image: mcp/openapi@sha256:26234065b6a786e69088b9b22ec4f9130572704664211e76e9b0887c388186e5
+      catalog_ref: mcp/docker-mcp-catalog:latest
+      snapshot:
+        server:
+            name: openapi
+            type: server
+            image: mcp/openapi@sha256:26234065b6a786e69088b9b22ec4f9130572704664211e76e9b0887c388186e5
+            description: Fetch, validate, and generate code or curl from any OpenAPI or Swagger spec - all from a single URL.
+            title: OpenAPI Toolkit
+            icon: https://raw.githubusercontent.com/lepoco/openapi.client/refs/heads/main/build/nuget.png
+            readme: https://desktop.docker.com/mcp/catalog/v3/readme/openapi.md
+            remote: {}
+            env:
+                - name: MODE
+                  value: '{{openapi.mode}}'
+            tools:
+                - name: create_csharp_snippet
+                  description: Generate a C# code snippet for a given operation ID from a URL OR a raw JSON string or file contents pointing to an OpenAPI or Swagger JSON document.
+                  arguments:
+                    - name: addressOrFileContents
+                      type: string
+                      desc: URL address of the OpenAPI or Swagger JSON document OR raw JSON contents of the OpenAPI or Swagger specification. Can be provided as text or from a file.
+                    - name: baseAddress
+                      type: string
+                      desc: Optional base URL to be used in the generated cURL command.
+                    - name: operationId
+                      type: string
+                      desc: Operation ID for which to create a snippet.
+                - name: generate_curl_command
+                  description: Generate a cURL command for a given operation ID from a URL OR a raw JSON string or file contents pointing to an OpenAPI or Swagger JSON document.
+                  arguments:
+                    - name: addressOrFileContents
+                      type: string
+                      desc: URL address of the OpenAPI or Swagger JSON document OR raw JSON contents of the OpenAPI or Swagger specification. Can be provided as text or from a file.
+                    - name: baseAddress
+                      type: string
+                      desc: Optional base URL to be used in the generated cURL command.
+                    - name: operationId
+                      type: string
+                      desc: Operation ID for which to generate the cURL command.
+                - name: get_known_responses
+                  description: Analyze an OpenAPI or Swagger document provided as a URL OR a raw JSON string or file contents, and list possible HTTP responses (status codes and descriptions) for the specified operation ID.
+                  arguments:
+                    - name: addressOrFileContents
+                      type: string
+                      desc: URL address of the OpenAPI or Swagger JSON document OR raw JSON contents of the OpenAPI or Swagger specification. Can be provided as text or from a file.
+                    - name: operationId
+                      type: string
+                      desc: Operation ID for which to retrieve known responses.
+                - name: get_list_of_operations
+                  description: Retrieve a list of operations (endpoints) from a URL OR a raw JSON string or file contents pointing to an OpenAPI or Swagger JSON document.
+                  arguments:
+                    - name: addressOrFileContents
+                      type: string
+                      desc: URL address of the OpenAPI or Swagger JSON document OR raw JSON contents of the OpenAPI or Swagger specification. Can be provided as text or from a file.
+                - name: validate_document
+                  description: Analyze and validate an OpenAPI or Swagger document provided as a URL OR a raw JSON string or file contents, and list possible errors, issues and problems with specification for the specified operation ID.
+                  arguments:
+                    - name: addressOrFileContents
+                      type: string
+                      desc: URL address of the OpenAPI or Swagger JSON document OR raw JSON contents of the OpenAPI or Swagger specification. Can be provided as text or from a file.
+            config:
+                - description: Configure the connection to OpenAPI Toolkit for MCP
+                  name: openapi
+                  properties:
+                    mode:
+                        type: string
+                  type: object
+            metadata:
+                pulls: 41701
+                stars: 1
+                githubStars: 18
+                category: productivity
+                tags:
+                    - productivity
+                license: MIT License
+                owner: lepoco
+    - type: image
+      secrets: default
+      image: vrogozhin/dotnet-types-explorer-mcp:1.1.7@sha256:488ea2ed1fd516f8f2150d8cf84fab952dc56b8e72e2e7db0e2fb0961d267945
+      catalog_ref: mcp/docker-mcp-catalog:latest
+      snapshot:
+        server:
+            name: dotnet-types-explorer
+            type: server
+            image: vrogozhin/dotnet-types-explorer-mcp:1.1.7@sha256:488ea2ed1fd516f8f2150d8cf84fab952dc56b8e72e2e7db0e2fb0961d267945
+            description: Provides detailed type information from .NET projects including assembly exploration, namespace discovery, type reflection, and NuGet integration for AI coding agents.
+            title: .NET Types Explorer
+            icon: https://upload.wikimedia.org/wikipedia/commons/e/ee/.NET_Core_Logo.svg
+            readme: https://desktop.docker.com/mcp/catalog/v3/readme/dotnet-types-explorer.md
+            remote: {}
+            tools:
+                - name: ReferencedAssembliesExplorer
+                  description: Retrieves referenced assemblies from a .NET project file (.csproj) with support for filtering and pagination
+                  arguments:
+                    - name: projectFileAbsolutePath
+                      type: string
+                      desc: The absolute path to the project file (.csproj)
+                    - name: fullTextFiltersWithWildCardSupport
+                      type: array
+                      desc: Optional full text filters with wildcard support (e.g., 'System.*', '*Json*')
+                    - name: pageNumber
+                      type: integer
+                      desc: 'Page number for pagination (1-based, default: 1)'
+                - name: NamespacesExplorer
+                  description: Retrieves namespaces from specified assemblies with filtering and pagination support
+                  arguments:
+                    - name: projectFileAbsolutePath
+                      type: string
+                      desc: The absolute path to the project file (.csproj)
+                    - name: assemblyNames
+                      type: array
+                      desc: Optional assembly names to filter by (without exe/dll extension). If empty, all assemblies are considered
+                    - name: fullTextFiltersWithWildCardSupport
+                      type: array
+                      desc: Optional full text filters with wildcard support
+                    - name: pageNumber
+                      type: integer
+                      desc: 'Page number for pagination (1-based, default: 1)'
+                - name: NamespaceTypes
+                  description: Retrieves types from specified namespaces with filtering and pagination
+                  arguments:
+                    - name: projectFileAbsolutePath
+                      type: string
+                      desc: The absolute path to the project file (.csproj)
+                    - name: namespaces
+                      type: array
+                      desc: Optional namespaces to filter by. If empty, all namespaces are considered
+                    - name: fullTextFiltersWithWildCardSupport
+                      type: array
+                      desc: Optional full text filters with wildcard support (e.g., '*Controller', 'Service*')
+                    - name: pageNumber
+                      type: integer
+                      desc: 'Page number for pagination (1-based, default: 1)'
+                - name: NuGetPackageSearch
+                  description: Searches for NuGet packages on nuget.org with filtering and pagination
+                  arguments:
+                    - name: searchQuery
+                      type: string
+                      desc: The search query to find packages
+                    - name: fullTextFiltersWithWildCardSupport
+                      type: array
+                      desc: Optional full text filters with wildcard support
+                    - name: includePrerelease
+                      type: boolean
+                      desc: 'Include prerelease versions in search results (default: false)'
+                    - name: pageNumber
+                      type: integer
+                      desc: 'Page number for pagination (1-based, default: 1)'
+                - name: NuGetPackageVersions
+                  description: Retrieves version history and dependency information for a specific NuGet package
+                  arguments:
+                    - name: packageId
+                      type: string
+                      desc: The package ID to get versions for
+                    - name: fullTextFiltersWithWildCardSupport
+                      type: array
+                      desc: Optional full text filters with wildcard support
+                    - name: includePrerelease
+                      type: boolean
+                      desc: 'Include prerelease versions in results (default: false)'
+                    - name: pageNumber
+                      type: integer
+                      desc: 'Page number for pagination (1-based, default: 1)'
+            metadata:
+                githubStars: 30
+                category: development
+                tags:
+                    - dotnet
+                    - csharp
+                    - development
+                    - type-system
+                    - nuget
+                    - reflection
+                license: Apache License 2.0
+                owner: V0v1kkk
+    - type: remote
+      secrets: default
+      endpoint: https://www.javadocs.dev/mcp
+      catalog_ref: mcp/docker-mcp-catalog:latest
+      snapshot:
+        server:
+            name: javadocs
+            type: remote
+            image: ""
+            description: Access to Java, Kotlin, and Scala library documentation.
+            title: Javadocs
+            icon: https://www.google.com/s2/favicons?domain=docs.oracle.com&sz=64
+            readme: https://desktop.docker.com/mcp/catalog/v3/readme/javadocs.md
+            remote:
+                url: https://www.javadocs.dev/mcp
+                transport_type: streamable-http
+            tools:
+                - name: get_latest_version
+                  description: 'Resolves the latest published version of a Maven Central artifact (any groupId:artifactId — Java, Kotlin, or Scala library). Call this first when you only know the artifact but not the version: the version it returns feeds into every other tool here that takes a concrete version. Works against the live Maven Central catalog — no local install, build tool, or repository checkout required.'
+                  arguments:
+                    - name: artifactId
+                      type: string
+                      desc: The Maven artifactId, e.g. "zio_3".
+                    - name: groupId
+                      type: string
+                      desc: The Maven groupId, e.g. "dev.zio".
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: true
+                    openWorldHint: true
+                - name: get_javadoc_index
+                  description: 'Fetches the rendered Javadoc/Scaladoc index page for a specific Maven Central artifact version, converted to plain text/markdown. Useful for orienting yourself in an unfamiliar library: it lists the top-level packages, modules, and (for Scaladoc) often a curated overview. Use this before drilling into specific symbols. Works against the live Maven Central catalog — you do not need to download the javadoc jar.'
+                  arguments:
+                    - name: artifactId
+                      type: string
+                      desc: The Maven artifactId, e.g. "zio_3".
+                    - name: groupId
+                      type: string
+                      desc: The Maven groupId, e.g. "dev.zio".
+                    - name: version
+                      type: string
+                      desc: The artifact version, e.g. "2.1.9".
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: true
+                    openWorldHint: true
+                - name: list_javadoc_symbols
+                  description: Enumerates the public API a library documents — classes, interfaces, traits, objects, enums, and annotations — for a Maven Central artifact version. Each entry includes the fully-qualified class name (`fqn`) and a `link` that can be passed to get_javadoc_symbol to read the rendered API documentation. Use this to answer 'which classes/types does library X have?' or 'find classes related to <topic>' — it is the fastest way to list the API by name without reading code. Prefer this over list_source_files whenever you only need class/type names. Only if this returns NotFoundError because no javadoc jar was published, fall back to list_source_files. Works against the live Maven Central catalog with no local install, build, or checkout required.
+                  arguments:
+                    - name: artifactId
+                      type: string
+                      desc: The Maven artifactId, e.g. "zio_3".
+                    - name: groupId
+                      type: string
+                      desc: The Maven groupId, e.g. "dev.zio".
+                    - name: version
+                      type: string
+                      desc: The artifact version, e.g. "2.1.9".
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: true
+                    openWorldHint: true
+                - name: get_javadoc_symbol
+                  description: Reads one Javadoc/Scaladoc page from a Maven Central artifact, already converted to plain text/markdown so you don't have to parse HTML. Pass the `link` value returned by list_javadoc_symbols. Use this when you need to know what a class, method, or field does and what its parameters mean for any library on Maven Central — without downloading or unzipping the javadoc jar yourself.
+                  arguments:
+                    - name: artifactId
+                      type: string
+                      desc: The Maven artifactId, e.g. "zio_3".
+                    - name: groupId
+                      type: string
+                      desc: The Maven groupId, e.g. "dev.zio".
+                    - name: link
+                      type: string
+                      desc: The relative path/link within the jar, as returned by list_javadoc_symbols or list_source_files.
+                    - name: version
+                      type: string
+                      desc: The artifact version, e.g. "2.1.9".
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: true
+                    openWorldHint: true
+                - name: get_source_file
+                  description: 'Reads one source file from a Maven Central library''s sources jar (the `-sources.jar` artifact). Pass the `link` value returned by list_source_files. Use this whenever you need the exact source text of a JVM library — tracing behavior into a dependency, confirming a public API''s implementation, finding a definition, or comparing two library versions. Strongly preferred over locating the jar in a local build cache and unzipping it: it works for any Maven Central artifact, no local checkout or build needed.'
+                  arguments:
+                    - name: artifactId
+                      type: string
+                      desc: The Maven artifactId, e.g. "zio_3".
+                    - name: groupId
+                      type: string
+                      desc: The Maven groupId, e.g. "dev.zio".
+                    - name: link
+                      type: string
+                      desc: The relative path/link within the jar, as returned by list_javadoc_symbols or list_source_files.
+                    - name: version
+                      type: string
+                      desc: The artifact version, e.g. "2.1.9".
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: true
+                    openWorldHint: true
+                - name: list_source_files
+                  description: Lists the raw source files (`.java`, `.kt`, and `.scala`) in a Maven Central artifact version's `-sources.jar`. Each returned path can be passed to get_source_file to read the actual source code. Use this only when you need the implementation — for example, to trace behavior or see how something is wired. To discover which classes exist, or to find classes by topic or name, use list_javadoc_symbols instead; do not use this tool just to enumerate classes. Works against the live Maven Central catalog with no local install, build, or checkout required.
+                  arguments:
+                    - name: artifactId
+                      type: string
+                      desc: The Maven artifactId, e.g. "zio_3".
+                    - name: groupId
+                      type: string
+                      desc: The Maven groupId, e.g. "dev.zio".
+                    - name: version
+                      type: string
+                      desc: The artifact version, e.g. "2.1.9".
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: true
+                    openWorldHint: true
+                - name: search_artifacts
+                  description: Searches the indexed Maven Central catalog for artifacts whose groupId or artifactId contains a substring (case-insensitive). Use this when you know part of a library name (e.g. "jackson", "zio-http", "netty-codec") and need the exact groupId:artifactId coordinates to feed into the other tools. Pair with get_latest_version once you've picked an artifact.
+                  arguments:
+                    - name: query
+                      type: string
+                      desc: The text to search for — e.g. a class/type name, a package, or part of a groupId/artifactId.
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: true
+                    openWorldHint: true
+                - name: symbol_to_artifact
+                  description: Resolves a class name, fully-qualified type, or package name to the Maven Central artifact (groupId, artifactId) that publishes it. Case-sensitive. Use this when you have a symbol from a stack trace, an import line, or an error message and you need to know which library to look in. From there, chain into get_latest_version, then list_source_files / list_javadoc_symbols to read the code or docs.
+                  arguments:
+                    - name: query
+                      type: string
+                      desc: The text to search for — e.g. a class/type name, a package, or part of a groupId/artifactId.
+                  annotations:
+                    readOnlyHint: true
+                    destructiveHint: false
+                    idempotentHint: false
+                    openWorldHint: true
+            metadata:
+                category: documentation
+                tags:
+                    - documentation
+                    - java
+                    - api
+                    - remote
+                license: Apache License 2.0
+                owner: docker
+    - type: image
+      secrets: default
+      tools:
+        - search_repositories
+        - search_code
+        - get_file_contents
+        - get_latest_release
+        - get_release_by_tag
+        - list_releases
+        - get_tag
+        - list_tags
+        - get_commit
+        - list_commits
+        - list_branches
+      image: ghcr.io/github/github-mcp-server@sha256:881b53d6f75f69bdbc1b5b10fc2f1361717c19054143b3a8529fb5c32061a50e
+      catalog_ref: mcp/docker-mcp-catalog:latest
+      snapshot:
+        server:
+            name: github-official
+            type: server
+            image: ghcr.io/github/github-mcp-server@sha256:881b53d6f75f69bdbc1b5b10fc2f1361717c19054143b3a8529fb5c32061a50e
+            description: Official GitHub MCP Server, restricted to discovery-only operations.
+            title: GitHub Official
+            remote: {}
+            oauth:
+                providers:
+                    - provider: github
+                      secret: github.personal_access_token
+                      env: GITHUB_PERSONAL_ACCESS_TOKEN
+            secrets:
+                - name: github.personal_access_token
+                  env: GITHUB_PERSONAL_ACCESS_TOKEN
+            allowHosts:
+                - api.github.com:443
+                - github.com:443
+                - raw.githubusercontent.com:443
+secrets:
+    default:
+        provider: docker-desktop-store

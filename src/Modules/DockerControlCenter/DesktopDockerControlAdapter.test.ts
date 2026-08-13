@@ -36,7 +36,7 @@ describe('DesktopDockerControlAdapter', () => {
     bridge.emit({ type: 'dockerControl.snapshot.result', version: 1, requestId: describeFrame.requestId, value: snapshot })
     bridge.emit({
       type: 'dockerControl.describe.result', version: 1, requestId: describeFrame.requestId,
-      value: { protocolVersion: 1, availability: { state: 'available' }, services: ['hermes', 'serena'], operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, loadModel: false, unloadModel: true, update: false }, updateReason: 'derived-runtime-updater-not-integrated' },
+      value: { protocolVersion: 1, availability: { state: 'available' }, services: ['hermes', 'serena'], operations: { startStack: true, stopStack: true, startService: true, stopService: true, restartService: true, repairService: true, loadModel: false, unloadModel: true, update: false }, updateReason: 'derived-runtime-updater-not-integrated' },
     })
     expect((await description).operations.update).toBe(false)
 

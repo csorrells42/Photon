@@ -4,11 +4,16 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 31px 38px auto auto minmax(0, 1fr);
+  grid-template-rows: 31px auto auto minmax(0, 1fr);
   overflow: hidden;
   border-right: 1px solid var(--line);
   background: #0b0f17;
 }
+
+.browser-workspace.maps-workspace { grid-template-rows: auto minmax(0, 1fr); }
+.maps-workspace .browser-maps { grid-row: 1; }
+.maps-workspace .browser-error,
+.maps-workspace .browser-native-surface { grid-row: 2; }
 
 .browser-workspace.unavailable {
   display: flex;
@@ -24,19 +29,30 @@
 .browser-workspace.unavailable p { margin: 0; font-size: 9px; }
 
 .browser-tabs {
+  min-height: 0;
   min-width: 0;
   display: flex;
   align-items: end;
   gap: 2px;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-color: #455168 #111521;
+  scrollbar-width: thin;
   border-bottom: 1px solid var(--line);
   padding: 3px 5px 0;
 }
 
+.browser-tabs::-webkit-scrollbar { height: 6px; }
+.browser-tabs::-webkit-scrollbar-track { background: #111521; }
+.browser-tabs::-webkit-scrollbar-thumb { border-radius: 999px; background: #455168; }
+.browser-tabs::-webkit-scrollbar-thumb:hover { background: #66758e; }
+
 .browser-tabs > button {
   height: 27px;
-  min-width: 105px;
+  min-width: 72px;
   max-width: 190px;
+  width: clamp(72px, 11vw, 170px);
+  flex: 0 1 170px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -66,13 +82,18 @@
 
 .browser-tabs > button i { display: grid; place-items: center; border-radius: 3px; font-style: normal; }
 .browser-tabs > button i:hover { background: rgba(255, 255, 255, .08); }
-.browser-tabs > .browser-new-tab { min-width: 27px; width: 27px; justify-content: center; }
+.browser-tabs > .browser-new-tab { min-width: 27px; width: 27px; flex: 0 0 27px; justify-content: center; }
+
+.browser-toolbar-region {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  background: #0b0f17;
+}
 
 .browser-toolbar {
   display: flex;
   align-items: center;
   gap: 3px;
-  border-bottom: 1px solid var(--line);
   padding: 5px 7px;
 }
 
@@ -106,6 +127,30 @@
 .browser-toolbar label:focus-within { border-color: rgba(128, 100, 255, .55); box-shadow: 0 0 0 2px rgba(128, 100, 255, .08); }
 .browser-toolbar input { min-width: 0; flex: 1; border: 0; background: transparent; color: #c8d0dd; font-size: 9px; outline: 0; }
 .browser-toolbar input::placeholder { color: #5f6a7d; }
+
+.browser-bookmarks {
+  display: grid;
+  gap: 5px;
+  border-top: 1px solid rgba(128, 100, 255, .13);
+  padding: 6px 8px 8px;
+  background: linear-gradient(90deg, rgba(61, 45, 120, .13), rgba(21, 31, 48, .16));
+}
+
+.browser-bookmarks header { display: flex; align-items: center; gap: 6px; color: #a99bfa; font-size: 8px; }
+.browser-bookmarks header span { border-radius: 999px; background: rgba(128, 100, 255, .14); padding: 1px 5px; color: #8273de; }
+.browser-bookmarks > p { margin: 1px 0; color: #677286; font-size: 8px; }
+.browser-bookmarks > div { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.browser-bookmarks article { min-width: 158px; max-width: 220px; display: flex; align-items: stretch; border: 1px solid rgba(128, 100, 255, .17); border-radius: 6px; background: rgba(18, 23, 36, .88); }
+.browser-bookmarks article > button { border: 0; background: transparent; color: #778399; }
+.browser-bookmarks article > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 6px; padding: 5px 7px; text-align: left; }
+.browser-bookmarks article > button:first-child:hover { color: #c4ccda; }
+.browser-bookmarks article > button:last-child { width: 27px; display: grid; place-items: center; border-left: 1px solid rgba(128, 100, 255, .1); }
+.browser-bookmarks article > button:last-child:hover { background: rgba(229, 101, 122, .08); color: #e28696; }
+.browser-bookmarks article span { min-width: 0; display: grid; gap: 1px; }
+.browser-bookmarks article strong,
+.browser-bookmarks article small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-bookmarks article strong { color: #b6bfd0; font-size: 8px; font-weight: 600; }
+.browser-bookmarks article small { color: #5f6b80; font-size: 7px; }
 
 .browser-maps {
   border-bottom: 1px solid rgba(91, 195, 174, .14);
@@ -174,6 +219,9 @@
 .browser-maps-controls p { margin: 0; display: flex; align-items: center; gap: 5px; color: #62766f; font-size: 7px; }
 
 .browser-error {
+  grid-row: 4;
+  align-self: start;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -185,10 +233,44 @@
 }
 
 .browser-error button { border: 0; background: transparent; color: inherit; }
-.browser-native-surface { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
+.browser-native-surface { grid-row: 4; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #0b0f17; }
 .browser-blank { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; background: #0b0f17; color: #657187; }
 .browser-blank strong { color: #bdc5d2; }
 .browser-blank small { font-size: 8px; }
+
+.browser-recovery {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(128, 100, 255, .09), transparent 32%),
+    #0b0f17;
+  padding: 28px;
+  color: #69758b;
+  text-align: center;
+}
+
+.browser-recovery > svg { color: #8a79e7; }
+.browser-recovery strong { color: #c7cfdd; font-size: 13px; }
+.browser-recovery p { max-width: 520px; margin: 0; color: #8894a8; font-size: 9px; line-height: 1.55; }
+.browser-recovery > div { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; margin-top: 3px; }
+.browser-recovery button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(128, 100, 255, .3);
+  border-radius: 6px;
+  background: rgba(128, 100, 255, .1);
+  padding: 0 11px;
+  color: #bdb3f6;
+  font-size: 8px;
+}
+.browser-recovery button:hover { border-color: rgba(128, 100, 255, .55); background: rgba(128, 100, 255, .17); }
 
 @container (max-width: 900px) {
   .browser-workspace { grid-column: 2; grid-row: 2; }

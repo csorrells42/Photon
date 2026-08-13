@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text;
+using System.Text.Json;
 
 namespace PhotonCadRuntime.IndustrialProvider;
 
@@ -117,7 +118,7 @@ internal sealed class ContainerRunner : IIndustrialContainerRunner
                 throw;
             }
             if (result.ExitCode != 0 || result.StandardError.Length != 0)
-                throw Failure("industrial_container_failed");
+                throw Failure(ContainerFailureCode(result.StandardOutput));
             if (result.StandardOutput.Length <= 0) throw Failure("industrial_container_empty_response");
             return new IndustrialContainerInvocation(
                 result.StandardOutput,
@@ -315,5 +316,37 @@ internal sealed class ContainerRunner : IIndustrialContainerRunner
     }
 
     private static InvalidOperationException Failure(string code) => new(code);
+
+    private static string ContainerFailureCode(byte[] standardOutput)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(standardOutput);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.False
+                || !root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.String)
+                return "industrial_container_failed";
+            return error.GetString() switch
+            {
+                "timeout" => "industrial_container_timeout",
+                "invalid-parameter" => "industrial_container_invalid_parameter",
+                "operation-failed" => "industrial_container_operation_failed",
+                "artifact-invalid" => "industrial_container_artifact_invalid",
+                "resource-limit" => "industrial_container_resource_limit",
+                "invalid-request" => "industrial_container_invalid_request",
+                "unsupported-operation" => "industrial_container_unsupported_operation",
+                "dependency-unavailable" => "industrial_container_dependency_unavailable",
+                "internal-error" => "industrial_container_internal_error",
+                "request-too-large" => "industrial_container_request_too_large",
+                _ => "industrial_container_failed",
+            };
+        }
+        catch (JsonException)
+        {
+            return "industrial_container_failed";
+        }
+    }
+
     private sealed record ProcessResult(int ExitCode, byte[] StandardOutput, byte[] StandardError);
 }

@@ -46,7 +46,10 @@ internal sealed record ManualMutationInputs(
     double DepthMm,
     double XMm,
     double YMm,
-    double ZMm);
+    double ZMm,
+    PhotonCadManualMouseSketch? MouseSketch = null,
+    string? MouseSketchInput = null,
+    bool JoinsExistingSolid = false);
 
 internal sealed record AssemblyPlacementInputs(
     string SourceEntityId,
@@ -81,7 +84,8 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     internal const string InstalledManualAssetRelativePath = "runtime-assets/photon-cad-manual";
     internal const string IndustrialEvidenceSelectionFileName = "evidence-selection.json";
     internal const string PreviewResourcePathPrefix = "/api/photon-cad/previews/";
-    internal const string IndustrialImageSha256 = "sha256:4ad3200ff457b11e1b3f1b115e28927cf376930660919a5295417352112354fc";
+    internal const string IndustrialImageSha256 = "sha256:f84e4993c74cf87463175744d6da09e16f87038a924b013709078d1b038230c0";
+    private const string IndustrialReceiptSha256 = "988c067ac29c5daf312c676bf65febcdfedc4f99459a2070157817b25a839965";
     private const string GeometryImageSha256 = "33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703";
     private const string GeometryProtocolId = "mcp-2025-06-18";
     private const long MaximumSealedStepBytes = 64L * 1024 * 1024;
@@ -1376,6 +1380,8 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     private static bool IsManualCapability(string capabilityId) => capabilityId is
         PhotonCadManualCapabilityIds.SketchExtrudeAdd
         or PhotonCadManualCapabilityIds.SketchExtrudeCut
+        or PhotonCadManualCapabilityIds.MouseSketchExtrudeAdd
+        or PhotonCadManualCapabilityIds.MouseSketchExtrudeCut
         or PhotonCadManualCapabilityIds.HoleCut
         or PhotonCadManualCapabilityIds.LinearPattern
         or PhotonCadManualCapabilityIds.CircularPattern;
@@ -1418,7 +1424,37 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 0, 0, 0);
         }
 
+        if (capabilityId == PhotonCadManualCapabilityIds.MouseSketchExtrudeAdd)
+        {
+            RequireExactProperties(inputs, "extrusionDepthMm", "sketch");
+            var sketchInput = RequiredMouseSketchInput(inputs);
+            var targetCount = targets.GetArrayLength();
+            if (targetCount > 1) throw new ArgumentException("manual_add_targets_invalid", nameof(targets));
+            var mouseTargetEntityId = targetCount == 0
+                ? $"entity-{Guid.NewGuid():N}"
+                : await ResolveManualTargetAsync(external, targets, cancellationToken).ConfigureAwait(false);
+            return new ManualMutationInputs(
+                PhotonCadManualOperationKind.SketchExtrudeAdd,
+                mouseTargetEntityId,
+                null, 0, 0, string.Empty, "xy", 0, 0, 0,
+                RequiredFiniteNumber(inputs, "extrusionDepthMm", positive: true),
+                0, 0, 0,
+                ParseMouseSketch(sketchInput), sketchInput, targetCount == 1);
+        }
+
         var targetEntityId = await ResolveManualTargetAsync(external, targets, cancellationToken).ConfigureAwait(false);
+        if (capabilityId == PhotonCadManualCapabilityIds.MouseSketchExtrudeCut)
+        {
+            RequireExactProperties(inputs, "cutDepthMm", "sketch");
+            var sketchInput = RequiredMouseSketchInput(inputs);
+            return new ManualMutationInputs(
+                PhotonCadManualOperationKind.SketchExtrudeCut,
+                targetEntityId,
+                null, 0, 0, string.Empty, "xy", 0, 0, 0,
+                RequiredFiniteNumber(inputs, "cutDepthMm", positive: true),
+                0, 0, 0,
+                ParseMouseSketch(sketchInput), sketchInput);
+        }
         if (capabilityId == PhotonCadManualCapabilityIds.SketchExtrudeCut)
         {
             RequireExactProperties(inputs, "cutDepthMm", "profileHeightMm", "profileWidthMm", "sketchPlane");
@@ -1471,6 +1507,114 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                 string.Empty, "xy", 0, 0, 0, 0, 0, 0, 0);
         }
         throw new ArgumentException("manual_capability_invalid", nameof(capabilityId));
+    }
+
+    private static string RequiredMouseSketchInput(JsonElement inputs)
+    {
+        var sketch = inputs.GetProperty("sketch");
+        var value = sketch.ValueKind == JsonValueKind.String ? sketch.GetString() : null;
+        return !string.IsNullOrWhiteSpace(value) && value.Length <= 8192
+            ? value
+            : throw new ArgumentException("manual_mouse_sketch_invalid", nameof(inputs));
+    }
+
+    private static PhotonCadManualMouseSketch ParseMouseSketch(string encoded)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(encoded, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 16,
+            });
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) throw new ArgumentException("manual_mouse_sketch_invalid");
+            var kind = RequiredToken(root, "kind");
+            if (kind is not ("rectangle" or "circle" or "polygon" or "filletedPolygon"))
+                throw new ArgumentException("manual_mouse_sketch_invalid");
+            RequireExactProperties(root, kind == "filletedPolygon"
+                ? ["cornerRadiiMm", "kind", "normal", "originMm", "points", "xDirection"]
+                : ["kind", "normal", "originMm", "points", "xDirection"]);
+            var origin = ParseBoundedVector(root.GetProperty("originMm"), 1_000_000);
+            var xDirection = ParseBoundedVector(root.GetProperty("xDirection"), 1);
+            var normal = ParseBoundedVector(root.GetProperty("normal"), 1);
+            ValidateSketchFrame(xDirection, normal);
+            var pointsElement = root.GetProperty("points");
+            if (pointsElement.ValueKind != JsonValueKind.Array) throw new ArgumentException("manual_mouse_sketch_invalid");
+            var points = pointsElement.EnumerateArray().Select(ParseMouseSketchPoint).ToArray();
+            var expectedCount = kind is "polygon" or "filletedPolygon" ? points.Length is >= 3 and <= 64 : points.Length == 2;
+            if (!expectedCount || points.Distinct().Count() != points.Length)
+                throw new ArgumentException("manual_mouse_sketch_invalid");
+            if (kind == "rectangle" && (Math.Abs(points[0].XMm - points[1].XMm) < 0.000001 || Math.Abs(points[0].YMm - points[1].YMm) < 0.000001))
+                throw new ArgumentException("manual_mouse_sketch_invalid");
+            if (kind == "circle" && Math.Pow(points[0].XMm - points[1].XMm, 2) + Math.Pow(points[0].YMm - points[1].YMm, 2) < 0.000000000001)
+                throw new ArgumentException("manual_mouse_sketch_invalid");
+            if (kind is "polygon" or "filletedPolygon" && Math.Abs(PolygonArea(points)) < 0.000001)
+                throw new ArgumentException("manual_mouse_sketch_invalid");
+            var cornerRadii = kind == "filletedPolygon"
+                ? ParseCornerRadii(root.GetProperty("cornerRadiiMm"), points.Length)
+                : Array.Empty<double>();
+            return new PhotonCadManualMouseSketch(
+                kind, points, cornerRadii,
+                origin.X, origin.Y, origin.Z,
+                xDirection.X, xDirection.Y, xDirection.Z,
+                normal.X, normal.Y, normal.Z);
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException("manual_mouse_sketch_invalid", nameof(encoded), exception);
+        }
+    }
+
+    private static ManualSketchPoint ParseMouseSketchPoint(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object
+            || value.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)
+                .SequenceEqual(["x", "y"], StringComparer.Ordinal) is false)
+            throw new ArgumentException("manual_mouse_sketch_invalid");
+        var x = RequiredDouble(value, "x");
+        var y = RequiredDouble(value, "y");
+        if (!double.IsFinite(x) || !double.IsFinite(y) || Math.Abs(x) > 1_000_000 || Math.Abs(y) > 1_000_000)
+            throw new ArgumentException("manual_mouse_sketch_invalid");
+        return new ManualSketchPoint(x, y);
+    }
+
+    private static IReadOnlyList<double> ParseCornerRadii(JsonElement value, int expectedCount)
+    {
+        if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != expectedCount)
+            throw new ArgumentException("manual_mouse_sketch_invalid");
+        var result = new List<double>(expectedCount);
+        foreach (var radius in value.EnumerateArray())
+        {
+            if (radius.ValueKind != JsonValueKind.Number || !radius.TryGetDouble(out var millimeters)
+                || !double.IsFinite(millimeters) || millimeters < 0 || millimeters > 1_000_000)
+                throw new ArgumentException("manual_mouse_sketch_invalid");
+            result.Add(millimeters);
+        }
+        if (!result.Any(radius => radius > 0)) throw new ArgumentException("manual_mouse_sketch_invalid");
+        return result;
+    }
+
+    private static void ValidateSketchFrame(CadVector3 xDirection, CadVector3 normal)
+    {
+        static double Magnitude(CadVector3 vector) => Math.Sqrt(vector.X * vector.X + vector.Y * vector.Y + vector.Z * vector.Z);
+        var xLength = Magnitude(xDirection);
+        var normalLength = Magnitude(normal);
+        var dot = xDirection.X * normal.X + xDirection.Y * normal.Y + xDirection.Z * normal.Z;
+        if (Math.Abs(xLength - 1) > 0.0001 || Math.Abs(normalLength - 1) > 0.0001 || Math.Abs(dot) > 0.0001)
+            throw new ArgumentException("manual_mouse_sketch_frame_invalid");
+    }
+
+    private static double PolygonArea(IReadOnlyList<ManualSketchPoint> points)
+    {
+        var area = 0d;
+        for (var index = 0; index < points.Count; index++)
+        {
+            var next = points[(index + 1) % points.Count];
+            area += points[index].XMm * next.YMm - next.XMm * points[index].YMm;
+        }
+        return area / 2d;
     }
 
     private async ValueTask<string> ResolveManualTargetAsync(
@@ -1574,6 +1718,14 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             var manualRuntime = await EnsureManualProviderReadyAsync(cancellationToken).ConfigureAwait(false);
             PhotonCadManualBoundMutation boundManual = manual.Kind switch
             {
+                PhotonCadManualOperationKind.SketchExtrudeAdd when manual.MouseSketch is { } sketch && manual.MouseSketchInput is { } sketchInput =>
+                    manualRuntime.BindMouseSketchExtrudeAdd(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        sketch, manual.DepthMm, sketchInput, manual.JoinsExistingSolid),
+                PhotonCadManualOperationKind.SketchExtrudeCut when manual.MouseSketch is { } sketch && manual.MouseSketchInput is { } sketchInput =>
+                    manualRuntime.BindMouseSketchExtrudeCut(
+                        request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
+                        sketch, manual.DepthMm, sketchInput),
                 PhotonCadManualOperationKind.SketchExtrudeAdd when manual.ProfileKind == "rectangle" =>
                     manualRuntime.BindSketchExtrudeAdd(
                         request.RequestId, request.SessionId, request.ProjectId, request.BaseRevision, manual.TargetEntityId,
@@ -1823,7 +1975,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             capabilities,
             new CadCatalogCoverage(capabilities.Length, capabilities.Length, 0));
         var digest = IndustrialImageSha256[7..];
-        var receipt = "12dcd086d95759f47a892def58e2e7a85e4107ad5c0c1a83cdccd1b2f415e4da";
+        var receipt = IndustrialReceiptSha256;
         var bundles = new CadRuntimeBundleSetIdentity(
             new CadBundleIdentity(CadRuntimeRole.Geometry, "photon-cad-industrial-geometry", "0.1.0", "docker",
                 "industrial-v1", "linux-amd64", digest, generated),
@@ -1838,7 +1990,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         var source = new CadSourceIdentity(
             "build123d",
             "0.3.80",
-            "sha256:11225c611b86551574636a1331adb6320217c62d11b7a6992ed15d4b0cc37760",
+            IndustrialImageSha256,
             "redistribution-blocked");
         CadParameterDefinition PositiveLength(string id, string label, bool required = true, double? defaultValue = null) => new(
             id, label, $"Finite positive {label.ToLowerInvariant()} in millimeters.",
@@ -1851,8 +2003,21 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
             id, label, $"Finite signed {label.ToLowerInvariant()} in millimeters.",
             CadParameterKind.Number, required: true, CadParameterUnit.Length,
             minimum: -1_000_000, maximum: 1_000_000, defaultValue: new CadNumberInputValue(0));
+        CadParameterDefinition MouseSketch() => new(
+            "sketch", "Mouse sketch", "Validated closed sketch payload from the desktop sketch canvas.",
+            CadParameterKind.Text, required: true, defaultValue: new CadTextInputValue("{}", CadParameterKind.Text));
         IReadOnlyList<CadParameterDefinition> parameters = capability.Kind switch
         {
+            PhotonCadManualOperationKind.SketchExtrudeAdd when capability.CapabilityId == PhotonCadManualCapabilityIds.MouseSketchExtrudeAdd =>
+            [
+                MouseSketch(),
+                PositiveLength("extrusionDepthMm", "Extrusion depth"),
+            ],
+            PhotonCadManualOperationKind.SketchExtrudeCut when capability.CapabilityId == PhotonCadManualCapabilityIds.MouseSketchExtrudeCut =>
+            [
+                MouseSketch(),
+                PositiveLength("cutDepthMm", "Cut depth"),
+            ],
             PhotonCadManualOperationKind.SketchExtrudeAdd =>
             [
                 new CadParameterDefinition("profileKind", "Profile", "Rectangle or circle sketch profile.",
@@ -1892,7 +2057,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                     CadParameterKind.Entity, required: true),
                 new CadParameterDefinition("count", "Pattern count", "Number of instances including the seed feature.",
                     CadParameterKind.Integer, required: true, CadParameterUnit.Count, minimum: 2, maximum: 256, step: 1,
-                    defaultValue: new CadNumberInputValue(2)),
+                    defaultValue: new CadIntegerInputValue(2)),
                 PositiveLength("spacingMm", "Spacing"),
             ],
             PhotonCadManualOperationKind.CircularPattern =>
@@ -1901,7 +2066,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
                     CadParameterKind.Entity, required: true),
                 new CadParameterDefinition("count", "Pattern count", "Number of instances including the seed feature.",
                     CadParameterKind.Integer, required: true, CadParameterUnit.Count, minimum: 2, maximum: 256, step: 1,
-                    defaultValue: new CadNumberInputValue(2)),
+                    defaultValue: new CadIntegerInputValue(2)),
                 new CadParameterDefinition("angleDegrees", "Sweep angle", "Finite positive sweep angle in degrees.",
                     CadParameterKind.Number, required: true, CadParameterUnit.Angle, minimum: 0.000001, maximum: 360,
                     defaultValue: new CadNumberInputValue(360)),
@@ -2047,6 +2212,9 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     {
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {
+            if (current is CadContractException contract
+                && SafeDiagnosticToken(contract.Code) is { } contractCode)
+                return $"{current.GetType().Name}:{contractCode}";
             if (SafeDiagnosticToken(current.Message) is { } code) return $"{current.GetType().Name}:{code}";
         }
         return exception.GetType().Name;
@@ -2935,7 +3103,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            DesktopLog.Write($"Photon CAD bridge failed safely: {exception.GetType().Name}");
+            DesktopLog.Write($"Photon CAD bridge failed safely: {SafeAvailabilityDiagnostic(exception)}");
             PostError(requestId, "runtime_operation_failed", retryable: true);
         }
         finally

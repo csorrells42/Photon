@@ -76,6 +76,12 @@ import { InlineDiffCard } from './InlineDiffCard'
 import { useAssistantDisplayName } from '../AssistantIdentity/AssistantIdentity'
 import { useHermesMemoryStatus } from './HermesMemoryStatus'
 import type { HermesDesktopUiAction } from '../HermesGateway/HermesDesktopUiAdapter'
+import {
+  codexApprovalReviewId,
+  HERMES_CODEX_APPROVAL_REVIEW_STATUS_EVENT,
+  readCodexApprovalReviewStatus,
+  sendApprovalReviewToCodex,
+} from '../CodexAgent/CodexApprovalReview'
 
 const HermesMarkdown = lazy(() => import('./HermesMarkdown').then((module) => ({ default: module.HermesMarkdown })))
 
@@ -329,15 +335,27 @@ function NotificationCenter({ notifications, onClear, onDismiss }: NotificationC
 
 type ApprovalCardProps = {
   request: HermesApprovalRequest
+  messages: readonly HermesChatMessage[]
   submitting: HermesApprovalChoice | null
   respond: (choice: HermesApprovalChoice) => Promise<void>
 }
 
-function ApprovalCard({ request, submitting, respond }: ApprovalCardProps) {
+function ApprovalCard({ request, messages, submitting, respond }: ApprovalCardProps) {
   const [assistantName] = useAssistantDisplayName()
   const [confirmation, setConfirmation] = useState({ requestId: request.requestId, active: false })
+  const [reviewStatus, setReviewStatus] = useState('')
   const confirmAlways = confirmation.requestId === request.requestId && confirmation.active
   const busy = submitting !== null
+
+  useEffect(() => {
+    const reviewId = codexApprovalReviewId(request)
+    const update = (event: Event) => {
+      const status = readCodexApprovalReviewStatus(event)
+      if (status?.requestId === reviewId) setReviewStatus(status.message)
+    }
+    window.addEventListener(HERMES_CODEX_APPROVAL_REVIEW_STATUS_EVENT, update)
+    return () => window.removeEventListener(HERMES_CODEX_APPROVAL_REVIEW_STATUS_EVENT, update)
+  }, [request])
 
   function submit(choice: HermesApprovalChoice) {
     void respond(choice).catch(() => undefined)
@@ -352,7 +370,29 @@ function ApprovalCard({ request, submitting, respond }: ApprovalCardProps) {
           <small>{request.smartDenied ? `${assistantName} safety review needs your decision` : request.description}</small>
         </div>
       </header>
-      {request.command && <pre>{request.command}</pre>}
+      <div className="approval-explanation">
+        <section>
+          <strong>What {assistantName} is doing</strong>
+          <p>{request.description}</p>
+        </section>
+        <section className={request.reason ? '' : 'missing'}>
+          <strong>Why {assistantName} is doing it</strong>
+          <p>{request.reason ?? `${assistantName} did not provide a reason for this command. Do not approve it until the intent is clear.`}</p>
+        </section>
+      </div>
+      {request.command && (
+        <details className="approval-command">
+          <summary>Show technical command</summary>
+          <pre>{request.command}</pre>
+        </details>
+      )}
+      <div className="approval-review">
+        <button type="button" onClick={() => {
+          setReviewStatus('Opening Codex reviewâ€¦')
+          sendApprovalReviewToCodex(request, messages)
+        }}><SendHorizontal size={13} /> Send to Codex</button>
+        {reviewStatus && <span role="status">{reviewStatus}</span>}
+      </div>
       {confirmAlways ? (
         <div className="approval-confirm">
           <p>This permanently adds the matching command pattern to {assistantName}’s Hermes runtime allowlist.</p>
@@ -585,8 +625,8 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     void naturalVoicePlayerRef.current?.toggle(message.id, message.body, setNaturalVoice)
   }, [automaticVoiceEnabled, busy, messages])
 
-  const bridgeStateRef = useRef({ activeStoredSessionId, busy, connection, error, messages, send, stop, toolRuns, turnCompletionCount })
-  bridgeStateRef.current = { activeStoredSessionId, busy, connection, error, messages, send, stop, toolRuns, turnCompletionCount }
+  const bridgeStateRef = useRef({ activeStoredSessionId, busy, canStartNewChat, connection, error, messages, newChat, send, stop, toolRuns, turnCompletionCount })
+  bridgeStateRef.current = { activeStoredSessionId, busy, canStartNewChat, connection, error, messages, newChat, send, stop, toolRuns, turnCompletionCount }
 
   useEffect(() => registerHermesConversationBridge({
     snapshot: () => {
@@ -614,6 +654,14 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
       await bridgeStateRef.current.stop()
       const current = bridgeStateRef.current
       return createHermesBridgeSnapshot(current.connection, current.busy, current.activeStoredSessionId, current.messages, current.toolRuns, bridgeGeneration)
+    },
+    newSession: async () => {
+      const current = bridgeStateRef.current
+      if (!current.canStartNewChat || current.busy) throw new Error('The visible Hermes dock cannot start a new chat while a turn is active.')
+      current.newChat()
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+      const fresh = bridgeStateRef.current
+      return createHermesBridgeSnapshot(fresh.connection, fresh.busy, fresh.activeStoredSessionId, fresh.messages, fresh.toolRuns, bridgeGeneration)
     },
     observe: async (observation) => {
       setBridgeObservations((current) => current.some((item) => item.messageId === observation.messageId)
@@ -1141,6 +1189,7 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
             <ApprovalCard
               key={pendingApproval.requestId}
               request={pendingApproval}
+              messages={messages}
               submitting={approvalSubmitting}
               respond={respondToApproval}
             />

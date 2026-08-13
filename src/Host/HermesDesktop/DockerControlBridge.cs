@@ -14,18 +14,22 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
     private const int MaximumLogLineCharacters = 512;
     private const int MaximumLogCharacters = 32 * 1024;
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(12);
-    private static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(35);
+    private static readonly TimeSpan SnapshotTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan ReviewLifetime = TimeSpan.FromSeconds(45);
 
     private readonly Action<object> _post;
     private readonly IDockerControlRunner _runner;
     private readonly TimeProvider _timeProvider;
     private readonly Func<string> _createToken;
+    private readonly bool _describedAvailability;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _active = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ReviewRecord> _reviews = new(StringComparer.Ordinal);
     private readonly object _reviewLock = new();
     private readonly SemaphoreSlim _snapshotGate = new(1, 1);
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly Task _recoveryMonitor;
     private string? _lastStateFingerprint;
     private long _snapshotRevision;
     private bool _disposed;
@@ -38,16 +42,48 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
         Func<string>? createToken = null)
     {
         _post = post ?? throw new ArgumentNullException(nameof(post));
+        var productionRunner = runner is null;
         _runner = runner ?? new DockerControlProcessRunner(trustedStackRoot);
+        _describedAvailability = _runner is not IDockerControlAvailability availability || availability.IsAvailable;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _createToken = createToken ?? CreateOpaqueToken;
+        _recoveryMonitor = productionRunner ? MonitorRecoveryAsync(_lifetime.Token) : Task.CompletedTask;
     }
 
-    internal Task DescribeAsync(int version, string? requestId) => RunAsync(version, requestId, ReadTimeout, async cancellationToken =>
+    private async Task MonitorRecoveryAsync(CancellationToken cancellationToken)
     {
-        var observed = await CaptureAsync(cancellationToken).ConfigureAwait(false);
-        var available = observed.Value.EngineState == "running";
-        var manageable = observed.Value.Services.Where(service => service.Manageable).Select(service => ServiceId(service.Id)).ToArray();
+        var delay = TimeSpan.FromMinutes(2);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                using var observation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                observation.CancelAfter(TimeSpan.FromSeconds(90));
+                var snapshot = await _runner.CaptureAsync(observation.Token).ConfigureAwait(false);
+                delay = NeedsRecovery(snapshot) ? TimeSpan.FromSeconds(5) : TimeSpan.FromMinutes(2);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                delay = TimeSpan.FromSeconds(10);
+            }
+            catch (OperationCanceledException) { break; }
+            catch
+            {
+                delay = TimeSpan.FromSeconds(10);
+            }
+        }
+    }
+
+    private static bool NeedsRecovery(DockerControlHostSnapshot snapshot) =>
+        !string.Equals(snapshot.EngineState, "running", StringComparison.Ordinal)
+        || string.Equals(snapshot.ComposeState, "degraded", StringComparison.Ordinal)
+        || snapshot.Services.Any(service => service.Manageable
+            && (!string.Equals(service.State, "running", StringComparison.Ordinal)
+                || string.Equals(service.Health, "unhealthy", StringComparison.Ordinal)));
+
+    internal Task DescribeAsync(int version, string? requestId) => RunAsync(version, requestId, ReadTimeout, _ =>
+    {
         _post(new
         {
             type = "dockerControl.describe.result",
@@ -56,29 +92,38 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             value = new
             {
                 protocolVersion = ProtocolVersion,
-                availability = available
-                    ? (object)new { state = "available" }
-                    : new { state = "unavailable", reason = "engine-unavailable" },
-                services = observed.Value.Services.Where(service => service.State != "unavailable").Select(service => ServiceId(service.Id)).Distinct(StringComparer.Ordinal).ToArray(),
+                availability = new { state = _describedAvailability ? "available" : "unavailable" },
+                services = new[] { "hermes", "memory-vector", "serena" },
                 operations = new
                 {
-                    startStack = manageable.Length > 0,
-                    stopStack = manageable.Length > 0,
-                    startService = manageable.Length > 0,
-                    stopService = manageable.Length > 0,
-                    restartService = manageable.Length > 0,
+                    startStack = true,
+                    stopStack = true,
+                    startService = true,
+                    stopService = true,
+                    restartService = true,
+                    repairService = true,
                     loadModel = false,
-                    unloadModel = observed.Value.ModelRunner?.UnloadAvailable == true,
+                    unloadModel = true,
                     update = false,
                 },
                 updateReason = "derived-runtime-updater-not-integrated",
             },
         });
+        return Task.CompletedTask;
     });
 
-    internal Task SnapshotAsync(int version, string? requestId) => RunAsync(version, requestId, ReadTimeout, async cancellationToken =>
+    internal Task SnapshotAsync(int version, string? requestId) => RunAsync(version, requestId, SnapshotTimeout, async cancellationToken =>
     {
-        var observed = await CaptureAsync(cancellationToken).ConfigureAwait(false);
+        DockerControlHostSnapshot raw;
+        if (_runner is IStreamingDockerControlRunner streaming)
+        {
+            raw = await streaming.CaptureStreamingAsync(partial => PostSnapshotProgress(requestId!, partial), cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            raw = await _runner.CaptureAsync(cancellationToken).ConfigureAwait(false);
+        }
+        var observed = await ObserveAsync(raw, cancellationToken).ConfigureAwait(false);
         _post(new
         {
             type = "dockerControl.snapshot.result",
@@ -256,10 +301,15 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
 
     private async Task<ObservedSnapshot> CaptureAsync(CancellationToken cancellationToken)
     {
+        var raw = await _runner.CaptureAsync(cancellationToken).ConfigureAwait(false);
+        return await ObserveAsync(raw, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ObservedSnapshot> ObserveAsync(DockerControlHostSnapshot raw, CancellationToken cancellationToken)
+    {
         await _snapshotGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var raw = await _runner.CaptureAsync(cancellationToken).ConfigureAwait(false);
             var value = NormalizeSnapshot(raw);
             var stateFingerprint = StateFingerprint(value);
             if (!string.Equals(stateFingerprint, _lastStateFingerprint, StringComparison.Ordinal))
@@ -271,6 +321,19 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             return new(value, _snapshotRevision, stateFingerprint);
         }
         finally { _snapshotGate.Release(); }
+    }
+
+    private void PostSnapshotProgress(string requestId, DockerControlHostSnapshot raw)
+    {
+        var value = NormalizeSnapshot(raw);
+        var revision = Math.Max(0, Interlocked.Read(ref _snapshotRevision));
+        _post(new
+        {
+            type = "dockerControl.snapshot.progress",
+            version = ProtocolVersion,
+            requestId,
+            value = SnapshotValue(new(value, revision, string.Empty)),
+        });
     }
 
     private async Task RunAsync(int version, string? requestId, TimeSpan timeout, Func<CancellationToken, Task> operation)
@@ -334,7 +397,7 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
             mutation = new(DockerControlMutationKind.UnloadModel, DockerControlService.ModelRunner, [DockerControlService.ModelRunner], model.Reference);
             return true;
         }
-        if (kind is not ("start-service" or "stop-service" or "restart-service") || !TryService(service, out var target)
+        if (kind is not ("start-service" or "stop-service" or "restart-service" or "repair-service") || !TryService(service, out var target)
             || !snapshot.Services.Any(candidate => candidate.Id == target && candidate.Manageable))
         {
             rejection = "The requested product service is not configured for this Docker operation.";
@@ -344,7 +407,8 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
         {
             "start-service" => DockerControlMutationKind.StartService,
             "stop-service" => DockerControlMutationKind.StopService,
-            _ => DockerControlMutationKind.RestartService,
+            "restart-service" => DockerControlMutationKind.RestartService,
+            _ => DockerControlMutationKind.RepairService,
         }, target, [target]);
         return true;
     }
@@ -534,6 +598,7 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
         DockerControlMutationKind.StartService => $"Start {ServiceIdOrDash(mutation.Service)}.",
         DockerControlMutationKind.StopService => $"Stop {ServiceIdOrDash(mutation.Service)}.",
         DockerControlMutationKind.RestartService => $"Restart {ServiceIdOrDash(mutation.Service)}.",
+        DockerControlMutationKind.RepairService => $"Repair and verify {ServiceIdOrDash(mutation.Service)}.",
         _ => $"Unload {mutation.Model}.",
     };
 
@@ -611,8 +676,12 @@ internal sealed partial class DockerControlBridge : IAsyncDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _lifetime.Cancel();
         foreach (var cancellation in _active.Values) cancellation.Cancel();
         lock (_reviewLock) _reviews.Clear();
+        try { await _recoveryMonitor.ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+        _lifetime.Dispose();
         await _runner.DisposeAsync().ConfigureAwait(false);
     }
 

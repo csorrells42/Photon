@@ -140,6 +140,7 @@ export type DockerMutationIntent =
   | { kind: 'start-service'; service: DockerProductService }
   | { kind: 'stop-service'; service: DockerProductService }
   | { kind: 'restart-service'; service: DockerProductService }
+  | { kind: 'repair-service'; service: DockerProductService }
   | { kind: 'unload-model'; model: string }
   | { kind: 'request-update' }
 
@@ -184,7 +185,10 @@ export type DockerMutationCommitResult = {
   snapshot?: unknown
 }
 
-export type DockerControlExecution = { signal: AbortSignal }
+export type DockerControlExecution = {
+  signal: AbortSignal
+  onSnapshotProgress?(snapshot: DockerStackSnapshot): void
+}
 
 export type DockerControlOperations = {
   startStack: boolean
@@ -192,6 +196,7 @@ export type DockerControlOperations = {
   startService: boolean
   stopService: boolean
   restartService: boolean
+  repairService: boolean
   loadModel: false
   unloadModel: boolean
   update: false

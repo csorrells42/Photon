@@ -73,7 +73,7 @@ const nativeConnectionCatalog: ConnectionCatalogEntry[] = [
   { providerId: 'openrouter', displayName: 'OpenRouter', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:openrouter', 'usage'], supportsNativeChange: true, description: 'Model access and usage collection through a machine-bound native credential.' },
   { providerId: 'openai-api', displayName: 'OpenAI API', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:openai', 'usage'], supportsNativeChange: true, description: 'Optional direct OpenAI model access and usage collection.' },
   { providerId: 'anthropic-api', displayName: 'Anthropic API / Claude', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:anthropic', 'usage'], supportsNativeChange: true, description: 'Optional direct Anthropic model access and usage collection.' },
-  { providerId: 'google-ai-studio', displayName: 'Google AI Studio / Gemini', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:google', 'usage'], supportsNativeChange: true, description: 'Optional direct Google model access and usage collection.' },
+  { providerId: 'google-ai-studio', displayName: 'Google AI Studio / Gemini API', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:google'], supportsNativeChange: true, description: 'Optional developer API access. This is separate from your Google Antigravity subscription login.' },
   { providerId: 'deepseek-api', displayName: 'DeepSeek API', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:deepseek'], supportsNativeChange: true, description: 'Optional direct DeepSeek model access through the authenticated runtime channel.' },
   { providerId: 'xai-api', displayName: 'xAI API / Grok', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:xai'], supportsNativeChange: true, description: 'Optional direct xAI model access through the authenticated runtime channel.' },
 ]
@@ -86,7 +86,7 @@ const liveExtensionSettingsController = new HermesExtensionSettingsLiveControlle
   profileId: 'default',
 })
 const liveProfileRuntimeBridge = createProductionHermesProfileRuntimeBridge({
-  fetch: (...arguments_) => globalThis.fetch(...arguments_),
+  fetch: (input, init) => globalThis.fetch(input, init),
 })
 
 
@@ -316,7 +316,7 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
   const headerHealth = section === 'integrations'
     ? serena?.state === 'ready' ? 'ok' : serena?.state === 'error' ? 'degraded' : 'unknown'
     : status?.overall ?? 'unknown'
-  const headerHealthLabel = isLiveProfileRuntime ? 'live read-only beta' : isLiveExtensionSettings ? 'live model beta' : isLiveSessionAdmin ? 'live read-only beta' : section === 'integrations' ? serena?.state ?? 'checking' : status?.overall ?? 'checking'
+  const headerHealthLabel = isLiveProfileRuntime ? 'live read-only profile runtime' : isLiveExtensionSettings ? 'live model beta' : isLiveSessionAdmin ? 'live read-only beta' : section === 'integrations' ? serena?.state ?? 'checking' : status?.overall ?? 'checking'
 
   return (
     <>
@@ -422,7 +422,7 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
 
           {status && section === 'mcp' && <HermesMcpWorkspace />}
           {status && section === 'skills' && <HermesSkillsWorkspace />}
-          {isLiveProfileRuntime && <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>Live read-only beta</strong><small>Profile inventory, active-profile attribution, SOUL, account disposition, and safe configuration metadata come from verified Hermes routes. Provider connection status stays unavailable until Hermes supplies a renderer-safe projection. Change and export controls are not rendered.</small></span></aside>}
+          {isLiveProfileRuntime && <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>Live read-only profile runtime</strong><small>Profile inventory, active selection, SOUL, model assignment, and terminal settings are read from Hermes. Writes remain unavailable until durable concurrent-write recovery is complete.</small></span></aside>}
           {isLiveExtensionSettings && <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>Live model assignments beta</strong><small>Catalog and assignment state come from verified Hermes routes. Only one main or auxiliary assignment can be reviewed and written at a time; unsupported extension writes are not shown.</small></span></aside>}
           {isLiveSessionAdmin && <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>Live read-only beta</strong><small>Session list, honest statistics, latest-descendant paths, and bounded text export use verified Hermes routes. Unsupported mutations remain visible but disabled.</small></span></aside>}
           {section === 'extensions' && <HermesExtensionSettingsWorkspace controller={liveExtensionSettingsController} mode="live-model-assignments" />}
