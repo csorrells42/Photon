@@ -57,6 +57,7 @@ async def test_local_speech_preview_passes_only_explicit_kokoro_controls(tmp_pat
 
 @pytest.mark.asyncio
 async def test_local_voice_settings_read_and_exact_revision_save(monkeypatch):
+    voice_ids = ("af_heart", "am_michael", "jf_gongitsune")
     saved = {
         "tts": {"provider": "edge", "kokoro": {"voice": "af_heart", "speed": 0.98}},
         "unrelated": {"keep": True},
@@ -66,6 +67,7 @@ async def test_local_voice_settings_read_and_exact_revision_save(monkeypatch):
         "tts": {"provider": "edge", "kokoro": {"voice": "af_heart", "speed": 0.98}},
         "unrelated": {"keep": True},
     })
+    monkeypatch.setattr(web_server, "_local_voice_ids", lambda: voice_ids)
 
     def save_config(value, **_kwargs):
         saved.clear()
@@ -75,6 +77,7 @@ async def test_local_voice_settings_read_and_exact_revision_save(monkeypatch):
 
     before = await web_server.get_local_voice_settings()
     assert before["settings"]["voiceId"] == "af_heart"
+    assert before["voices"] == list(voice_ids)
     after = await web_server.put_local_voice_settings(LocalVoiceSettingsUpdate(
         contract_version=1,
         expected_revision=before["revision"],
@@ -98,6 +101,20 @@ async def test_local_voice_settings_read_and_exact_revision_save(monkeypatch):
             speed=0.98,
         ))
     assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_local_voice_settings_never_advertise_a_fallback_when_the_pinned_bank_is_unavailable(monkeypatch):
+    def unavailable():
+        raise RuntimeError("pinned voice bank missing")
+
+    monkeypatch.setattr(web_server, "_local_voice_ids", unavailable)
+
+    with pytest.raises(HTTPException) as error:
+        await web_server.get_local_voice_settings()
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "local_voice_unavailable"
 
 
 @pytest.mark.asyncio

@@ -3019,6 +3019,8 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                     program_path=next_args.get("program_path"),
                     arguments=next_args.get("arguments"),
                     configuration=next_args.get("configuration", "Debug"),
+                    script=next_args.get("script"),
+                    reason=next_args.get("reason"),
                     callback=getattr(agent, "windows_developer_callback", None),
                 ),
                 next_args,

@@ -305,7 +305,7 @@ class DebugShareRequest(BaseModel):
 
 class TTSSpeakRequest(BaseModel):
     text: str
-    voice: Optional[Literal["af_heart", "am_michael"]] = None
+    voice: Optional[str] = Field(default=None, pattern=r"^[a-z]{2}_[a-z0-9_]{1,63}$")
     speed: Optional[float] = Field(default=None, ge=0.75, le=1.25)
 
 
@@ -314,7 +314,7 @@ class LocalVoiceSettingsUpdate(BaseModel):
     expected_revision: str = Field(min_length=1, max_length=128)
     profile_id: str = Field(min_length=1, max_length=128)
     request_id: str = Field(min_length=1, max_length=128)
-    voice_id: Literal["af_heart", "am_michael"]
+    voice_id: str = Field(pattern=r"^[a-z]{2}_[a-z0-9_]{1,63}$")
     speed: float = Field(ge=0.75, le=1.25)
 
 

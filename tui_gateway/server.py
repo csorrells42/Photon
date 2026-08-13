@@ -5903,7 +5903,7 @@ def _agent_cbs(sid: str) -> dict:
         # windows_developer tool (desktop GUI): forward a bounded typed request
         # to the native DeveloperServices host. This is the truthful Windows
         # and WPF path when the agent's own terminal happens to be Linux.
-        "windows_developer_callback": lambda action, project_path=None, program_path=None, arguments=None, configuration="Debug": _block(
+        "windows_developer_callback": lambda action, project_path=None, program_path=None, arguments=None, configuration="Debug", script=None, reason=None: _block(
             "developer.native.request",
             sid,
             {
@@ -5911,9 +5911,11 @@ def _agent_cbs(sid: str) -> dict:
                 **({"project_path": project_path} if project_path else {}),
                 **({"program_path": program_path} if program_path else {}),
                 **({"arguments": arguments} if arguments else {}),
+                **({"script": script} if script else {}),
+                **({"reason": reason} if reason else {}),
                 "configuration": configuration,
             },
-            timeout=300,
+            timeout=1860 if action == "administrator" else 300,
         ),
     }
 

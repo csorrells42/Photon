@@ -1908,6 +1908,8 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                     program_path=next_args.get("program_path"),
                     arguments=next_args.get("arguments"),
                     configuration=next_args.get("configuration", "Debug"),
+                    script=next_args.get("script"),
+                    reason=next_args.get("reason"),
                     callback=getattr(agent, "windows_developer_callback", None),
                 )
             function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(

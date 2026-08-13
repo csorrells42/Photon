@@ -38,6 +38,8 @@ def test_forwards_typed_workspace_relative_build():
         "program_path": None,
         "arguments": [],
         "configuration": "Release",
+        "script": None,
+        "reason": None,
     }
 
 
@@ -64,3 +66,50 @@ def test_run_requires_discovered_relative_program():
     assert result == {"ok": True}
     assert seen["program_path"].endswith("Chess.exe")
     assert seen["arguments"] == ["--demo"]
+
+
+def test_administrator_requires_approval_and_forwards_exact_operation(monkeypatch):
+    seen = {}
+    approvals = []
+
+    monkeypatch.setattr(
+        wd,
+        "request_tool_approval",
+        lambda action, description, **kwargs: approvals.append((action, description, kwargs)) or {"approved": True},
+    )
+    result = json.loads(wd.windows_developer_tool(
+        "administrator",
+        script="docker version",
+        reason="Repair Docker Desktop connectivity.",
+        callback=lambda **kwargs: seen.update(kwargs) or json.dumps({"ok": True}),
+    ))
+
+    assert result == {"ok": True}
+    assert approvals[0][0] == "windows_administrator"
+    assert "Repair Docker Desktop connectivity." in approvals[0][1]
+    assert seen["script"] == "docker version"
+    assert seen["reason"] == "Repair Docker Desktop connectivity."
+
+
+def test_administrator_decline_never_reaches_native_host(monkeypatch):
+    called = False
+
+    monkeypatch.setattr(
+        wd,
+        "request_tool_approval",
+        lambda *_args, **_kwargs: {"approved": False, "message": "Not now."},
+    )
+
+    def callback(**_kwargs):
+        nonlocal called
+        called = True
+        return json.dumps({"ok": True})
+
+    result = json.loads(wd.windows_developer_tool(
+        "administrator",
+        script="docker version",
+        reason="Repair Docker Desktop connectivity.",
+        callback=callback,
+    ))
+    assert result == {"error": "Not now."}
+    assert called is False

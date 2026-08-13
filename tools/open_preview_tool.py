@@ -34,7 +34,7 @@ def _normalize_target(raw: str) -> str:
     return v
 
 
-def open_preview_tool(url: str, label: str = "") -> str:
+def open_preview_tool(url: str, label: str = "", bookmark: bool = False) -> str:
     """Ask the desktop GUI to show ``url`` in the preview pane beside the chat."""
     target = _normalize_target(url or "")
     if not target:
@@ -53,13 +53,19 @@ def open_preview_tool(url: str, label: str = "") -> str:
 
     label = (label or "").strip()
     try:
-        ok = desktop_ui.emit("preview.open", {"url": target, "label": label})
+        ok = desktop_ui.emit(
+            "preview.open",
+            {"url": target, "label": label, "bookmark": bookmark is True},
+        )
     except Exception as exc:
         return tool_error(f"Failed to open the preview pane: {exc}")
     if not ok:
         return tool_error("The preview pane is only available in the Hermes desktop app.")
 
-    return json.dumps({"success": True, "url": target, "label": label}, ensure_ascii=False)
+    return json.dumps(
+        {"success": True, "url": target, "label": label, "bookmarked": bookmark is True},
+        ensure_ascii=False,
+    )
 
 
 OPEN_PREVIEW_SCHEMA = {
@@ -89,6 +95,11 @@ OPEN_PREVIEW_SCHEMA = {
                 "type": "string",
                 "description": "Optional tab label; defaults to the target's name.",
             },
+            "bookmark": {
+                "type": "boolean",
+                "description": "Also save this web page to the persistent Photon browser bookmarks list.",
+                "default": False,
+            },
         },
         "required": ["url"],
     },
@@ -99,6 +110,10 @@ registry.register(
     name="open_preview",
     toolset="desktop_ui",
     schema=OPEN_PREVIEW_SCHEMA,
-    handler=lambda args, **kw: open_preview_tool(url=args.get("url", ""), label=args.get("label", "")),
+    handler=lambda args, **kw: open_preview_tool(
+        url=args.get("url", ""),
+        label=args.get("label", ""),
+        bookmark=args.get("bookmark") is True,
+    ),
     emoji="🖼️",
 )

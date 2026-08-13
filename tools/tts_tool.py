@@ -239,6 +239,10 @@ DEFAULT_KITTENTTS_VOICE = "Jasper"
 DEFAULT_PIPER_VOICE = "en_US-lessac-medium"  # balanced size/quality
 DEFAULT_KOKORO_VOICE = "af_heart"
 DEFAULT_KOKORO_SPEED = 0.98
+KOKORO_LANGUAGE_BY_PREFIX = {
+    "a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi",
+    "i": "it", "j": "ja", "p": "pt-br", "z": "zh",
+}
 DEFAULT_OPENAI_VOICE = "alloy"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MINIMAX_MODEL = "speech-02-hd"
@@ -3122,6 +3126,7 @@ KOKORO_MODEL_ASSETS = (
 _kokoro_model_cache: Dict[str, Any] = {}
 _kokoro_asset_lock = threading.Lock()
 _kokoro_verified_assets: Optional[Tuple[str, str]] = None
+_kokoro_voice_inventory: Optional[Tuple[str, ...]] = None
 
 
 def _sha256_path(path: Path) -> str:
@@ -3203,6 +3208,42 @@ def _ensure_kokoro_assets() -> Tuple[str, str]:
         return _kokoro_verified_assets
 
 
+def _ensure_kokoro_voice_bank() -> str:
+    """Resolve only the pinned voice bank needed by the settings catalog.
+
+    Opening Speech & Voice should not download the 325 MB synthesis model just
+    to populate its selector.  Actual synthesis continues to call
+    ``_ensure_kokoro_assets`` and therefore verifies both pinned assets before
+    rendering any audio.
+    """
+    if _kokoro_verified_assets is not None:
+        return _kokoro_verified_assets[1]
+    with _kokoro_asset_lock:
+        if _kokoro_verified_assets is not None:
+            return _kokoro_verified_assets[1]
+        directory = get_hermes_home() / "natural-voice"
+        return str(_download_verified_kokoro_asset(directory, *KOKORO_MODEL_ASSETS[1]))
+
+
+def list_kokoro_voices() -> Tuple[str, ...]:
+    """Return the exact voice IDs present in the pinned local Kokoro bank."""
+    global _kokoro_voice_inventory
+    if _kokoro_voice_inventory is not None:
+        return _kokoro_voice_inventory
+    voices_path = _ensure_kokoro_voice_bank()
+    with _kokoro_asset_lock:
+        if _kokoro_voice_inventory is not None:
+            return _kokoro_voice_inventory
+        import numpy as np
+
+        with np.load(voices_path, allow_pickle=False) as voice_bank:
+            voices = tuple(sorted(str(item) for item in voice_bank.files if re.fullmatch(r"[a-z]{2}_[a-z0-9_]{1,63}", str(item))))
+        if not voices:
+            raise RuntimeError("Kokoro voice bank contains no supported voices")
+        _kokoro_voice_inventory = voices
+        return voices
+
+
 def _generate_kokoro_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
     """Render speech locally with the pinned Kokoro ONNX model."""
     Kokoro = _import_kokoro()
@@ -3236,7 +3277,7 @@ def _generate_kokoro_tts(text: str, output_path: str, tts_config: Dict[str, Any]
         text,
         voice=voice_name,
         speed=speed,
-        lang="en-us",
+        lang=KOKORO_LANGUAGE_BY_PREFIX.get(voice_name[0], "en-us"),
     )
     import soundfile as sf
 
@@ -3825,6 +3866,10 @@ def text_to_speech_tool(
         if command_provider_config is not None:
             fmt = _get_command_tts_output_format(command_provider_config)
             base_path = out_dir / f"tts_{timestamp}.{fmt}"
+        elif provider == "kokoro":
+            # Kokoro renders PCM/WAV natively. The desktop local-preview path
+            # must not depend on ffmpeg merely to return playable local audio.
+            base_path = out_dir / f"tts_{timestamp}.wav"
         elif want_opus and provider in {"openai", "elevenlabs", "mistral", "gemini"}:
             base_path = out_dir / f"tts_{timestamp}.ogg"
         else:

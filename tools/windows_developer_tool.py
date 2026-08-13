@@ -10,10 +10,11 @@ returns the bounded typed result.
 import json
 from typing import Callable, Optional
 
+from tools.approval import request_tool_approval
 from tools.registry import registry, tool_error
 
 
-_ACTIONS = {"describe", "build", "analyze", "targets", "run", "stop"}
+_ACTIONS = {"describe", "build", "analyze", "targets", "run", "stop", "administrator"}
 _CONFIGURATIONS = {"Debug", "Release"}
 
 
@@ -23,12 +24,14 @@ def windows_developer_tool(
     program_path: Optional[str] = None,
     arguments: Optional[list[str]] = None,
     configuration: str = "Debug",
+    script: Optional[str] = None,
+    reason: Optional[str] = None,
     callback: Optional[Callable] = None,
 ) -> str:
     """Dispatch one native developer-services operation and return JSON."""
     normalized_action = str(action or "").strip().lower()
     if normalized_action not in _ACTIONS:
-        return tool_error("action must be one of: describe, build, analyze, targets, run, stop.")
+        return tool_error("action must be one of: describe, build, analyze, targets, run, stop, administrator.")
     if callback is None:
         return tool_error("windows_developer is only available in the Hermes desktop app.")
 
@@ -72,6 +75,23 @@ def windows_developer_tool(
         if any(len(value) > 1024 or "\0" in value for value in normalized_arguments):
             return tool_error("Each program argument must be at most 1024 characters and contain no NUL.")
 
+    normalized_script = None
+    normalized_reason = None
+    if normalized_action == "administrator":
+        normalized_script = str(script or "").strip()
+        normalized_reason = str(reason or "").strip()
+        if not normalized_script or len(normalized_script) > 16 * 1024 or "\0" in normalized_script:
+            return tool_error("script is required, must be at most 16384 characters, and contain no NUL.")
+        if not normalized_reason or len(normalized_reason) > 512 or "\0" in normalized_reason:
+            return tool_error("reason is required, must be at most 512 characters, and contain no NUL.")
+        approval = request_tool_approval(
+            "windows_administrator",
+            f"Photon requests Windows Administrator access: {normalized_reason}\n\nOperation:\n{normalized_script}",
+            rule_key="windows-administrator-uac",
+        )
+        if not approval.get("approved"):
+            return tool_error(approval.get("message") or "Windows Administrator access was not approved.")
+
     try:
         raw = callback(
             action=normalized_action,
@@ -79,6 +99,8 @@ def windows_developer_tool(
             program_path=normalized_program,
             arguments=normalized_arguments,
             configuration=normalized_configuration,
+            script=normalized_script,
+            reason=normalized_reason,
         )
     except Exception as exc:
         return tool_error(f"Windows developer operation failed: {exc}")
@@ -99,15 +121,22 @@ WINDOWS_DEVELOPER_SCHEMA = {
         "use build or analyze to run the selected workspace-relative target with "
         "the Windows .NET SDK; use targets, run, and stop to launch a discovered "
         "Windows program through the typed debugger host. Prefer this over installing or invoking .NET inside "
-        "the Linux agent container for Windows/WPF projects. Returns bounded JSON "
-        "with success, diagnostics, and output."
+        "the Linux agent container for Windows/WPF projects. Use administrator only "
+        "when a specific Windows operation genuinely requires elevation; it presents "
+        "both the Hermes approval card and Windows UAC consent and never accepts a password. "
+        "Hermes itself runs as root inside its Linux container, so use the normal terminal "
+        "for container-internal package, configuration, or workspace repair. Use administrator "
+        "for Docker Desktop, Windows service, host filesystem, or host Docker CLI repair that "
+        "cannot be performed inside the live container. If the Hermes container is already dead, "
+        "report that the desktop launcher must restore it before Photon can resume. "
+        "Returns bounded JSON with success, diagnostics, and output."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["describe", "build", "analyze", "targets", "run", "stop"],
+                "enum": ["describe", "build", "analyze", "targets", "run", "stop", "administrator"],
             },
             "project_path": {
                 "type": "string",
@@ -130,6 +159,16 @@ WINDOWS_DEVELOPER_SCHEMA = {
                 "maxItems": 32,
                 "description": "Optional bounded program arguments for run.",
             },
+            "script": {
+                "type": "string",
+                "maxLength": 16384,
+                "description": "PowerShell operation to execute after explicit Hermes approval and Windows UAC consent. Required for administrator.",
+            },
+            "reason": {
+                "type": "string",
+                "maxLength": 512,
+                "description": "Plain-language explanation shown to the user. Required for administrator.",
+            },
         },
         "required": ["action"],
     },
@@ -146,6 +185,8 @@ registry.register(
         program_path=args.get("program_path"),
         arguments=args.get("arguments"),
         configuration=args.get("configuration", "Debug"),
+        script=args.get("script"),
+        reason=args.get("reason"),
         callback=kw.get("callback"),
     ),
     emoji="🪟",

@@ -4657,14 +4657,18 @@ async def speak_text_local(payload: TTSSpeakRequest, profile: Optional[str] = No
     return await _speak_text_response(payload, profile, provider_override="kokoro")
 
 
-_LOCAL_VOICE_IDS = frozenset({"af_heart", "am_michael"})
+def _local_voice_ids() -> tuple[str, ...]:
+    """Return only the exact IDs present in the pinned local voice bank."""
+    from tools.tts_tool import list_kokoro_voices
+    return list_kokoro_voices()
 
 
 def _local_voice_settings_payload(config: dict) -> dict:
+    voice_ids = _local_voice_ids()
     tts = config.get("tts") if isinstance(config.get("tts"), dict) else {}
     kokoro = tts.get("kokoro") if isinstance(tts.get("kokoro"), dict) else {}
     voice = str(kokoro.get("voice") or "af_heart").strip()
-    if voice not in _LOCAL_VOICE_IDS:
+    if voice not in voice_ids:
         voice = "af_heart"
     try:
         speed = round(float(kokoro.get("speed", 0.98)), 2)
@@ -4681,7 +4685,7 @@ def _local_voice_settings_payload(config: dict) -> dict:
     }
     encoded = json.dumps(settings, sort_keys=True, separators=(",", ":")).encode("utf-8")
     revision = hashlib.sha256(encoded).hexdigest()
-    return {"profileId": "default", "revision": revision, "settings": settings}
+    return {"profileId": "default", "revision": revision, "settings": settings, "voices": list(voice_ids)}
 
 
 @app.get("/api/audio/local-voice/settings")
@@ -4692,7 +4696,13 @@ async def get_local_voice_settings(profile: Optional[str] = None):
             result["profileId"] = profile or "default"
             return result
 
-    return await asyncio.to_thread(_run)
+    try:
+        return await asyncio.to_thread(_run)
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Local Kokoro voice catalog could not be read")
+        raise HTTPException(status_code=503, detail="local_voice_unavailable")
 
 
 @app.put("/api/audio/local-voice/settings")
@@ -4700,6 +4710,8 @@ async def put_local_voice_settings(payload: LocalVoiceSettingsUpdate):
     def _run():
         with _profile_scope(payload.profile_id):
             with _CONFIG_MUTATION_LOCK:
+                if payload.voice_id not in _local_voice_ids():
+                    raise HTTPException(status_code=422, detail="invalid_settings")
                 current = _local_voice_settings_payload(load_config())
                 if payload.expected_revision != current["revision"]:
                     raise HTTPException(status_code=409, detail="stale_revision")
@@ -4719,7 +4731,13 @@ async def put_local_voice_settings(payload: LocalVoiceSettingsUpdate):
                 result["profileId"] = payload.profile_id
                 return result
 
-    return await asyncio.to_thread(_run)
+    try:
+        return await asyncio.to_thread(_run)
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Local Kokoro voice settings could not be saved")
+        raise HTTPException(status_code=503, detail="local_voice_unavailable")
 
 
 def _split_text_for_speak_stream(text: str, cap: int) -> list:
@@ -4967,8 +4985,10 @@ from hermes_cli.web_routers.sessions import (  # noqa: E402,F401 — legacy re-e
 
 
 from hermes_cli.web_routers import profiles as _profiles_routes  # noqa: E402
+from hermes_cli.web_routers import profile_runtime as _profile_runtime_routes  # noqa: E402
 
 app.include_router(_profiles_routes.sessions_router)
+app.include_router(_profile_runtime_routes.router)
 from hermes_cli.web_routers.profiles import (  # noqa: E402,F401 — legacy re-exports; tests call these via web_server.<name>
     get_profiles_sessions,
     get_profiles_sessions_sidebar,
