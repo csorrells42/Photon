@@ -129,28 +129,36 @@
 .browser-toolbar input::placeholder { color: #5f6a7d; }
 
 .browser-bookmarks {
-  display: grid;
+  min-height: 29px;
+  display: flex;
+  align-items: center;
   gap: 5px;
   border-top: 1px solid rgba(128, 100, 255, .13);
-  padding: 6px 8px 8px;
-  background: linear-gradient(90deg, rgba(61, 45, 120, .13), rgba(21, 31, 48, .16));
+  padding: 2px 6px;
+  background: #0e121b;
 }
 
-.browser-bookmarks header { display: flex; align-items: center; gap: 6px; color: #a99bfa; font-size: 8px; }
+.browser-bookmarks header { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; color: #a99bfa; font-size: 8px; }
 .browser-bookmarks header span { border-radius: 999px; background: rgba(128, 100, 255, .14); padding: 1px 5px; color: #8273de; }
-.browser-bookmarks > p { margin: 1px 0; color: #677286; font-size: 8px; }
-.browser-bookmarks > div { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
-.browser-bookmarks article { min-width: 158px; max-width: 220px; display: flex; align-items: stretch; border: 1px solid rgba(128, 100, 255, .17); border-radius: 6px; background: rgba(18, 23, 36, .88); }
+.browser-bookmarks header button { height: 21px; display: flex; align-items: center; gap: 4px; border: 1px solid rgba(128, 100, 255, .2); border-radius: 4px; background: rgba(128, 100, 255, .07); padding: 0 6px; color: #9e91eb; font-size: 7px; }
+.browser-bookmarks header button:hover:not(:disabled) { border-color: rgba(128, 100, 255, .42); background: rgba(128, 100, 255, .14); color: #c6bcff; }
+.browser-bookmarks header button:disabled { cursor: wait; opacity: .55; }
+.browser-bookmarks > p { min-width: 0; margin: 0; overflow: hidden; color: #677286; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.browser-bookmarks > div { min-width: 0; display: flex; flex: 1; gap: 2px; overflow-x: auto; scrollbar-width: thin; }
+.browser-bookmarks article { min-width: 88px; max-width: 170px; height: 23px; display: flex; align-items: stretch; border: 1px solid transparent; border-radius: 4px; background: transparent; }
+.browser-bookmarks article:hover { border-color: rgba(128, 100, 255, .14); background: rgba(255, 255, 255, .035); }
 .browser-bookmarks article > button { border: 0; background: transparent; color: #778399; }
-.browser-bookmarks article > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 6px; padding: 5px 7px; text-align: left; }
+.browser-bookmarks article > button:first-child { min-width: 0; flex: 1; display: flex; align-items: center; gap: 5px; padding: 2px 5px; text-align: left; }
 .browser-bookmarks article > button:first-child:hover { color: #c4ccda; }
-.browser-bookmarks article > button:last-child { width: 27px; display: grid; place-items: center; border-left: 1px solid rgba(128, 100, 255, .1); }
+.browser-bookmarks article > button:last-child { width: 22px; display: none; place-items: center; border-left: 1px solid rgba(128, 100, 255, .1); }
+.browser-bookmarks article:hover > button:last-child, .browser-bookmarks article:focus-within > button:last-child { display: grid; }
 .browser-bookmarks article > button:last-child:hover { background: rgba(229, 101, 122, .08); color: #e28696; }
 .browser-bookmarks article span { min-width: 0; display: grid; gap: 1px; }
 .browser-bookmarks article strong,
 .browser-bookmarks article small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-bookmarks article strong { color: #b6bfd0; font-size: 8px; font-weight: 600; }
-.browser-bookmarks article small { color: #5f6b80; font-size: 7px; }
+.browser-bookmarks article small { display: none; color: #5f6b80; font-size: 7px; }
+.browser-bookmarks > output { max-width: 220px; overflow: hidden; color: #6e798c; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 
 .browser-maps {
   border-bottom: 1px solid rgba(91, 195, 174, .14);

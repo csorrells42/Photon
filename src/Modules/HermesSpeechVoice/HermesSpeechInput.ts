@@ -1,4 +1,5 @@
 import { hermesAudioConstraints } from './HermesAudioDevicePreferences'
+import { HERMES_WINDOWS_AUDIO_PROTOCOL, HermesWindowsAudioHost } from './HermesWindowsAudioHost'
 
 export const HERMES_SPEECH_INPUT_ENDPOINT = '/api/audio/transcribe'
 export const HERMES_SPEECH_INPUT_MAX_BYTES = 25 * 1024 * 1024
@@ -71,6 +72,26 @@ function defaultReadBlob(blob: Blob): Promise<string> {
   })
 }
 
+async function transcriptionFailureReason(response: Response): Promise<string> {
+  if (response.status === 401 || response.status === 403) {
+    return 'Hermes authentication expired. Reopen the Workbench and try again.'
+  }
+  if (response.status === 413) return 'The recording exceeded the local transcription limit.'
+  try {
+    const payload: unknown = await response.json()
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      const detail = (payload as Record<string, unknown>).detail
+      if (typeof detail === 'string') {
+        const normalized = detail.replace(/\s+/g, ' ').trim()
+        if (normalized && normalized.length <= 240) return normalized
+      }
+    }
+  } catch {
+    // The stable status fallback below is more useful than a JSON parsing error.
+  }
+  return `Local Whisper returned HTTP ${response.status || 'error'}.`
+}
+
 export class HermesSpeechInputController {
   private readonly dependencies: SpeechInputDependencies
   private generation = 0
@@ -80,12 +101,19 @@ export class HermesSpeechInputController {
   private abort: AbortController | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
   private publish: ((state: HermesSpeechInputState) => void) | null = null
+  private readonly nativeHost: HermesWindowsAudioHost
+  private readonly forceBrowserCapture: boolean
+  private nativeListening = false
+  private nativeRequestId: string | null = null
+  private unsubscribeNative: (() => void) | null = null
 
   constructor(dependencies?: Partial<SpeechInputDependencies>) {
+    this.nativeHost = new HermesWindowsAudioHost()
+    this.forceBrowserCapture = Boolean(dependencies?.getUserMedia || dependencies?.createRecorder)
     this.dependencies = {
       createRecorder: dependencies?.createRecorder ?? ((stream) => new MediaRecorder(stream) as MediaRecorderLike),
       fetch: dependencies?.fetch ?? fetch,
-      getUserMedia: dependencies?.getUserMedia ?? (() => navigator.mediaDevices.getUserMedia(hermesAudioConstraints())),
+      getUserMedia: dependencies?.getUserMedia ?? defaultGetUserMedia,
       readBlob: dependencies?.readBlob ?? defaultReadBlob,
       setTimer: dependencies?.setTimer ?? setTimeout,
       clearTimer: dependencies?.clearTimer ?? clearTimeout,
@@ -93,7 +121,7 @@ export class HermesSpeechInputController {
   }
 
   get isListening(): boolean {
-    return this.recorder?.state === 'recording'
+    return this.nativeListening || this.recorder?.state === 'recording'
   }
 
   async start(publish: (state: HermesSpeechInputState) => void): Promise<void> {
@@ -101,6 +129,41 @@ export class HermesSpeechInputController {
     const generation = ++this.generation
     this.publish = publish
     publish({ phase: 'requesting' })
+    if (this.nativeHost.available && !this.forceBrowserCapture) {
+      this.unsubscribeNative?.()
+      this.unsubscribeNative = this.nativeHost.subscribe((message) => {
+        if (generation !== this.generation) return
+        if (message.version !== HERMES_WINDOWS_AUDIO_PROTOCOL || message.requestId !== this.nativeRequestId) return
+        if (message.type === 'audio.speech.started') { this.nativeListening = true; publish({ phase: 'listening' }) }
+        else if (message.type === 'audio.speech.captured' && typeof message.dataUrl === 'string') {
+          this.nativeListening = false
+          this.nativeRequestId = null
+          this.unsubscribeNative?.(); this.unsubscribeNative = null
+          publish({ phase: 'transcribing' })
+          void this.transcribeDataUrl(generation, message.dataUrl, typeof message.mimeType === 'string' ? message.mimeType : 'audio/wav')
+        }
+        else if (message.type === 'audio.speech.ready' && typeof message.transcript === 'string') {
+          this.nativeListening = false
+          this.nativeRequestId = null
+          const transcript = message.transcript.trim()
+          const publishReady = this.publish
+          this.publish = null
+          this.unsubscribeNative?.(); this.unsubscribeNative = null
+          if (transcript) publishReady?.({ phase: 'ready', transcript })
+          else this.fail(generation, 'No speech was detected.')
+        } else if (message.type === 'audio.error') {
+          this.nativeListening = false
+          this.nativeRequestId = null
+          this.fail(generation, typeof message.message === 'string' ? message.message : 'Windows microphone capture failed.')
+        }
+      })
+      try {
+        this.nativeRequestId = this.nativeHost.startSpeech()
+      } catch {
+        this.fail(generation, 'Windows microphone capture could not start.', 'unavailable')
+      }
+      return
+    }
     try {
       const stream = await this.dependencies.getUserMedia()
       if (generation !== this.generation) {
@@ -125,6 +188,11 @@ export class HermesSpeechInputController {
   }
 
   stop(): void {
+    if (this.nativeListening && this.nativeRequestId) {
+      this.publish?.({ phase: 'transcribing' })
+      this.nativeHost.stopSpeech(this.nativeRequestId)
+      return
+    }
     if (!this.recorder || this.recorder.state !== 'recording') return
     if (this.timer) this.dependencies.clearTimer(this.timer)
     this.timer = null
@@ -136,6 +204,10 @@ export class HermesSpeechInputController {
 
   cancel(publishCancelled = true): void {
     this.generation += 1
+    if (this.nativeRequestId) this.nativeHost.cancelSpeech(this.nativeRequestId)
+    this.nativeListening = false
+    this.nativeRequestId = null
+    this.unsubscribeNative?.(); this.unsubscribeNative = null
     if (this.timer) this.dependencies.clearTimer(this.timer)
     this.timer = null
     this.abort?.abort()
@@ -163,15 +235,32 @@ export class HermesSpeechInputController {
     try {
       const dataUrl = await this.dependencies.readBlob(blob)
       if (generation !== this.generation || abort.signal.aborted) return
+      await this.transcribeDataUrl(generation, dataUrl, blob.type || 'audio/webm', abort)
+    } catch {
+      if (generation === this.generation && !abort.signal.aborted) this.fail(generation, 'Local Whisper could not transcribe this recording.')
+    }
+  }
+
+  private async transcribeDataUrl(generation: number, dataUrl: string, mimeType: string, existingAbort?: AbortController): Promise<void> {
+    const abort = existingAbort ?? new AbortController()
+    this.abort = abort
+    try {
       const response = await this.dependencies.fetch(HERMES_SPEECH_INPUT_ENDPOINT, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data_url: dataUrl, mime_type: blob.type || 'audio/webm' }),
+        body: JSON.stringify({ data_url: dataUrl, mime_type: mimeType }),
         signal: abort.signal,
       })
-      if (!response.ok) throw new Error('transcription-failed')
+      if (!response.ok) {
+        this.fail(generation, await transcriptionFailureReason(response))
+        return
+      }
       const payload: unknown = await response.json()
-      if (!isTranscriptionResponse(payload)) throw new Error('invalid-transcription-response')
+      if (!isTranscriptionResponse(payload)) {
+        this.fail(generation, 'Local Whisper returned an invalid response.')
+        return
+      }
       if (generation !== this.generation || abort.signal.aborted) return
       const transcript = payload.transcript.trim()
       if (!transcript) {
@@ -182,9 +271,14 @@ export class HermesSpeechInputController {
       this.abort = null
       this.publish = null
       publish?.({ phase: 'ready', transcript })
-    } catch {
+    } catch (error) {
       if (generation === this.generation && !abort.signal.aborted) {
-        this.fail(generation, 'Local Whisper could not transcribe this recording.')
+        this.fail(
+          generation,
+          error instanceof TypeError
+            ? 'Local Whisper could not reach the Hermes runtime.'
+            : 'Local Whisper could not transcribe this recording.',
+        )
       }
     }
   }
@@ -195,6 +289,9 @@ export class HermesSpeechInputController {
     this.timer = null
     this.abort?.abort()
     this.abort = null
+    this.nativeListening = false
+    this.nativeRequestId = null
+    this.unsubscribeNative?.(); this.unsubscribeNative = null
     this.recorder = null
     this.chunks = []
     stopTracks(this.stream)
@@ -203,4 +300,8 @@ export class HermesSpeechInputController {
     this.publish = null
     publish?.({ phase, reason })
   }
+}
+
+function defaultGetUserMedia(): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia(hermesAudioConstraints())
 }

@@ -42,16 +42,18 @@ describe('HermesSessionAdminWorkspace', () => {
     expect(html).toContain('aria-label="Close Confirm destructive operation"')
   })
 
-  it('labels the live bounded adapter and disables every unverified mutation', () => {
+  it('labels the live connection, explains its scope, and removes unverified write controls', () => {
     const html = renderToStaticMarkup(<HermesSessionAdminWorkspace profileId="default" adapter={liveHermesSessionAdminAdapter} />)
 
-    expect(html).toContain('LIVE BOUNDED ADAPTER')
-    expect(html).toContain('Verified live operations')
-    expect(html).toContain('list, descendants, export, statistics')
-    expect(html).toContain('Controls without a verified upstream route remain visible but disabled.')
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Preview delete<\/button>/)
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Create fork<\/button>/)
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Preview prune<\/button>/)
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Validate import<\/button>/)
+    expect(html).toContain('LIVE READ-ONLY CONNECTION')
+    expect(html).toContain('Connected now')
+    expect(html).toContain('Session inventory · Latest descendant trail · Text-only export · Storage statistics')
+    expect(html).toContain('Unavailable write controls are not shown.')
+    expect(html).toContain('Nothing on this connected surface changes a session.')
+    expect(html).toContain('Request export')
+    expect(html).not.toContain('Preview delete')
+    expect(html).not.toContain('Create fork')
+    expect(html).not.toContain('Preview prune')
+    expect(html).not.toContain('Validate import')
   })
 })

@@ -103,6 +103,13 @@ function Statistic({ label, statistic }: { label: string; statistic: SessionStat
   return <article><strong>{statistic.value === null ? 'Unavailable' : statistic.value.toLocaleString()}</strong><span>{label}</span><small>{statistic.quality} · {statistic.detail}</small></article>
 }
 
+const operationLabels: Partial<Record<SessionAdminOperation, string>> = {
+  list: 'Session inventory',
+  descendants: 'Latest descendant trail',
+  export: 'Text-only export',
+  statistics: 'Storage statistics',
+}
+
 export function HermesSessionAdminWorkspace({ profileId, adapter }: HermesSessionAdminWorkspaceProps) {
   const [sessions, setSessions] = useState<SessionAdminSession[]>([])
   const [statistics, setStatistics] = useState<SessionStatisticsData | null>(null)
@@ -134,6 +141,8 @@ export function HermesSessionAdminWorkspace({ profileId, adapter }: HermesSessio
   const supportsOperation = useCallback((operation: SessionAdminOperation) => (
     !adapter.supportedOperations || adapter.supportedOperations.includes(operation)
   ), [adapter])
+  const hasBoundedCapabilities = Boolean(adapter.supportedOperations)
+  const supportedOperationLabels = adapter.supportedOperations?.map((operation) => operationLabels[operation] ?? operation).join(' · ')
 
   const runOperation = useCallback(<T,>(
     key: string,
@@ -281,29 +290,32 @@ export function HermesSessionAdminWorkspace({ profileId, adapter }: HermesSessio
   }
 
   return <section className="session-admin-workspace" aria-labelledby="session-admin-heading">
-    <header className="session-admin-heading">
-      <div><small>HERMES SESSION ADMIN · {HERMES_SESSION_ADMIN_CONTRACT_VERSION}{adapter.supportedOperations ? ' · LIVE BOUNDED ADAPTER' : ''}</small><h1 id="session-admin-heading">Session administration</h1><p>Profile-scoped previews, bounded lineage, import/export, statistics, and confirmed mutations. Search and pinning remain in Hermes Sessions.</p></div>
+    <header className="session-admin-heading session-admin-hero">
+      <div><small>WORKBENCH LAB · {HERMES_SESSION_ADMIN_CONTRACT_VERSION}{hasBoundedCapabilities ? ' · LIVE READ-ONLY CONNECTION' : ' · FULL ADMIN ADAPTER'}</small><h1 id="session-admin-heading">Session administration</h1><p>Inspect the conversation records belonging to one profile, follow the newest continuation, export selected text, and understand what Hermes can report. Search and pinning remain in Hermes Sessions.</p></div>
       <button type="button" onClick={refresh} disabled={Boolean(pending.list)}>Refresh</button>
     </header>
 
-    <div className="session-admin-profile"><strong>Active profile</strong><code>{activeProfile || 'Invalid profile'}</code><span>Every request and result is checked against this identity.</span></div>
-    {adapter.supportedOperations && <div className="session-admin-capabilities" role="note"><strong>Verified live operations</strong><span>{adapter.supportedOperations.join(', ')}</span><small>Controls without a verified upstream route remain visible but disabled.</small></div>}
+    <section className="session-admin-boundary" aria-label="Session administration scope">
+      <div><small>ACTIVE PROFILE</small><strong><code>{activeProfile || 'Invalid profile'}</code></strong><span>Every request and result is checked against this identity.</span></div>
+      <div><small>WHAT THIS LAB DOES</small><strong>{hasBoundedCapabilities ? 'Observe and export verified Hermes data' : 'Preview and administer isolated session data'}</strong><span>{hasBoundedCapabilities ? 'This connection intentionally does not claim that Hermes can delete, import, branch, prune, or set model locks.' : 'Destructive work is previewed and separately confirmed before it changes a session.'}</span></div>
+    </section>
+    {hasBoundedCapabilities && <div className="session-admin-capabilities" role="note"><strong>Connected now</strong><span>{supportedOperationLabels}</span><small>Unavailable write controls are not shown. They will appear only when Hermes exposes a verified route.</small></div>}
     {error && <div className="session-admin-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError(null)}>Dismiss</button></div>}
     {notice && <div className="session-admin-notice" role="status"><span>{notice}</span><button type="button" onClick={() => setNotice(null)}>Dismiss</button></div>}
     {Object.keys(pending).length > 0 && <aside className="session-admin-pending" aria-label="Pending session operations"><strong>Pending</strong>{Object.entries(pending).map(([key, correlation]) => <span key={key}><code>{key}</code><small>{correlation}</small><button type="button" onClick={() => coordinator.current.cancel(key)}>Cancel</button></span>)}</aside>}
 
-    <section className="session-admin-panel"><header><div><h2>Sessions</h2><p>Multi-select is bounded to {sessionAdminBounds.maxSelection}. Destructive actions always preview first.</p></div><span>{selected.size} selected</span></header>
-      <div className="session-admin-actions"><button type="button" title={!supportsOperation('delete-preview') ? 'Delete preview is not exposed by the verified live adapter.' : undefined} disabled={!supportsOperation('delete-preview') || !selected.size || Boolean(pending['delete-preview'])} onClick={previewDelete}>Preview delete</button><button type="button" title={!supportsOperation('export') ? 'Export is not exposed by the current adapter.' : undefined} disabled={!supportsOperation('export') || !selected.size || Boolean(pending.export)} onClick={exportSelected}>Request export</button><button type="button" disabled={!selected.size} onClick={() => setSelected(new Set())}>Clear selection</button></div>
+    <section className="session-admin-panel"><header><div><small>SESSION INVENTORY</small><h2>Sessions</h2><p>Select up to {sessionAdminBounds.maxSelection} records to export. {hasBoundedCapabilities ? 'Nothing on this connected surface changes a session.' : 'Destructive actions always show a preview first.'}</p></div><span>{selected.size} selected</span></header>
+      <div className="session-admin-actions">{supportsOperation('delete-preview') && <button type="button" disabled={!selected.size || Boolean(pending['delete-preview'])} onClick={previewDelete}>Preview delete</button>}{supportsOperation('export') && <button type="button" disabled={!selected.size || Boolean(pending.export)} onClick={exportSelected}>Request export</button>}<button type="button" disabled={!selected.size} onClick={() => setSelected(new Set())}>Clear selection</button></div>
       <div className="session-admin-session-list">{sessions.map((session) => <article key={session.sessionId}>
         <label><input type="checkbox" checked={selected.has(session.sessionId)} onChange={() => toggleSelection(session.sessionId)} /><span><strong>{session.title}</strong><code>{session.sessionId}</code></span></label>
         <dl><div><dt>State</dt><dd>{session.lifecycle}</dd></div><div><dt>Messages</dt><dd>{session.messageCount ?? 'unavailable'}</dd></div><div><dt>Model lock</dt><dd>{session.modelLock ?? 'none'}</dd></div></dl>
-        <div className="session-admin-row-actions"><button type="button" title={!supportsOperation('descendants') ? 'Descendant lookup is not exposed by the current adapter.' : undefined} disabled={!supportsOperation('descendants')} onClick={() => loadDescendants(session.sessionId)}>Descendants</button><button type="button" title={!supportsOperation('branch') ? 'Branch and fork mutations are not exposed by the verified live adapter.' : undefined} disabled={!supportsOperation('branch')} onClick={() => { setBranchSource(session.sessionId); setBranchTitle(`${session.title} fork`) }}>Branch/fork</button><button type="button" title={!supportsOperation('model-lock-set') ? 'Model-lock mutation is not exposed by the verified live adapter.' : undefined} disabled={!supportsOperation('model-lock-set')} onClick={() => { setModelSessionId(session.sessionId); setModelText(session.modelLock ?? '') }}>Model lock</button></div>
+        <div className="session-admin-row-actions">{supportsOperation('descendants') && <button type="button" onClick={() => loadDescendants(session.sessionId)}>Newest continuation</button>}{supportsOperation('branch') && <button type="button" onClick={() => { setBranchSource(session.sessionId); setBranchTitle(`${session.title} fork`) }}>Branch/fork</button>}{supportsOperation('model-lock-set') && <button type="button" onClick={() => { setModelSessionId(session.sessionId); setModelText(session.modelLock ?? '') }}>Model lock</button>}</div>
         {trees[session.sessionId] && <div className="session-admin-tree"><strong>Descendants · {trees[session.sessionId].returned}{trees[session.sessionId].truncated ? ' (truncated)' : ''}</strong><DescendantList nodes={trees[session.sessionId].nodes} /></div>}
       </article>)}</div>
       {!sessions.length && !pending.list && <p className="session-admin-empty">No sessions were reported for this profile.</p>}
     </section>
 
-    <div className="session-admin-grid">
+    {!hasBoundedCapabilities && <div className="session-admin-grid">
       <section className="session-admin-panel"><header><div><h2>Create branch or fork</h2><p>Creates one child and preserves the owning profile.</p></div></header>
         <label>Source session<input value={branchSource} onChange={(event) => setBranchSource(event.target.value)} /></label>
         <label>New session ID<input value={branchId} onChange={(event) => setBranchId(event.target.value)} /></label>
@@ -323,17 +335,17 @@ export function HermesSessionAdminWorkspace({ profileId, adapter }: HermesSessio
         <label>Provider/model lock<input value={modelText} onChange={(event) => setModelText(event.target.value)} placeholder="provider/model" /></label>
         <div className="session-admin-actions"><button type="button" title={!supportsOperation('model-lock-set') ? 'Model-lock mutation is not exposed by the verified live adapter.' : undefined} disabled={!supportsOperation('model-lock-set') || !modelSession || !modelText.trim()} onClick={() => modelSession && requestModelSet(modelSession, modelText)}>Set lock</button><button type="button" title={!supportsOperation('model-lock-clear') ? 'Model-lock clearing is not exposed by the verified live adapter.' : undefined} disabled={!supportsOperation('model-lock-clear') || !modelSession?.modelLock} onClick={() => modelSession && setDialog({ kind: 'clear-model', session: modelSession })}>Clear lock</button></div>
       </section>
-    </div>
+    </div>}
 
-    <section className="session-admin-panel"><header><div><h2>Import untrusted JSON</h2><p>Bounded to {sessionAdminBounds.maxImportBytes.toLocaleString()} bytes, {sessionAdminBounds.maxImportSessions} sessions, and {sessionAdminBounds.maxMessagesPerImportedSession} messages per session. Content is rendered as text, never HTML.</p></div></header>
+    {supportsOperation('import-validate') && <section className="session-admin-panel"><header><div><small>VALIDATED IMPORT</small><h2>Import untrusted JSON</h2><p>Bounded to {sessionAdminBounds.maxImportBytes.toLocaleString()} bytes, {sessionAdminBounds.maxImportSessions} sessions, and {sessionAdminBounds.maxMessagesPerImportedSession} messages per session. Content is rendered as text, never HTML.</p></div></header>
       <label>Import payload<textarea rows={8} value={importText} onChange={(event) => setImportText(event.target.value)} spellCheck={false} /></label>
       <div className="session-admin-actions"><button type="button" title={!supportsOperation('import-validate') ? 'Import is not exposed by the verified live adapter.' : undefined} onClick={validateImport} disabled={!supportsOperation('import-validate') || !importText || Boolean(pending['import-validate'])}>Validate import</button>{importValidation?.valid && importValidation.validationToken && <button type="button" onClick={() => commitImport(importValidation)} disabled={!supportsOperation('import-commit') || Boolean(pending['import-commit'])}>Import validated sessions</button>}</div>
       {importValidation && <div className={importValidation.valid ? 'session-admin-validation valid' : 'session-admin-validation invalid'}><strong>{importValidation.valid ? 'Validation passed' : 'Validation failed'}</strong><span>{importValidation.byteCount.toLocaleString()} bytes · {importValidation.sessions.length} bounded sessions</span>{importValidation.errors.length > 0 && <ul>{importValidation.errors.map((message, index) => <li key={index}>{message}</li>)}</ul>}<ImportedTextPreview sessions={importValidation.sessions} /></div>}
-    </section>
+    </section>}
 
-    {exportResult && <section className="session-admin-panel"><header><div><h2>Export result</h2><p>The adapter returned text; the coordinator decides how to save it.</p></div><code>{exportResult.fileName}</code></header><label>Exported JSON<textarea rows={8} readOnly value={exportResult.contentText} /></label></section>}
+    {exportResult && <section className="session-admin-panel"><header><div><small>EXPORT READY</small><h2>Export result</h2><p>The adapter returned text only. Copy or save it through the owning Workbench surface; no file was automatically written.</p></div><code>{exportResult.fileName}</code></header><label>Exported JSON<textarea rows={8} readOnly value={exportResult.contentText} /></label></section>}
 
-    <section className="session-admin-panel"><header><div><h2>Honest statistics</h2><p>Unavailable values stay unavailable; partial values retain their quality label.</p></div></header>{statistics ? <div className="session-admin-statistics"><Statistic label="Total" statistic={statistics.total} /><Statistic label="Active" statistic={statistics.active} /><Statistic label="Ended" statistic={statistics.ended} /><Statistic label="Archived" statistic={statistics.archived} /><Statistic label="Messages" statistic={statistics.messages} /><Statistic label="Storage bytes" statistic={statistics.storageBytes} /></div> : <p className="session-admin-empty">Statistics are unavailable or still pending.</p>}</section>
+    <section className="session-admin-panel"><header><div><small>REPORTED TOTALS</small><h2>Honest statistics</h2><p>Unavailable values stay unavailable; partial values retain their quality label. These are storage records, not a claim about active runtime agents.</p></div></header>{statistics ? <div className="session-admin-statistics"><Statistic label="Total" statistic={statistics.total} /><Statistic label="Active" statistic={statistics.active} /><Statistic label="Ended" statistic={statistics.ended} /><Statistic label="Archived" statistic={statistics.archived} /><Statistic label="Messages" statistic={statistics.messages} /><Statistic label="Storage bytes" statistic={statistics.storageBytes} /></div> : <p className="session-admin-empty">Statistics are unavailable or still pending.</p>}</section>
 
     {dialog?.kind === 'delete' && <AccessibleDialog title="Confirm session deletion" onClose={() => setDialog(null)} busy={Boolean(pending['delete-commit'])}><p>{dialog.preview.resolvedIds.length} sessions will be deleted, including {dialog.preview.descendantCount} descendants. {dialog.preview.activeIds.length} are active. {dialog.preview.truncated && 'The preview was truncated; commit is blocked.'}</p><ul>{dialog.preview.resolvedIds.map((id) => <li key={id}><code>{id}</code></li>)}</ul><label>Type DELETE to confirm<input value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label><footer><button type="button" onClick={() => setDialog(null)}>Cancel</button><button type="button" disabled={confirmationText !== 'DELETE' || dialog.preview.truncated} onClick={() => commitDelete(dialog.preview)}>Delete reviewed sessions</button></footer></AccessibleDialog>}
     {dialog?.kind === 'prune' && <AccessibleDialog title="Confirm session prune" onClose={() => setDialog(null)} busy={Boolean(pending['prune-commit'])}><p>{dialog.preview.candidateIds.length} of {dialog.preview.totalMatching} matching sessions are in this bounded preview. {dialog.preview.activeExcluded} active sessions were excluded.</p><ul>{dialog.preview.candidateIds.map((id) => <li key={id}><code>{id}</code></li>)}</ul><label>Type PRUNE to confirm<input value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label><footer><button type="button" onClick={() => setDialog(null)}>Cancel</button><button type="button" disabled={confirmationText !== 'PRUNE'} onClick={() => commitPrune(dialog.preview)}>Prune reviewed sessions</button></footer></AccessibleDialog>}

@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bookmark, ChevronDown, ChevronUp, Globe2, LoaderCircle, MapPinned, Plus, RotateCw, Route, Search, Star, Trash2, X } from 'lucide-react'
-import { desktopBrowserClient, tryNormalizeBrowserAddress, type BrowserSurfaceState } from './DesktopBrowserClient'
+import { ArrowLeft, ArrowRight, Bookmark, ChevronDown, ChevronUp, Download, Globe2, LoaderCircle, MapPinned, Plus, RotateCw, Route, Search, Star, Trash2, X } from 'lucide-react'
+import { desktopBrowserClient, tryNormalizeBrowserAddress, type BrowserBookmarkImportItem, type BrowserSurfaceState } from './DesktopBrowserClient'
 import './BrowserWorkspace.css'
 
 export type BrowserTab = { id: string; url: string; title: string; state?: BrowserSurfaceState; pendingOpenRequestId?: string; requestKey?: string }
 export type BrowserOpenRequest = { nonce: number; url: string; label?: string; key?: string; bookmark?: boolean }
-export type BrowserBookmark = { id: string; title: string; url: string }
+export type BrowserBookmark = { id: string; title: string; url: string; folder?: string }
 export type BrowserWorkspaceMode = 'browser' | 'maps'
 export type GoogleMapsTravelMode = 'driving' | 'walking' | 'bicycling' | 'transit'
 export const HERMES_HELP_BROWSER_REQUEST = Object.freeze({
@@ -16,8 +16,15 @@ export const HERMES_HELP_BROWSER_REQUEST = Object.freeze({
 })
 
 const googleMapsTravelModes = new Set<GoogleMapsTravelMode>(['driving', 'walking', 'bicycling', 'transit'])
-const browserBookmarksStorageKey = 'phos.browser.bookmarks.v1'
+export const browserBookmarksStorageKey = 'phos.browser.bookmarks.v1'
 const maximumBrowserBookmarks = 256
+
+export type BrowserBookmarkMerge = {
+  bookmarks: BrowserBookmark[]
+  importedCount: number
+  duplicateCount: number
+  capacitySkippedCount: number
+}
 
 function bookmarkableUrl(rawUrl: string) {
   try {
@@ -46,6 +53,7 @@ function loadBrowserBookmarks(): BrowserBookmark[] {
         id: typeof value.id === 'string' && value.id.length <= 128 ? value.id : crypto.randomUUID(),
         title: typeof value.title === 'string' && value.title.trim() ? value.title.trim().slice(0, 256) : new URL(url).hostname,
         url,
+        ...(typeof value.folder === 'string' && value.folder.trim() && value.folder.length <= 512 ? { folder: value.folder.trim() } : {}),
       })
       if (bookmarks.length >= maximumBrowserBookmarks) break
     }
@@ -62,6 +70,46 @@ function upsertBrowserBookmark(current: BrowserBookmark[], rawUrl: string, rawTi
   const existing = current.find((bookmark) => bookmark.url === url)
   if (existing) return current.map((bookmark) => bookmark.id === existing.id ? { ...bookmark, title } : bookmark)
   return [{ id: crypto.randomUUID(), title, url }, ...current].slice(0, maximumBrowserBookmarks)
+}
+
+export function applyBrowserBookmarkRequest(current: BrowserBookmark[], request: BrowserOpenRequest): BrowserBookmark[] {
+  return request.bookmark === true ? upsertBrowserBookmark(current, request.url, request.label) : current
+}
+
+export function mergeImportedBrowserBookmarks(current: readonly BrowserBookmark[], imported: readonly BrowserBookmarkImportItem[]): BrowserBookmarkMerge {
+  const bookmarks = current.slice(0, maximumBrowserBookmarks)
+  const seen = new Set(bookmarks.map((bookmark) => bookmarkableUrl(bookmark.url)).filter((url): url is string => url !== null))
+  let importedCount = 0
+  let duplicateCount = 0
+  let capacitySkippedCount = 0
+  for (const candidate of imported) {
+    const url = bookmarkableUrl(candidate.url)
+    if (!url) continue
+    if (seen.has(url)) { duplicateCount++; continue }
+    if (bookmarks.length >= maximumBrowserBookmarks) { capacitySkippedCount++; continue }
+    seen.add(url)
+    bookmarks.push({
+      id: crypto.randomUUID(),
+      title: candidate.title.trim().slice(0, 256) || new URL(url).hostname,
+      url,
+      ...(candidate.folder.trim() ? { folder: candidate.folder.trim().slice(0, 512) } : {}),
+    })
+    importedCount++
+  }
+  return { bookmarks, importedCount, duplicateCount, capacitySkippedCount }
+}
+
+export function BrowserBookmarksBar({ bookmarks, importing = false, importStatus = '', onImport, onOpen, onRemove }: { bookmarks: readonly BrowserBookmark[]; importing?: boolean; importStatus?: string; onImport?: () => void; onOpen: (url: string) => void; onRemove: (id: string) => void }) {
+  return <section className="browser-bookmarks" aria-label="Bookmarks bar" data-bookmark-storage-key={browserBookmarksStorageKey}>
+    <header><Bookmark size={12} /><strong>Bookmarks</strong><span>{bookmarks.length}</span>{onImport && <button type="button" disabled={importing} onClick={onImport}><Download size={10} />{importing ? 'Importing…' : 'Import Chrome'}</button>}</header>
+    {bookmarks.length === 0
+      ? <p>Bookmark a page here, or ask Photon to bookmark it. The same bar remains after Photon restarts.</p>
+      : <div>{bookmarks.map((bookmark) => <article key={bookmark.id}>
+          <button type="button" title={bookmark.folder ? `${bookmark.folder} / ${bookmark.title}` : bookmark.title} onClick={() => onOpen(bookmark.url)}><Globe2 size={12} /><span><strong>{bookmark.title}</strong><small>{new URL(bookmark.url).hostname}</small></span></button>
+          <button type="button" aria-label={`Remove ${bookmark.title}`} onClick={() => onRemove(bookmark.id)}><Trash2 size={12} /></button>
+        </article>)}</div>}
+    {importStatus && <output aria-live="polite">{importStatus}</output>}
+  </section>
 }
 
 function boundedMapsText(value: string, required: boolean) {
@@ -153,11 +201,14 @@ export function BrowserWorkspace({ mode = 'browser', openRequest, onOpenRequestH
   const [error, setError] = useState('')
   const [externalAuthentication, setExternalAuthentication] = useState<{ tabId: string; message: string } | null>(null)
   const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>(loadBrowserBookmarks)
-  const [bookmarksOpen, setBookmarksOpen] = useState(() => loadBrowserBookmarks().length > 0)
+  const [bookmarkImportStatus, setBookmarkImportStatus] = useState('')
   const surfaceRef = useRef<HTMLDivElement>(null)
   const tabStripRef = useRef<HTMLDivElement>(null)
   const handledOpenRequest = useRef<number | null>(null)
   const activeIdRef = useRef(activeId)
+  const bookmarksRef = useRef(bookmarks)
+  const bookmarkImportRequest = useRef<string | null>(null)
+  const bookmarkImportTimeout = useRef<number | null>(null)
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0]
 
   useEffect(() => {
@@ -217,6 +268,7 @@ export function BrowserWorkspace({ mode = 'browser', openRequest, onOpenRequestH
   }, [activeId, mode, tabs])
 
   useEffect(() => {
+    bookmarksRef.current = bookmarks
     try {
       window.localStorage.setItem(browserBookmarksStorageKey, JSON.stringify(bookmarks))
     } catch {
@@ -239,8 +291,27 @@ export function BrowserWorkspace({ mode = 'browser', openRequest, onOpenRequestH
     const removeExternalAuthentication = desktopBrowserClient.onExternalAuthentication((request) => {
       if (request.tabId === activeIdRef.current) setExternalAuthentication(request)
     })
+    const removeBookmarkSnapshot = desktopBrowserClient.onBookmarkSnapshot((snapshot) => {
+      if (snapshot.requestId !== bookmarkImportRequest.current) return
+      bookmarkImportRequest.current = null
+      if (bookmarkImportTimeout.current !== null) window.clearTimeout(bookmarkImportTimeout.current)
+      bookmarkImportTimeout.current = null
+      if (snapshot.status !== 'available') {
+        setBookmarkImportStatus(snapshot.message || 'Chrome bookmarks are unavailable.')
+        return
+      }
+      const merged = mergeImportedBrowserBookmarks(bookmarksRef.current, snapshot.bookmarks)
+      bookmarksRef.current = merged.bookmarks
+      setBookmarks(merged.bookmarks)
+      const capacity = merged.capacitySkippedCount ? ` ${merged.capacitySkippedCount} exceeded the 256-item bar limit.` : ''
+      const truncated = snapshot.truncated ? ' Chrome supplied more bookmarks than the bounded importer can return.' : ''
+      setBookmarkImportStatus(`Imported ${merged.importedCount}; kept ${merged.duplicateCount} existing duplicate${merged.duplicateCount === 1 ? '' : 's'}.${capacity}${truncated}`)
+    })
     const removeError = desktopBrowserClient.onError(setError)
-    return () => { removeState(); removeOpen(); removeExternalAuthentication(); removeError() }
+    return () => {
+      removeState(); removeOpen(); removeExternalAuthentication(); removeBookmarkSnapshot(); removeError()
+      if (bookmarkImportTimeout.current !== null) window.clearTimeout(bookmarkImportTimeout.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -264,8 +335,9 @@ export function BrowserWorkspace({ mode = 'browser', openRequest, onOpenRequestH
       setAddress(url === 'about:blank' ? '' : url)
     }
     if (openRequest.bookmark) {
-      setBookmarks((current) => upsertBrowserBookmark(current, url, openRequest.label))
-      setBookmarksOpen(true)
+      const nextBookmarks = applyBrowserBookmarkRequest(bookmarksRef.current, { ...openRequest, url })
+      bookmarksRef.current = nextBookmarks
+      setBookmarks(nextBookmarks)
     }
     onOpenRequestHandled?.(openRequest.nonce)
   }, [onOpenRequestHandled, openRequest, tabs])
@@ -326,8 +398,29 @@ export function BrowserWorkspace({ mode = 'browser', openRequest, onOpenRequestH
 
   function bookmarkCurrentPage() {
     if (!active) return
-    setBookmarks((current) => upsertBrowserBookmark(current, active.url, active.title))
-    setBookmarksOpen(true)
+    const nextBookmarks = upsertBrowserBookmark(bookmarksRef.current, active.url, active.title)
+    bookmarksRef.current = nextBookmarks
+    setBookmarks(nextBookmarks)
+  }
+
+  function removeBookmark(id: string) {
+    const nextBookmarks = bookmarksRef.current.filter((candidate) => candidate.id !== id)
+    bookmarksRef.current = nextBookmarks
+    setBookmarks(nextBookmarks)
+  }
+
+  function importChromeBookmarks() {
+    if (bookmarkImportRequest.current) return
+    const requestId = crypto.randomUUID()
+    bookmarkImportRequest.current = requestId
+    setBookmarkImportStatus('Reading Chrome bookmarks…')
+    bookmarkImportTimeout.current = window.setTimeout(() => {
+      if (bookmarkImportRequest.current !== requestId) return
+      bookmarkImportRequest.current = null
+      bookmarkImportTimeout.current = null
+      setBookmarkImportStatus('Chrome did not answer the bookmark import request.')
+    }, 15_000)
+    desktopBrowserClient.importChromeBookmarks(requestId)
   }
 
   function retryActivePage() {
@@ -352,18 +445,9 @@ export function BrowserWorkspace({ mode = 'browser', openRequest, onOpenRequestH
         <label><Search size={14} /><input aria-label="Address or search" placeholder="Search or enter an address" value={address} onChange={(event) => setAddress(event.target.value)} /></label>
         {mode === 'browser' && <>
           <button type="button" aria-label="Bookmark this page" disabled={!active || !bookmarkableUrl(active.url)} onClick={bookmarkCurrentPage}><Star size={14} fill={bookmarks.some((bookmark) => bookmark.url === bookmarkableUrl(active?.url ?? '')) ? 'currentColor' : 'none'} /></button>
-          <button type="button" aria-label="Show bookmarks" aria-expanded={bookmarksOpen} onClick={() => setBookmarksOpen((value) => !value)}><Bookmark size={14} /></button>
         </>}
       </form>
-      {mode === 'browser' && bookmarksOpen && <section className="browser-bookmarks" aria-label="Browser bookmarks">
-        <header><strong>Bookmarks</strong><span>{bookmarks.length}</span></header>
-        {bookmarks.length === 0
-          ? <p>Bookmark a page and it will remain here after Photon restarts.</p>
-          : <div>{bookmarks.map((bookmark) => <article key={bookmark.id}>
-              <button type="button" onClick={() => navigateTo(bookmark.url)}><Globe2 size={12} /><span><strong>{bookmark.title}</strong><small>{new URL(bookmark.url).hostname}</small></span></button>
-              <button type="button" aria-label={`Remove ${bookmark.title}`} onClick={() => setBookmarks((current) => current.filter((candidate) => candidate.id !== bookmark.id))}><Trash2 size={12} /></button>
-            </article>)}</div>}
-      </section>}
+      {mode === 'browser' && <BrowserBookmarksBar bookmarks={bookmarks} importing={bookmarkImportRequest.current !== null} importStatus={bookmarkImportStatus} onImport={importChromeBookmarks} onOpen={navigateTo} onRemove={removeBookmark} />}
     </div>}
     {mode === 'maps' && <BrowserMapsPanel onNavigate={navigateTo} onError={setError} alwaysExpanded />}
     {error && <div className="browser-error" role="status">{error}<button aria-label="Dismiss browser error" onClick={() => setError('')}><X size={12} /></button></div>}

@@ -38,13 +38,20 @@ describe('HermesExtensionSettingsWorkspace', () => {
     expect(markup).not.toContain('<img src=x')
   })
 
-  it('presents only source-confirmed assignment controls in live model mode', () => {
+  it('presents only source-confirmed assignment controls in a compact, explained live mode', () => {
     const snapshot = createDeterministicExtensionSettingsSnapshot()
     const markup = renderToStaticMarkup(<HermesExtensionSettingsWorkspace initialSnapshot={snapshot} mode="live-model-assignments" />)
 
-    expect(markup).toContain('Live model assignments')
-    expect(markup).toContain('Advanced models')
+    expect(markup).toContain('Model assignments')
+    expect(markup).toContain('WHAT YOU ARE LOOKING AT')
+    expect(markup).toContain('A deliberately small live control')
+    expect(markup).toContain('Default model')
+    expect(markup).toContain('Intentionally absent')
+    expect(markup).toContain('Current and next model assignments')
     expect(markup).toContain('Review assignment change')
+    expect(markup).toContain('compression auxiliary model')
+    expect(markup).toContain('Reported but not editable in this lab')
+    expect(markup).toContain('summarization. Hermes reported these tasks, but this page has no verified write route for them.')
     expect(markup).not.toContain('Skill Studio')
     expect(markup).not.toContain('Mixture of Agents')
     expect(markup).not.toContain('Provider settings and validation intents')

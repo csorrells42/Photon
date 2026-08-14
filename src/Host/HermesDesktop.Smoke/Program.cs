@@ -272,6 +272,48 @@ if (browserSurfaceRequests.IsCurrent(showB))
 }
 Console.WriteLine("Desktop browser deferred show/hide ordering passed.");
 
+var chromiumBookmarks = ChromiumBookmarksBridge.ParseSnapshot(Encoding.UTF8.GetBytes("""
+{
+  "roots": {
+    "bookmark_bar": {
+      "type": "folder",
+      "name": "Bookmarks bar",
+      "children": [
+        { "type": "url", "name": "Existing", "url": "https://example.test/" },
+        { "type": "folder", "name": "Work", "children": [
+          { "type": "url", "name": "Reference", "url": "https://docs.example.test/reference" }
+        ] },
+        { "type": "url", "name": "Duplicate", "url": "https://example.test" },
+        { "type": "url", "name": "Script", "url": "javascript:alert(1)" },
+        { "type": "url", "name": "Credential", "url": "https://user:password@example.test/" }
+      ]
+    },
+    "other": {
+      "type": "folder",
+      "name": "Other bookmarks",
+      "children": [
+        { "type": "url", "name": "Bounded out", "url": "https://third.example.test/" }
+      ]
+    },
+    "synced": { "type": "folder", "name": "Mobile bookmarks", "children": [] }
+  }
+}
+"""), maximumBookmarks: 2);
+if (chromiumBookmarks.Bookmarks.Count != 2
+    || chromiumBookmarks.DiscoveredCount != 6
+    || chromiumBookmarks.RejectedCount != 3
+    || !chromiumBookmarks.Truncated
+    || chromiumBookmarks.Bookmarks[0] != new ChromiumBookmark("Existing", "https://example.test/", "Bookmarks bar")
+    || chromiumBookmarks.Bookmarks[1] != new ChromiumBookmark("Reference", "https://docs.example.test/reference", "Bookmarks bar / Work")
+    || chromiumBookmarks.Bookmarks.Any(bookmark => bookmark.Url.Contains("user:", StringComparison.Ordinal)
+        || bookmark.Url.Contains("javascript", StringComparison.OrdinalIgnoreCase)
+        || bookmark.Folder.Contains(@"C:\", StringComparison.OrdinalIgnoreCase)))
+{
+    Console.Error.WriteLine("Chrome bookmark projection, deduplication, or bounds failed.");
+    return 943;
+}
+Console.WriteLine("Chrome bookmark projection, deduplication, and bounds passed.");
+
 if (args.Contains("--document-browser-only", StringComparer.Ordinal)) return 0;
 
 if (!await DockerControlBridgeSmoke.RunAsync()) return 94;

@@ -8,6 +8,7 @@ import {
   type HermesSpeechOutputVoice,
 } from './contracts'
 import { applyHermesAudioOutput } from '../HermesSpeechVoice/HermesAudioDevicePreferences'
+import { HermesWindowsAudioHost } from '../HermesSpeechVoice/HermesWindowsAudioHost'
 
 export type HermesSpeechOutputSnapshot = Readonly<{
   profileId: string
@@ -64,14 +65,19 @@ export function normalizeHermesSpeechOutputSnapshot(value: unknown): HermesSpeec
 }
 
 export class HermesSpeechOutputLiveAdapter {
+  private readonly nativeAudio = new HermesWindowsAudioHost()
   constructor(
     private readonly fetcher: FetchLike = (...arguments_) => globalThis.fetch(...arguments_),
-    private readonly playAudio: (source: string) => Promise<void> = async (source) => {
-      const audio = new Audio(source)
-      await applyHermesAudioOutput(audio)
-      await audio.play()
-    },
+    private readonly playAudio?: (source: string) => Promise<void>,
   ) {}
+
+  private async play(source: string, signal: AbortSignal): Promise<void> {
+    if (this.playAudio) { await this.playAudio(source); return }
+    if (this.nativeAudio.available) { await this.nativeAudio.playOutput(source, signal); return }
+    const audio = new Audio(source)
+    await applyHermesAudioOutput(audio)
+    await audio.play()
+  }
 
   private async response(response: Response): Promise<unknown> {
     if (!response.ok) {
@@ -104,7 +110,7 @@ export class HermesSpeechOutputLiveAdapter {
       const raw = object(await this.response(response))
       const source = localAudioDataUrl(raw.data_url)
       if (!source || raw.provider !== 'kokoro') return { status: 'rejected', reason: 'invalid_settings' }
-      await this.playAudio(source)
+      await this.play(source, signal)
       return { status: 'accepted', reason: 'preview_complete' }
     } catch (reason) {
       if (signal.aborted) return { status: 'cancelled', reason: 'cancelled' }

@@ -34,9 +34,12 @@ public partial class MainWindow : Window
     private readonly SourceControlBridge _sourceControlBridge;
     private readonly DocumentBridge _documentBridge;
     private readonly BrowserSurfaceBridge _browserSurfaceBridge;
+    private readonly ChromiumBookmarksBridge _chromiumBookmarksBridge;
     private readonly RaspberryPiDesktopTooling _raspberryPiTooling;
     private readonly AccountLinkBridge _accountLinkBridge;
     private readonly HermesConversationBridge _conversationBridge;
+    private readonly WindowsAudioDeviceBridge _windowsAudioDeviceBridge;
+    private readonly QuarkDesktopCompanionWindow _quarkCompanion;
     private readonly HermesConnectionsBridge? _connectionsBridge;
     private readonly HermesCredentialRuntimeBridge? _credentialRuntimeBridge;
     private readonly WindowsCredentialVault _credentialVault = new();
@@ -74,6 +77,7 @@ public partial class MainWindow : Window
         _documentBridge = new DocumentBridge(options.WorkspacePath, PostHostMessage);
         _accountLinkBridge = new AccountLinkBridge(PostHostMessage);
         _conversationBridge = new HermesConversationBridge(PostHostMessage);
+        _windowsAudioDeviceBridge = new WindowsAudioDeviceBridge(PostHostMessage);
         _connectionsBridge = TryCreateConnectionsBridge(options.ApplicationInstallRoot, PostHostMessage);
         _credentialRuntimeBridge = _connectionsBridge is null
             ? null
@@ -89,6 +93,8 @@ public partial class MainWindow : Window
 
         InitializeComponent();
         _browserSurfaceBridge = new BrowserSurfaceBridge(this, BrowserView, PostHostMessage);
+        _chromiumBookmarksBridge = new ChromiumBookmarksBridge(PostHostMessage);
+        _quarkCompanion = new QuarkDesktopCompanionWindow(PostHostMessage);
         SourceInitialized += (_, _) => EnableImmersiveDarkTitleBar();
         Loaded += async (_, _) =>
         {
@@ -127,6 +133,8 @@ public partial class MainWindow : Window
             _sourceControlBridge.Dispose();
             await _browserSurfaceBridge.DisposeAsync();
             await _conversationBridge.DisposeAsync();
+            _windowsAudioDeviceBridge.Dispose();
+            _quarkCompanion.Dispose();
         }
         catch (Exception exception)
         {
@@ -395,8 +403,62 @@ public partial class MainWindow : Window
                         type = "host.pong",
                         version = DesktopHostProtocolVersion,
                         platform = "windows",
-                        capabilities = new { terminal = true, terminalVersion = NativeTerminalBridge.ProtocolVersion, codex = true, codexVersion = CodexAppServerBridge.ProtocolVersion, auth = true, authVersion = NativeAuthProtocol.Version, credentials = true, credentialsVersion = NativeCredentialProtocol.Version, connections = _connectionsBridge is not null, connectionsVersion = HermesCredentialBroker.HermesCredentialBrokerProtocol.Version, usage = true, usageVersion = NativeUsageProtocol.Version, developerServices = true, developerServicesVersion = DeveloperServicesBridge.ProtocolVersion, languageTooling = true, languageToolingVersion = 1, workspaceSearch = true, workspaceSearchVersion = WorkspaceSearchBridge.ProtocolVersion, dockerControl = true, dockerControlVersion = DockerControlBridge.ProtocolVersion, photonCad = true, photonCadVersion = PhotonCadBridge.ProtocolVersion, photonCadProjects = _photonCadBridge.ProjectActionsAvailable, photonCadProjectsVersion = 1, photonCadProjectDetails = _photonCadBridge.ProjectCapabilityAdvertisement(), sourceControl = true, sourceControlVersion = SourceControlBridge.ProtocolVersion, documents = true, documentsVersion = DocumentBridge.ProtocolVersion, browser = true, browserVersion = BrowserSurfaceBridge.ProtocolVersion, accountLink = true, accountLinkVersion = AccountLinkBridge.ProtocolVersion, conversationBridge = true, conversationBridgeVersion = HermesConversationBridge.ProtocolVersion },
+                        capabilities = new { terminal = true, terminalVersion = NativeTerminalBridge.ProtocolVersion, codex = true, codexVersion = CodexAppServerBridge.ProtocolVersion, auth = true, authVersion = NativeAuthProtocol.Version, credentials = true, credentialsVersion = NativeCredentialProtocol.Version, connections = _connectionsBridge is not null, connectionsVersion = HermesCredentialBroker.HermesCredentialBrokerProtocol.Version, usage = true, usageVersion = NativeUsageProtocol.Version, developerServices = true, developerServicesVersion = DeveloperServicesBridge.ProtocolVersion, languageTooling = true, languageToolingVersion = 1, workspaceSearch = true, workspaceSearchVersion = WorkspaceSearchBridge.ProtocolVersion, dockerControl = true, dockerControlVersion = DockerControlBridge.ProtocolVersion, photonCad = true, photonCadVersion = PhotonCadBridge.ProtocolVersion, photonCadProjects = _photonCadBridge.ProjectActionsAvailable, photonCadProjectsVersion = 1, photonCadProjectDetails = _photonCadBridge.ProjectCapabilityAdvertisement(), sourceControl = true, sourceControlVersion = SourceControlBridge.ProtocolVersion, documents = true, documentsVersion = DocumentBridge.ProtocolVersion, browser = true, browserVersion = BrowserSurfaceBridge.ProtocolVersion, accountLink = true, accountLinkVersion = AccountLinkBridge.ProtocolVersion, conversationBridge = true, conversationBridgeVersion = HermesConversationBridge.ProtocolVersion, windowsAudio = true, windowsAudioVersion = WindowsAudioDeviceBridge.ProtocolVersion },
                     });
+                    break;
+                case "quark.companion.connect":
+                    PostHostMessage(new { type = "quark.companion.ready", version = QuarkDesktopCompanionWindow.ProtocolVersion });
+                    break;
+                case "quark.companion.sync":
+                    _quarkCompanion.Sync(
+                        GetBoolean(document.RootElement, "active", false),
+                        GetString(document.RootElement, "phase"),
+                        GetString(document.RootElement, "reason"),
+                        GetBoolean(document.RootElement, "reviewActive", false));
+                    break;
+                case "quark.companion.recall":
+                    _quarkCompanion.Recall(Left, Top, ActualWidth, ActualHeight);
+                    PostHostMessage(new { type = "quark.companion.recalled", version = QuarkDesktopCompanionWindow.ProtocolVersion });
+                    break;
+                case "audio.devices.list":
+                    DesktopLog.Write("Windows audio device list requested by renderer.");
+                    _windowsAudioDeviceBridge.List(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.devices.save":
+                    _windowsAudioDeviceBridge.Save(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetString(document.RootElement, "kind"), GetString(document.RootElement, "endpointRef"));
+                    break;
+                case "audio.micTest.start":
+                    _windowsAudioDeviceBridge.StartMicrophoneTest(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetString(document.RootElement, "endpointRef"), GetInteger(document.RootElement, "durationMilliseconds", 5_000));
+                    break;
+                case "audio.micTest.stop":
+                    _windowsAudioDeviceBridge.StopMicrophoneTest(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.micTest.cancel":
+                    _windowsAudioDeviceBridge.CancelMicrophoneTest(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.micTest.play":
+                    _windowsAudioDeviceBridge.PlaySample(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetString(document.RootElement, "endpointRef"));
+                    break;
+                case "audio.micTest.stopPlayback":
+                    _windowsAudioDeviceBridge.StopPlayback(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.micTest.delete":
+                    _windowsAudioDeviceBridge.DeleteSample(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.speech.start":
+                    _windowsAudioDeviceBridge.StartSpeechCapture(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.speech.stop":
+                    _windowsAudioDeviceBridge.StopSpeechCapture(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.speech.cancel":
+                    _windowsAudioDeviceBridge.CancelSpeechCapture(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
+                    break;
+                case "audio.output.play":
+                    _windowsAudioDeviceBridge.PlayOutput(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"), GetString(document.RootElement, "dataUrl"));
+                    break;
+                case "audio.output.stop":
+                    _windowsAudioDeviceBridge.StopOutput(GetInteger(document.RootElement, "version", 0), GetString(document.RootElement, "requestId"));
                     break;
                 case "auth.open":
                     var provider = document.RootElement.TryGetProperty("provider", out var providerElement) ? providerElement.GetString() : null;
@@ -848,6 +910,12 @@ public partial class MainWindow : Window
                 case "browser.forward": _browserSurfaceBridge.Forward(GetString(document.RootElement, "tabId")); break;
                 case "browser.reload": _browserSurfaceBridge.Reload(GetString(document.RootElement, "tabId")); break;
                 case "browser.stop": _browserSurfaceBridge.Stop(GetString(document.RootElement, "tabId")); break;
+                case "browser.bookmarks.import":
+                    await _chromiumBookmarksBridge.ImportAsync(
+                        GetInteger(document.RootElement, "version", 0),
+                        GetString(document.RootElement, "requestId"),
+                        CancellationToken.None);
+                    break;
                 case "accountLink.status":
                     await _accountLinkBridge.PostStatusAsync(
                         GetInteger(document.RootElement, "version", 0),

@@ -79,11 +79,29 @@
 .system-health.ok { border-color: rgba(73,194,159,.2); background: rgba(47,151,121,.08); color: #64c5a9; }
 .system-health.degraded { border-color: rgba(218,160,73,.22); background: rgba(153,100,29,.1); color: #d2a557; }
 .system-content { min-height: 0; overflow: auto; padding: 17px; }
-.workbench-labs-banner { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 11px; border: 1px solid rgba(157,126,255,.25); border-radius: 10px; background: linear-gradient(120deg,rgba(118,83,225,.13),rgba(45,157,131,.055)); padding: 10px 12px; color: #a791f3; }
+.workbench-labs-page { width: min(100%,760px); margin: 0 auto; color: #aeb7c5; font-size: 10px; line-height: 1.45; }
+.workbench-labs-banner { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: flex-start; gap: 9px; margin-bottom: 9px; border: 1px solid rgba(157,126,255,.25); border-radius: 10px; background: linear-gradient(120deg,rgba(118,83,225,.13),rgba(45,157,131,.055)); padding: 10px 12px; color: #a791f3; }
 .workbench-labs-banner > svg { flex: 0 0 auto; margin-top: 1px; }
 .workbench-labs-banner > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .workbench-labs-banner strong { color: #c8bcf4; font-size: 9px; }
 .workbench-labs-banner small { color: #7d8496; font-size: 10px; line-height: 1.45; }
+.workbench-labs-banner dl { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; margin: 1px 0 0; border: 1px solid rgba(255,255,255,.06); border-radius: 7px; background: rgba(255,255,255,.045); overflow: hidden; }
+.workbench-labs-banner dl > div { min-width: 0; background: rgba(9,12,20,.38); padding: 7px 8px; }
+.workbench-labs-banner dt { color: #9b87e8; font-size: 7.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.workbench-labs-banner dd { margin: 3px 0 0; color: #8b95a7; font-size: 8px; line-height: 1.4; }
+
+/* The three Labs are independent modules; the shell keeps their outer geometry and type scale aligned. */
+.workbench-labs-page > .hermes-extension-settings { min-height: 0; padding: 0; background: transparent; font: inherit; font-size: inherit; line-height: inherit; }
+.workbench-labs-page .hermes-extension-settings h1 { font-size: 16px; }
+.workbench-labs-page .hermes-extension-settings h2 { font-size: 13px; }
+.workbench-labs-page .hermes-extension-settings h3 { font-size: 11px; }
+.workbench-labs-page .hermes-extension-settings button,
+.workbench-labs-page .hermes-extension-settings input,
+.workbench-labs-page .hermes-extension-settings select,
+.workbench-labs-page .hermes-extension-settings textarea { min-height: 32px; }
+.workbench-labs-page > .session-admin-workspace { margin: 0 auto; font-size: inherit; line-height: inherit; }
+.workbench-labs-page .session-admin-heading h1 { font-size: 16px; }
+.workbench-labs-page .session-admin-panel h2 { font-size: 12px; }
 .system-loading { height: 100%; display: flex; align-items: center; justify-content: center; gap: 9px; color: #697487; }
 .system-loading strong { font-size: 9px; }
 
@@ -227,4 +245,5 @@
   .system-hero strong { font-size: 14px; }
   .integration-hero { align-items: flex-start; flex-wrap: wrap; }
   .integration-hero > button { margin-left: 64px; }
+  .workbench-labs-banner dl { grid-template-columns: 1fr; }
 }

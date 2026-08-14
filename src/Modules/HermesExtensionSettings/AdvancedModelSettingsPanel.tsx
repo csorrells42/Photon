@@ -17,6 +17,8 @@ interface AdvancedModelSettingsPanelProps {
   onValidate(intent: ProviderValidationIntent): Promise<ProviderValidationResult>
 }
 
+const liveAssignableAuxiliaryTasks = new Set(['vision', 'compression', 'title-generation'])
+
 function stripSecretUrlParts(value: string) {
   return value.split(/[?#]/, 1)[0].replace(/^(https?:\/\/)[^/@]+@/i, '$1').slice(0, 2_048)
 }
@@ -33,6 +35,12 @@ export function AdvancedModelSettingsPanel({
   const [validating, setValidating] = useState<string | null>(null)
   const secretInputs = useRef<Record<string, HTMLInputElement | null>>({})
   const availableModels = snapshot.models.filter((model) => model.available)
+  const visibleAuxiliaryTasks = assignmentOnly
+    ? snapshot.auxiliaryTasks.filter((task) => liveAssignableAuxiliaryTasks.has(task))
+    : snapshot.auxiliaryTasks
+  const unavailableLiveTasks = assignmentOnly
+    ? snapshot.auxiliaryTasks.filter((task) => !liveAssignableAuxiliaryTasks.has(task))
+    : []
 
   useEffect(() => setDraft(structuredClone(snapshot.modelSettings)), [snapshot.modelSettings])
 
@@ -94,23 +102,24 @@ export function AdvancedModelSettingsPanel({
       <header className="hes-panel-heading">
         <div>
           <small>ADVANCED MODEL SETTINGS</small>
-          <h2 id="hes-models-heading">{assignmentOnly ? 'Live model assignments' : 'Global, task, MoA, and provider models'}</h2>
-          <p>Expensive selections receive an additional confirmation during review.</p>
+          <h2 id="hes-models-heading">{assignmentOnly ? 'Current and next model assignments' : 'Global, task, MoA, and provider models'}</h2>
+          <p>{assignmentOnly ? 'Only the choices Hermes currently advertises as available appear below. Review exactly one change before it is written.' : 'Expensive selections receive an additional confirmation during review.'}</p>
         </div>
       </header>
 
       <div className="hes-model-section">
-        <h3>Global and auxiliary task models</h3>
+        <h3>{assignmentOnly ? 'Choose one assignment to change' : 'Global and auxiliary task models'}</h3>
+        {assignmentOnly ? <p className="hes-assignment-note">The default model is used for new sessions. Auxiliary assignments are used only for their named Hermes task; they do not alter the default model.</p> : null}
         <div className="hes-field-grid">
           <label>
-            <span>Default model</span>
+            <span>Default model for new sessions</span>
             <select value={draft.defaultModelId} onChange={(event) => setDraft((current) => ({ ...current, defaultModelId: event.target.value }))}>
               {availableModels.map((model) => <option key={model.id} value={model.id}>{modelLabel(model.id)}</option>)}
             </select>
           </label>
-          {snapshot.auxiliaryTasks.map((task) => (
+          {visibleAuxiliaryTasks.map((task) => (
             <label key={task}>
-              <span>{task}</span>
+              <span>{task} auxiliary model</span>
               <select
                 value={draft.auxiliaryModels.find((entry) => entry.task === task)?.modelId ?? ''}
                 onChange={(event) => setDraft((current) => ({
@@ -127,6 +136,12 @@ export function AdvancedModelSettingsPanel({
             </label>
           ))}
         </div>
+        {unavailableLiveTasks.length > 0 ? (
+          <aside className="hes-unavailable-tasks" role="note">
+            <strong>Reported but not editable in this lab</strong>
+            <span>{unavailableLiveTasks.join(', ')}. Hermes reported these tasks, but this page has no verified write route for them.</span>
+          </aside>
+        ) : null}
       </div>
 
       {!assignmentOnly ? <div className="hes-model-section">

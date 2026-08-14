@@ -603,6 +603,204 @@
   text-align: center;
 }
 
+/* The mounted Workbench Lab is intentionally the same compact, centered
+   surface as Profiles & runtime.  The broader authoring module keeps its
+   standalone layout for its isolated preview use. */
+.hermes-extension-settings.is-live-assignments {
+  width: 100%;
+  max-width: 760px;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.is-live-assignments button,
+.is-live-assignments input,
+.is-live-assignments select {
+  min-height: 32px;
+  border-color: rgba(139, 112, 255, .18);
+  border-radius: 7px;
+  background: rgba(14, 18, 27, .88);
+  color: #c7cfdd;
+}
+
+.is-live-assignments button {
+  padding: 6px 10px;
+}
+
+.is-live-assignments button:hover:not(:disabled) {
+  border-color: rgba(157, 133, 245, .36);
+  background: rgba(111, 83, 211, .19);
+  color: #ddd7f6;
+}
+
+.is-live-assignments .hes-primary {
+  border-color: #6d57ca !important;
+  color: #fff !important;
+  background: linear-gradient(135deg, #4f3da2, #6e51c8) !important;
+}
+
+.is-live-assignments .hes-hero {
+  min-height: 104px;
+  margin: 0;
+  max-width: none;
+  padding: 15px 17px;
+  border: 1px solid rgba(135, 108, 245, .15);
+  border-radius: 13px;
+  background: linear-gradient(135deg, rgba(106, 75, 218, .105), rgba(35, 147, 122, .045) 72%), rgba(17, 21, 32, .76);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, .14);
+}
+
+.is-live-assignments .hes-hero small,
+.is-live-assignments .hes-panel-heading small,
+.is-live-assignments .hes-lab-guide small {
+  color: #7564b4;
+  font: 700 7.5px/1 ui-monospace, Consolas, monospace;
+  letter-spacing: .13em;
+}
+
+.is-live-assignments .hes-hero h1,
+.is-live-assignments .hes-panel h2,
+.is-live-assignments .hes-panel h3,
+.is-live-assignments .hes-lab-guide h2 {
+  color: #d4d9e3;
+}
+
+.is-live-assignments .hes-hero h1 {
+  margin-top: 5px;
+  font-size: 17px;
+  letter-spacing: -.025em;
+}
+
+.is-live-assignments .hes-hero p,
+.is-live-assignments .hes-panel-heading p,
+.is-live-assignments .hes-model-section p,
+.is-live-assignments .hes-lab-guide p {
+  margin-top: 5px;
+  color: #758094;
+  font-size: 9px;
+}
+
+.is-live-assignments .hes-lab-guide,
+.is-live-assignments .hes-panel,
+.is-live-assignments .hes-empty,
+.is-live-assignments .hes-state,
+.is-live-assignments .hes-message,
+.is-live-assignments .hes-notices {
+  max-width: none;
+  margin-inline: 0;
+}
+
+.is-live-assignments .hes-lab-guide {
+  display: grid;
+  grid-template-columns: minmax(155px, .78fr) minmax(0, 1.52fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 10px;
+  background: rgba(13, 17, 25, .65);
+}
+
+.is-live-assignments .hes-lab-guide h2 {
+  margin-top: 5px;
+  font-size: 10.5px;
+}
+
+.is-live-assignments .hes-lab-guide dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, .045);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .035);
+}
+
+.is-live-assignments .hes-lab-guide dl > div {
+  min-width: 0;
+  min-height: 44px;
+  padding: 7px 9px;
+  background: #0e121b;
+}
+
+.is-live-assignments .hes-lab-guide dt {
+  color: #7667ac;
+  font-size: 7px;
+  font-weight: 700;
+}
+
+.is-live-assignments .hes-lab-guide dd {
+  margin: 3px 0 0;
+  color: #707b8e;
+  font-size: 7.5px;
+  line-height: 1.35;
+}
+
+.is-live-assignments .hes-panel {
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 10px;
+  background: rgba(14, 18, 27, .72);
+}
+
+.is-live-assignments .hes-panel-heading {
+  min-height: 31px;
+  margin-bottom: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, .05);
+}
+
+.is-live-assignments .hes-panel h2 { font-size: 10.5px; }
+.is-live-assignments .hes-panel h3 { font-size: 9.5px; }
+
+.is-live-assignments .hes-model-section {
+  gap: 9px;
+  padding: 10px;
+  border-color: #2b3548;
+  border-radius: 6px;
+  background: #0a111c;
+}
+
+.is-live-assignments .hes-field-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.is-live-assignments label > span {
+  color: #9ca6b6;
+  font-size: 9px;
+}
+
+.is-live-assignments .hes-assignment-note {
+  margin: 0;
+  padding: 8px 9px;
+  border-left: 2px solid #6250ad;
+  background: #111727;
+}
+
+.is-live-assignments .hes-unavailable-tasks {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid #725d25;
+  border-radius: 5px;
+  color: #e8ca78;
+  background: #282211;
+}
+
+.is-live-assignments .hes-unavailable-tasks strong { font-size: 8.5px; }
+.is-live-assignments .hes-unavailable-tasks span { color: #a99055; font-size: 8px; }
+
+.is-live-assignments .hes-actions { margin-top: 0; }
+
 @container (max-width: 54rem) {
   .hes-skill-layout,
   .hes-mcp-layout,
@@ -620,6 +818,10 @@
   .hes-provenance-note {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .is-live-assignments .hes-lab-guide {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -647,6 +849,11 @@
   }
 
   .hes-mcp-safe-metadata dl > div {
+    grid-template-columns: 1fr;
+  }
+
+  .is-live-assignments .hes-lab-guide dl,
+  .is-live-assignments .hes-field-grid {
     grid-template-columns: 1fr;
   }
 }

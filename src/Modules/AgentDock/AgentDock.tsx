@@ -75,6 +75,8 @@ import { isAgentScrollNearBottom, preserveAgentScrollAnchor } from './AgentScrol
 import { InlineDiffCard } from './InlineDiffCard'
 import { useAssistantDisplayName } from '../AssistantIdentity/AssistantIdentity'
 import { useHermesMemoryStatus } from './HermesMemoryStatus'
+import { QuarkCompanion, quarkConversationPrompt } from './QuarkCompanion'
+import type { QuarkPhase } from './QuarkCompanion'
 import type { HermesDesktopUiAction } from '../HermesGateway/HermesDesktopUiAdapter'
 import {
   codexApprovalReviewId,
@@ -504,6 +506,10 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   const [naturalVoice, setNaturalVoice] = useState(HERMES_NATURAL_VOICE_IDLE)
   const [automaticVoiceEnabled, setAutomaticVoiceEnabled] = useState(false)
   const [speechInput, setSpeechInput] = useState(HERMES_SPEECH_INPUT_IDLE)
+  const [quarkActive, setQuarkActive] = useState(false)
+  const [quarkPhase, setQuarkPhase] = useState<QuarkPhase>('idle')
+  const [quarkReason, setQuarkReason] = useState<string | undefined>()
+  const [quarkSpeechInput, setQuarkSpeechInput] = useState(HERMES_SPEECH_INPUT_IDLE)
   const conversationRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const agentMenuRef = useRef<HTMLDivElement>(null)
@@ -517,8 +523,11 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   const naturalVoicePlayerRef = useRef<HermesNaturalVoicePlayer | null>(null)
   const speechInputControllerRef = useRef<HermesSpeechInputController | null>(null)
   const lastAutoSpokenMessageIdRef = useRef<string | null>(null)
+  const quarkActiveRef = useRef(false)
+  const quarkAwaitingCompletionRef = useRef<number | null>(null)
   if (!naturalVoicePlayerRef.current) naturalVoicePlayerRef.current = new HermesNaturalVoicePlayer()
   if (!speechInputControllerRef.current) speechInputControllerRef.current = new HermesSpeechInputController()
+  quarkActiveRef.current = quarkActive
   const captureReadingAnchor = useCallback(() => {
     const conversation = conversationRef.current
     const content = conversation?.querySelector<HTMLElement>('.message-list, .welcome')
@@ -598,6 +607,11 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     setNaturalVoice(HERMES_NATURAL_VOICE_IDLE)
     speechInputControllerRef.current?.cancel(false)
     setSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+    setQuarkActive(false)
+    setQuarkPhase('idle')
+    setQuarkReason(undefined)
+    setQuarkSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+    quarkAwaitingCompletionRef.current = null
     lastAutoSpokenMessageIdRef.current = null
   }, [activeStoredSessionId])
 
@@ -614,6 +628,80 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     setSpeechInput(HERMES_SPEECH_INPUT_IDLE)
     window.requestAnimationFrame(() => composerRef.current?.focus())
   }, [speechInput])
+
+  useEffect(() => {
+    if (!quarkActive || quarkPhase !== 'idle' || connection !== 'open' || loadingSession || busy) return
+    setQuarkReason(undefined)
+    void speechInputControllerRef.current?.start(setQuarkSpeechInput)
+  }, [busy, connection, loadingSession, quarkActive, quarkPhase])
+
+  useEffect(() => {
+    if (!quarkActive) return
+    if (quarkSpeechInput.phase === 'requesting' || quarkSpeechInput.phase === 'listening') {
+      setQuarkPhase('listening')
+      return
+    }
+    if (quarkSpeechInput.phase === 'transcribing') {
+      setQuarkPhase('thinking')
+      return
+    }
+    if (quarkSpeechInput.phase === 'error' || quarkSpeechInput.phase === 'unavailable') {
+      setQuarkReason(quarkSpeechInput.reason || 'The selected microphone is unavailable.')
+      setQuarkPhase('error')
+      return
+    }
+    if (quarkSpeechInput.phase !== 'ready' || !quarkSpeechInput.transcript) return
+    const transcript = quarkSpeechInput.transcript
+    setQuarkSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+    setQuarkPhase('thinking')
+    quarkAwaitingCompletionRef.current = turnCompletionCount
+    void send(quarkConversationPrompt(transcript), [], transcript).catch((reason) => {
+      quarkAwaitingCompletionRef.current = null
+      setQuarkReason(reason instanceof Error ? reason.message : 'Photon could not answer this voice turn.')
+      setQuarkPhase('error')
+    })
+  }, [quarkActive, quarkSpeechInput, send, turnCompletionCount])
+
+  useEffect(() => {
+    const startingCompletion = quarkAwaitingCompletionRef.current
+    if (!quarkActive || startingCompletion === null || busy || turnCompletionCount <= startingCompletion) return
+    quarkAwaitingCompletionRef.current = null
+    const reply = [...messages].reverse().find((candidate) => (
+      candidate.author === 'hermes' && candidate.body && !candidate.streaming && !candidate.interim
+    ))
+    if (!reply?.body) {
+      setQuarkReason('Photon completed the turn without a spoken reply.')
+      setQuarkPhase('error')
+      return
+    }
+    setQuarkPhase('speaking')
+    void naturalVoicePlayerRef.current?.toggle(reply.id, reply.body, (state) => {
+      setNaturalVoice(state)
+      if (!quarkActiveRef.current) return
+      if (state.phase === 'error') {
+        setQuarkReason('The local speaking voice is unavailable.')
+        setQuarkPhase('error')
+      } else if (state.phase === 'idle') {
+        setQuarkPhase('idle')
+      } else {
+        setQuarkPhase('speaking')
+      }
+    })
+  }, [busy, messages, quarkActive, turnCompletionCount])
+
+  useEffect(() => {
+    if (!quarkActive || (quarkSpeechInput.phase !== 'requesting' && quarkSpeechInput.phase !== 'listening')) return
+    const timer = window.setTimeout(() => {
+      if (speechInputControllerRef.current?.isListening) {
+        speechInputControllerRef.current.stop()
+        return
+      }
+      speechInputControllerRef.current?.cancel(false)
+      setQuarkReason('The selected microphone did not start in time.')
+      setQuarkPhase('error')
+    }, 10_000)
+    return () => window.clearTimeout(timer)
+  }, [quarkActive, quarkSpeechInput.phase])
 
   useEffect(() => {
     if (!automaticVoiceEnabled || busy) return
@@ -843,6 +931,66 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     await send(prompt).catch(() => setDraft(prompt))
   }
 
+  function talkWithQuark() {
+    if (!quarkActive) {
+      naturalVoicePlayerRef.current?.stop(false)
+      speechInputControllerRef.current?.cancel(false)
+      setSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+      setAutomaticVoiceEnabled(false)
+      setQuarkReason(undefined)
+      setQuarkSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+      setQuarkPhase('idle')
+      setQuarkActive(true)
+      return
+    }
+    if (speechInputControllerRef.current?.isListening) {
+      speechInputControllerRef.current.stop()
+      return
+    }
+    if (quarkPhase === 'error') {
+      setQuarkReason(undefined)
+      setQuarkSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+      setQuarkPhase('idle')
+      return
+    }
+    if (quarkPhase === 'paused') {
+      setQuarkPhase('idle')
+    }
+  }
+
+  function recallQuark() {
+    if (!quarkActive) {
+      setQuarkReason(undefined)
+      setQuarkSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+      setQuarkPhase('idle')
+      setQuarkActive(true)
+    }
+    const host = (window as Window & { chrome?: { webview?: { postMessage: (message: unknown) => void } } }).chrome?.webview
+    host?.postMessage({ type: 'quark.companion.recall', version: 1 })
+  }
+
+  function exitQuarkConversation() {
+    quarkActiveRef.current = false
+    quarkAwaitingCompletionRef.current = null
+    speechInputControllerRef.current?.cancel(false)
+    naturalVoicePlayerRef.current?.stop(false)
+    setQuarkActive(false)
+    setQuarkReason(undefined)
+    setQuarkSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+    setQuarkPhase('idle')
+    if (busy) void stop().catch(() => undefined)
+  }
+
+  function stopQuarkActivity() {
+    quarkAwaitingCompletionRef.current = null
+    speechInputControllerRef.current?.cancel(false)
+    naturalVoicePlayerRef.current?.stop(false)
+    setQuarkSpeechInput(HERMES_SPEECH_INPUT_IDLE)
+    setQuarkReason(undefined)
+    setQuarkPhase('paused')
+    if (busy) void stop().catch(() => undefined)
+  }
+
   function startNewChat() {
     if (queuedPromptsRef.current.length > 0) {
       setQueueNotice('Clear or finish the queued prompts before starting a new chat.')
@@ -899,10 +1047,17 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
           <button
             type="button"
             className="dock-voice-action"
+            aria-label="Bring Quark back"
+            title="Bring Quark back beside Photon"
+            onClick={recallQuark}
+          ><Bot size={16} /></button>
+          <button
+            type="button"
+            className="dock-voice-action"
             data-active={speechInput.phase === 'requesting' || speechInput.phase === 'listening' || speechInput.phase === 'transcribing'}
             aria-label={speechInput.phase === 'listening' ? 'Stop listening and transcribe' : 'Let Photon hear you'}
             title={speechInput.phase === 'listening' ? 'Stop listening and transcribe locally' : 'Record with the microphone for local Whisper transcription'}
-            disabled={connection !== 'open' || loadingSession || speechInput.phase === 'requesting' || speechInput.phase === 'transcribing'}
+            disabled={connection !== 'open' || loadingSession || quarkActive || speechInput.phase === 'requesting' || speechInput.phase === 'transcribing'}
             onClick={() => {
               if (speechInputControllerRef.current?.isListening) speechInputControllerRef.current.stop()
               else void speechInputControllerRef.current?.start(setSpeechInput)
@@ -1212,6 +1367,18 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
           )}
         </div>
       )}
+
+      <QuarkCompanion
+        active={quarkActive}
+        disabled={connection !== 'open' || loadingSession || (!quarkActive && turnActive)}
+        reviewActive={Boolean(pendingApproval || pendingPrompt)}
+        phase={quarkPhase}
+        reason={quarkReason}
+        onExit={exitQuarkConversation}
+        onRetry={talkWithQuark}
+        onStop={stopQuarkActivity}
+        onTalk={talkWithQuark}
+      />
 
       <form className="composer" onSubmit={sendMessage}>
         {attachments.length > 0 && (

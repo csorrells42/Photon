@@ -1,4 +1,6 @@
 export const HERMES_NATURAL_VOICE_ENDPOINT = '/api/audio/speak-local'
+import { applyHermesAudioOutput } from '../HermesSpeechVoice/HermesAudioDevicePreferences'
+import { HermesWindowsAudioHost } from '../HermesSpeechVoice/HermesWindowsAudioHost'
 export const HERMES_NATURAL_VOICE_MAX_TEXT = 8_000
 const MAX_AUDIO_DATA_URL_LENGTH = 24 * 1024 * 1024
 
@@ -72,6 +74,7 @@ export class HermesNaturalVoicePlayer {
   private active: { messageId: string; audio: NaturalVoiceAudio | null; abort: AbortController } | null = null
   private publish: ((state: HermesNaturalVoiceState) => void) | null = null
   private profileId = 'default'
+  private readonly nativeAudio = new HermesWindowsAudioHost()
 
   setProfileId(profileId: string): void {
     const next = profileId.trim()
@@ -120,6 +123,13 @@ export class HermesNaturalVoicePlayer {
       if (!isNaturalVoiceResponse(payload)) throw new Error('invalid local voice response')
       if (generation !== this.generation || abort.signal.aborted) return
 
+      if (this.nativeAudio.available) {
+        await this.nativeAudio.playOutput(payload.data_url, abort.signal, () => {
+          if (generation === this.generation && !abort.signal.aborted) publish({ messageId, phase: 'playing' })
+        })
+        if (generation === this.generation && !abort.signal.aborted) this.finish(generation)
+        return
+      }
       const audio = this.dependencies.createAudio(payload.data_url)
       this.active.audio = audio
       audio.onended = () => this.finish(generation)
@@ -139,6 +149,7 @@ export class HermesNaturalVoicePlayer {
     const active = this.active
     this.active = null
     active?.abort.abort()
+    if (active && !active.audio && this.nativeAudio.available) this.nativeAudio.stopOutput()
     if (active?.audio) {
       active.audio.onended = null
       active.audio.onerror = null
@@ -166,4 +177,3 @@ export class HermesNaturalVoicePlayer {
     publish?.({ messageId, phase: 'error' })
   }
 }
-import { applyHermesAudioOutput } from '../HermesSpeechVoice/HermesAudioDevicePreferences'

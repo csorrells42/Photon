@@ -83,6 +83,10 @@ export type HermesChatMessage = {
   attachments?: Array<Pick<HermesComposerAttachment, 'id' | 'kind' | 'label' | 'size'>>
 }
 
+export function hermesVisiblePromptText(wireText: string, displayText?: string): string {
+  return (displayText ?? wireText).trim()
+}
+
 export type HermesReasoningState = {
   body: string
   streaming: boolean
@@ -608,7 +612,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
 
   const clearAttachments = useCallback(() => setAttachments([]), [])
 
-  const send = useCallback(async (text: string, attachmentOverride?: HermesComposerAttachment[]) => {
+  const send = useCallback(async (text: string, attachmentOverride?: HermesComposerAttachment[], displayText?: string) => {
     if (connection !== 'open') throw new Error('Hermes is not connected.')
     const sendConnectionGeneration = connectionGeneration.current
     const fromComposer = attachmentOverride === undefined
@@ -682,7 +686,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
       setMessages((current) => [...current, {
         id: crypto.randomUUID(),
         author: 'you',
-        body: text.trim(),
+        body: hermesVisiblePromptText(text, displayText),
         attachments: queuedAttachments.map(({ id, kind, label, size }) => ({ id, kind, label, size })),
       }])
       await hermesGateway.request('prompt.submit', { session_id: activeSessionId, text: promptText }, 1_800_000)

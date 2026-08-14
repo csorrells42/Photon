@@ -169,22 +169,38 @@ export function HermesExtensionSettingsWorkspace({
   }
 
   return (
-    <main className={`hermes-extension-settings ${className}`.trim()}>
+    <main className={`hermes-extension-settings ${assignmentOnly ? 'is-live-assignments' : ''} ${className}`.trim()}>
       <header className="hes-hero">
         <div>
-          <small>HERMES EXTENSION SETTINGS</small>
-          <h1>{assignmentOnly ? 'Live model assignments' : 'Extension authoring and advanced configuration'}</h1>
-          <p>{assignmentOnly ? 'Verified Hermes model catalog and one reviewed assignment per write.' : 'Standalone coordinator surface - deterministic fake adapter by default - no live services'}</p>
+          <small>{assignmentOnly ? 'WORKBENCH LAB · LIVE BETA' : 'HERMES EXTENSION SETTINGS'}</small>
+          <h1>{assignmentOnly ? 'Model assignments' : 'Extension authoring and advanced configuration'}</h1>
+          <p>{assignmentOnly ? 'Choose one live model assignment, inspect the exact change, and confirm it before Hermes writes it.' : 'Standalone coordinator surface - deterministic fake adapter by default - no live services'}</p>
         </div>
         <button type="button" disabled={loading || busy} onClick={() => void load()}>
           {loading ? 'Loading...' : 'Refresh'}
         </button>
       </header>
 
-      <div className="hes-security-banner">
-        <strong>Write-only secret boundary</strong>
-        <span>Stored secret values never enter props, results, logs, copy actions, persistence, or rendering.</span>
-      </div>
+      {assignmentOnly ? (
+        <section className="hes-lab-guide" aria-labelledby="hes-lab-guide-heading">
+          <div>
+            <small>WHAT YOU ARE LOOKING AT</small>
+            <h2 id="hes-lab-guide-heading">A deliberately small live control</h2>
+            <p>This is not a general extensions editor. It reads the live Hermes model catalog and changes one default or auxiliary assignment at a time.</p>
+          </div>
+          <dl>
+            <div><dt>Default model</dt><dd>The model Hermes assigns to new sessions.</dd></div>
+            <div><dt>Auxiliary models</dt><dd>Separate models for vision, compression, or title generation when Hermes advertises them.</dd></div>
+            <div><dt>Before it writes</dt><dd>You review one before/after change. Expensive models require a second confirmation.</dd></div>
+            <div><dt>Intentionally absent</dt><dd>Skills, MCP, provider credentials, task overrides, and multi-agent settings have no source-confirmed write route here.</dd></div>
+          </dl>
+        </section>
+      ) : (
+        <div className="hes-security-banner">
+          <strong>Write-only secret boundary</strong>
+          <span>Stored secret values never enter props, results, logs, copy actions, persistence, or rendering.</span>
+        </div>
+      )}
 
       {loadState === 'partial' ? <div className="hes-state partial" role="status"><strong>Partial data</strong><span>Available sections remain honest about missing provider surfaces.</span></div> : null}
       {loadState === 'unavailable' ? <div className="hes-state unavailable" role="status"><strong>Unavailable</strong><span>The controller cannot currently provide extension settings.</span></div> : null}

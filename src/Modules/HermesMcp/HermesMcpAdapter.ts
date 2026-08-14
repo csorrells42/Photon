@@ -118,6 +118,10 @@ function catalogAuth(value: unknown): HermesMcpCatalogAuth {
   return value === 'api_key' || value === 'oauth' ? value : 'none'
 }
 
+function serverAuth(value: unknown): HermesMcpAuth {
+  return value === 'oauth' || value === 'header' ? value : null
+}
+
 export function normalizeHermesMcpServers(value: unknown): HermesMcpServer[] {
   const rows = object(value).servers
   if (!Array.isArray(rows)) return []
@@ -132,7 +136,7 @@ export function normalizeHermesMcpServers(value: unknown): HermesMcpServer[] {
       command: null,
       args: [],
       environmentVariableNames: [],
-      auth: null,
+      auth: serverAuth(raw.auth),
       enabled: raw.enabled !== false,
       tools: null,
       revision: text(raw.revision, 256),

@@ -22,6 +22,7 @@
     <Compile Remove="PhotonWorkspace/**/*.cs" />
     <Compile Remove="PhotonWorkspace.Smoke/**/*.cs" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Porta.Pty" Version="1.0.7" />
   </ItemGroup>
 

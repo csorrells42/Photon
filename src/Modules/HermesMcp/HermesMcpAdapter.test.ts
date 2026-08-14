@@ -27,7 +27,7 @@ describe('Hermes MCP compatibility adapter', () => {
       url: null,
       command: null,
       args: [],
-      auth: null,
+      auth: 'header',
       editable: false,
     })])
     expect(JSON.stringify(result)).not.toContain('masked-but-still-not-for-react')

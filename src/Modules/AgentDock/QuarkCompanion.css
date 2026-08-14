@@ -1,0 +1,176 @@
+.quark-companion {
+  --quark-pixel: 3px;
+  position: fixed;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 89px;
+  width: min(320px, calc(100vw - 16px));
+  pointer-events: none;
+  user-select: none;
+}
+
+.quark-stage {
+  position: relative;
+  width: 78px;
+  height: 59px;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.quark-stage:active { cursor: grabbing; }
+
+.quark-sprite {
+  position: absolute;
+  left: 18px;
+  bottom: 5px;
+  width: 42px;
+  height: 49px;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 5px 4px rgba(0, 0, 0, .38));
+  animation: quark-idle 3.6s steps(2, end) infinite;
+}
+
+.quark-shadow {
+  position: absolute;
+  left: 18px;
+  bottom: 2px;
+  width: 43px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .38);
+}
+
+.quark-head {
+  position: absolute;
+  left: 4px;
+  top: 7px;
+  width: 34px;
+  height: 27px;
+  border: 3px solid #332b48;
+  border-radius: 10px 10px 12px 12px;
+  background: linear-gradient(135deg, #d8c9a8 0 48%, #bea982 49% 100%);
+  box-shadow: inset 3px 3px 0 rgba(255,255,255,.3), inset -3px -3px 0 rgba(73,54,64,.2);
+  z-index: 3;
+}
+
+.quark-antenna {
+  position: absolute;
+  left: 20px;
+  top: 0;
+  width: 3px;
+  height: 9px;
+  background: #443957;
+  box-shadow: 3px -3px 0 #8f7bdd;
+  z-index: 2;
+  transform: rotate(11deg);
+  transform-origin: bottom;
+}
+
+.quark-ear {
+  position: absolute;
+  top: 14px;
+  width: 7px;
+  height: 13px;
+  border: 3px solid #332b48;
+  background: #8c7a61;
+  z-index: 2;
+}
+.quark-ear-left { left: 0; border-radius: 5px 2px 2px 5px; }
+.quark-ear-right { right: 0; border-radius: 2px 5px 5px 2px; }
+
+.quark-eye {
+  position: absolute;
+  top: 10px;
+  width: 4px;
+  height: 5px;
+  border-radius: 3px;
+  background: #342d43;
+  animation: quark-blink 5.2s steps(1, end) infinite;
+}
+.quark-eye-left { left: 7px; }
+.quark-eye-right { right: 7px; }
+.quark-cheek { position: absolute; top: 17px; width: 5px; height: 3px; background: #db8c92; opacity: .78; }
+.quark-cheek-left { left: 3px; }
+.quark-cheek-right { right: 3px; }
+.quark-mouth { position: absolute; left: 14px; top: 18px; width: 5px; height: 2px; background: #564256; }
+
+.quark-body {
+  position: absolute;
+  left: 9px;
+  bottom: 3px;
+  width: 25px;
+  height: 18px;
+  border: 3px solid #332b48;
+  border-radius: 7px 7px 5px 5px;
+  background: #6954b4;
+  z-index: 1;
+}
+.quark-body i { position: absolute; left: 8px; top: 4px; width: 4px; height: 7px; background: #79e3d0; box-shadow: 0 0 5px rgba(100, 238, 213, .65); }
+.quark-foot { position: absolute; bottom: 0; width: 12px; height: 5px; border: 3px solid #332b48; border-radius: 4px 4px 2px 2px; background: #9e896d; z-index: 4; }
+.quark-foot-left { left: 5px; }
+.quark-foot-right { right: 5px; }
+
+.quark-controls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 27px;
+  padding: 2px 7px 2px 3px;
+  border: 1px solid rgba(139, 115, 232, .2);
+  border-radius: 14px;
+  background: rgba(15, 18, 29, .86);
+  color: #8e96aa;
+  font-size: 8px;
+  line-height: 1;
+  pointer-events: auto;
+  box-shadow: 0 5px 16px rgba(0,0,0,.2);
+}
+.quark-controls button { display: grid; place-items: center; border: 0; color: #a99bf0; cursor: pointer; }
+.quark-talk { width: 22px; height: 22px; border-radius: 50%; background: rgba(116, 89, 214, .2); }
+.quark-talk:hover:not(:disabled) { background: rgba(116, 89, 214, .38); color: #ded7ff; }
+.quark-talk:disabled { opacity: .45; cursor: not-allowed; }
+.quark-small-action { width: 19px; height: 19px; border-radius: 50%; background: transparent; }
+.quark-small-action:hover { background: rgba(255,255,255,.07); color: #ddd6ff; }
+.quark-companion.is-active .quark-controls { border-color: rgba(103, 221, 199, .32); color: #a9c9c4; }
+.quark-companion.is-reviewing { z-index: 20; }
+
+.quark-companion.is-listening .quark-sprite { animation: quark-listen .75s steps(2, end) infinite; }
+.quark-companion.is-listening .quark-antenna { background: #78e5d0; box-shadow: 3px -3px 0 #78e5d0, 3px -3px 8px #78e5d0; }
+.quark-companion.is-listening .quark-ear { background: #c49b83; }
+.quark-companion.is-thinking .quark-sprite { animation: quark-think 1.2s steps(3, end) infinite; }
+.quark-companion.is-thinking .quark-eye-right { height: 2px; top: 12px; }
+.quark-companion.is-speaking .quark-sprite { animation: quark-talk .42s steps(2, end) infinite; }
+.quark-companion.is-speaking .quark-mouth { height: 4px; top: 17px; border-radius: 0 0 3px 3px; }
+.quark-companion.is-speaking.faces-left .quark-sprite { animation-name: quark-talk-left; }
+.quark-companion.is-speaking.faces-left .quark-sound { left: 5px; right: auto; transform: scaleX(-1); }
+.quark-companion.is-speaking.faces-left .quark-sound.two { left: -1px; right: auto; }
+.quark-companion.is-error .quark-sprite { animation: quark-error .7s steps(2, end) 2; }
+.quark-companion.is-error .quark-antenna { background: #e07683; box-shadow: 3px -3px 0 #e07683; }
+.quark-companion.is-error .quark-controls { max-width: min(290px, calc(100% - 24px)); border-color: rgba(222, 100, 116, .38); color: #d69aa3; }
+.quark-companion.is-paused .quark-sprite { opacity: .78; animation: none; }
+
+.quark-thought, .quark-sound { position: absolute; color: #a997f5; font-weight: 700; }
+.quark-thought { right: 2px; top: 4px; font-size: 13px; letter-spacing: 1px; animation: quark-pop 1.1s steps(2, end) infinite; }
+.quark-sound { right: 7px; top: 19px; font-size: 14px; animation: quark-pop .55s ease-in-out infinite alternate; }
+.quark-sound.two { right: 1px; opacity: .55; animation-delay: .15s; }
+
+@keyframes quark-idle { 0%, 88%, 100% { transform: translateY(0); } 92%, 96% { transform: translateY(-2px); } }
+@keyframes quark-blink { 0%, 46%, 49%, 100% { transform: scaleY(1); } 47%, 48% { transform: scaleY(.2); } }
+@keyframes quark-listen { from { transform: rotate(-2deg) translateY(0); } to { transform: rotate(2deg) translateY(-2px); } }
+@keyframes quark-think { 0% { transform: translateX(-1px); } 50% { transform: translateX(1px) translateY(-1px); } 100% { transform: translateX(0); } }
+@keyframes quark-talk { from { transform: translateY(0) scaleY(1); } to { transform: translateY(-2px) scaleY(1.03); } }
+@keyframes quark-talk-left { from { transform: translateY(0) scaleY(1); } to { transform: translate(-2px,-2px) scaleY(1.03); } }
+@keyframes quark-error { from { transform: translateX(-2px); } to { transform: translateX(2px); } }
+@keyframes quark-pop { from { transform: scale(.82); opacity: .45; } to { transform: scale(1); opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .quark-sprite, .quark-eye, .quark-thought, .quark-sound { animation: none !important; }
+}
+
+@media (max-height: 650px) {
+  .quark-companion { min-height: 66px; }
+  .quark-stage { height: 38px; transform: scale(.78); transform-origin: bottom center; margin-bottom: -2px; }
+}

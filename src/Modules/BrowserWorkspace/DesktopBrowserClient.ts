@@ -9,6 +9,20 @@ export type BrowserSurfaceState = {
   loading: boolean
 }
 
+export type BrowserBookmarkImportItem = { title: string; url: string; folder: string }
+export type BrowserBookmarksSnapshot = {
+  requestId: string
+  status: 'available' | 'unavailable' | 'cancelled'
+  source: 'google-chrome'
+  sourceRevision: string
+  bookmarks: BrowserBookmarkImportItem[]
+  discoveredCount: number
+  rejectedCount: number
+  truncated: boolean
+  reason: string
+  message: string
+}
+
 type Bridge = {
   postMessage: (message: unknown) => void
   addEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void
@@ -17,6 +31,54 @@ type Bridge = {
 
 function bridge() { return (window as Window & { chrome?: { webview?: Bridge } }).chrome?.webview ?? null }
 function bounded(value: unknown, maximum: number) { return typeof value === 'string' ? value.slice(0, maximum) : '' }
+function token(value: unknown, maximum: number) {
+  const text = bounded(value, maximum)
+  return text && /^[a-z0-9_-]+$/iu.test(text) ? text : ''
+}
+
+function importedBookmarkUrl(value: unknown) {
+  if (typeof value !== 'string' || value.length > 4_096 || /[\u0000-\u001f\u007f]/u.test(value)) return null
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password ? url.href : null
+  } catch { return null }
+}
+
+export function normalizeBrowserBookmarksSnapshot(raw: Record<string, unknown>): BrowserBookmarksSnapshot | null {
+  if (raw.type !== 'browser.bookmarks.snapshot' || raw.version !== BROWSER_SURFACE_PROTOCOL_VERSION) return null
+  const requestId = token(raw.requestId, 128)
+  const status = raw.status
+  const source = raw.source
+  const sourceRevision = bounded(raw.sourceRevision, 64)
+  const discoveredCount = raw.discoveredCount
+  const rejectedCount = raw.rejectedCount
+  if (!requestId || (status !== 'available' && status !== 'unavailable' && status !== 'cancelled')
+    || source !== 'google-chrome'
+    || typeof discoveredCount !== 'number' || !Number.isSafeInteger(discoveredCount) || discoveredCount < 0 || discoveredCount > 4_096
+    || typeof rejectedCount !== 'number' || !Number.isSafeInteger(rejectedCount) || rejectedCount < 0 || rejectedCount > 4_096
+    || typeof raw.truncated !== 'boolean' || !Array.isArray(raw.bookmarks) || raw.bookmarks.length > 1_024) return null
+  if (status === 'available' ? !/^[a-f0-9]{64}$/u.test(sourceRevision) : sourceRevision !== '') return null
+
+  const seen = new Set<string>()
+  const bookmarks: BrowserBookmarkImportItem[] = []
+  for (const candidate of raw.bookmarks) {
+    if (!candidate || typeof candidate !== 'object') return null
+    const value = candidate as Record<string, unknown>
+    const title = bounded(value.title, 256).trim()
+    const folder = bounded(value.folder, 512).trim()
+    const url = importedBookmarkUrl(value.url)
+    if (!title || !folder || !url || seen.has(url)) return null
+    seen.add(url)
+    bookmarks.push({ title, url, folder })
+  }
+  if (status !== 'available' && bookmarks.length !== 0) return null
+  const reason = token(raw.reason, 128)
+  if (status !== 'available' && !reason) return null
+  return {
+    requestId, status, source, sourceRevision, bookmarks, discoveredCount, rejectedCount,
+    truncated: raw.truncated, reason, message: bounded(raw.message, 1_024),
+  }
+}
 
 export function tryNormalizeBrowserAddress(value: string): string | null {
   const trimmed = value.trim()
@@ -47,6 +109,7 @@ export class DesktopBrowserClient {
   private readonly listeners = new Set<(state: BrowserSurfaceState) => void>()
   private readonly openListeners = new Set<(request: { requestId: string; url: string }) => void>()
   private readonly externalAuthenticationListeners = new Set<(request: { tabId: string; message: string }) => void>()
+  private readonly bookmarkSnapshotListeners = new Set<(snapshot: BrowserBookmarksSnapshot) => void>()
   private readonly errorListeners = new Set<(message: string) => void>()
   private readonly receive = (event: MessageEvent) => {
     const raw = event.data as Record<string, unknown> | null
@@ -68,6 +131,10 @@ export class DesktopBrowserClient {
     } else if (raw.type === 'browser.error') {
       const message = bounded(raw.message, 1_024)
       this.errorListeners.forEach((listener) => listener(message))
+    } else if (raw.type === 'browser.bookmarks.snapshot') {
+      const snapshot = normalizeBrowserBookmarksSnapshot(raw)
+      if (snapshot) this.bookmarkSnapshotListeners.forEach((listener) => listener(snapshot))
+      else this.errorListeners.forEach((listener) => listener('Chrome returned an invalid bookmark snapshot.'))
     }
   }
 
@@ -75,6 +142,7 @@ export class DesktopBrowserClient {
   onState(listener: (state: BrowserSurfaceState) => void) { this.ensure(); this.listeners.add(listener); return () => this.listeners.delete(listener) }
   onOpenRequested(listener: (request: { requestId: string; url: string }) => void) { this.ensure(); this.openListeners.add(listener); return () => this.openListeners.delete(listener) }
   onExternalAuthentication(listener: (request: { tabId: string; message: string }) => void) { this.ensure(); this.externalAuthenticationListeners.add(listener); return () => this.externalAuthenticationListeners.delete(listener) }
+  onBookmarkSnapshot(listener: (snapshot: BrowserBookmarksSnapshot) => void) { this.ensure(); this.bookmarkSnapshotListeners.add(listener); return () => this.bookmarkSnapshotListeners.delete(listener) }
   onError(listener: (message: string) => void) { this.ensure(); this.errorListeners.add(listener); return () => this.errorListeners.delete(listener) }
   show(rect: DOMRect, tabId: string, initialUrl: string) { this.post('browser.surface.show', { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height), tabId, url: normalizeBrowserAddress(initialUrl) }) }
   hide() { this.post('browser.surface.hide') }
@@ -85,6 +153,7 @@ export class DesktopBrowserClient {
   forward(tabId: string) { this.post('browser.forward', { tabId }) }
   reload(tabId: string) { this.post('browser.reload', { tabId }) }
   stop(tabId: string) { this.post('browser.stop', { tabId }) }
+  importChromeBookmarks(requestId: string) { this.post('browser.bookmarks.import', { requestId }) }
 
   private ensure() {
     const host = bridge()

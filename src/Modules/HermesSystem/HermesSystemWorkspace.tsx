@@ -68,6 +68,49 @@ import { HermesSpeechVoiceWorkspace } from '../HermesSpeechOutput'
 import './HermesSystemWorkspace.css'
 
 type Section = 'overview' | 'account' | 'connections' | 'runtime' | 'speech-voice' | 'integrations' | 'mcp' | 'skills' | 'extensions' | 'profiles' | 'session-admin'
+type WorkbenchLabSection = Extract<Section, 'extensions' | 'profiles' | 'session-admin'>
+
+const workbenchLabDetails: Record<WorkbenchLabSection, {
+  navigationLabel: string
+  navigationSummary: string
+  title: string
+  subtitle: string
+  statusLabel: string
+  purpose: string
+  availableNow: string
+  unavailableNow: string
+}> = {
+  extensions: {
+    navigationLabel: 'Extensions & model routing',
+    navigationSummary: 'Review one live assignment',
+    title: 'Extension model routing',
+    subtitle: 'Review the live extension catalog, then make one intentional main or auxiliary model assignment.',
+    statusLabel: 'live reviewed writes',
+    purpose: 'Use this when an installed extension needs a specific model. It is not a general settings page.',
+    availableNow: 'Catalog reads and one reviewed model-assignment write at a time.',
+    unavailableNow: 'Unverified extension settings and writes are not offered.',
+  },
+  profiles: {
+    navigationLabel: 'Profile runtime',
+    navigationSummary: 'Inspect live profile state',
+    title: 'Profile runtime',
+    subtitle: 'See which profile, identity document, default model, and terminal setting Hermes is actually using.',
+    statusLabel: 'live read-only facts',
+    purpose: 'Use this to understand the active agent setup before changing it elsewhere.',
+    availableNow: 'Live inventory, active selection, SOUL identity, model assignment, and terminal facts.',
+    unavailableNow: 'Profile edits remain unavailable while concurrent-write recovery is unfinished.',
+  },
+  'session-admin': {
+    navigationLabel: 'Session inspector',
+    navigationSummary: 'Browse and export live facts',
+    title: 'Session inspector',
+    subtitle: 'Inspect session facts, descendants, statistics, and bounded exports without pretending unfinished mutations work.',
+    statusLabel: 'live read-only facts',
+    purpose: 'Use this for investigation and safe export; everyday conversation management stays in Hermes Sessions.',
+    availableNow: 'Profile-scoped listing, statistics, descendant lookup, and bounded text export when the route is exposed.',
+    unavailableNow: 'Branching, deletion, imports, and model locks stay disabled until their upstream routes are verified.',
+  },
+}
 
 const nativeConnectionCatalog: ConnectionCatalogEntry[] = [
   { providerId: 'openrouter', displayName: 'OpenRouter', slotId: 'default', authKind: 'api-key', sourceKind: 'native', purposes: ['model:openrouter', 'usage'], supportsNativeChange: true, description: 'Model access and usage collection through a machine-bound native credential.' },
@@ -268,10 +311,10 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
             : section === 'skills'
               ? 'Hermes skills'
               : section === 'extensions'
-                ? 'Advanced extensions'
+                ? workbenchLabDetails.extensions.title
                 : section === 'profiles'
-                  ? 'Profiles & agent runtime'
-                  : 'Advanced session administration'
+                  ? workbenchLabDetails.profiles.title
+                  : workbenchLabDetails['session-admin'].title
   const sectionSubtitle = section === 'connections'
     ? 'Machine-bound provider access with native review'
     : section === 'speech-voice'
@@ -283,11 +326,11 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
       : section === 'skills'
         ? 'Preview, scan, and manage Hermes capabilities'
         : section === 'extensions'
-          ? 'Verified live catalog with one reviewed model assignment per write'
+        ? workbenchLabDetails.extensions.subtitle
           : section === 'profiles'
-            ? 'Verified live profile facts with every unsupported action removed'
+            ? workbenchLabDetails.profiles.subtitle
             : section === 'session-admin'
-              ? 'Branches, imports, exports, statistics, and model locks'
+              ? workbenchLabDetails['session-admin'].subtitle
               : status ? `Hermes ${status.version} · ${status.gateway.state}` : 'Connecting to Hermes…'
   const sectionIcon = section === 'overview'
     ? <Activity size={17} />
@@ -316,7 +359,10 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
   const headerHealth = section === 'integrations'
     ? serena?.state === 'ready' ? 'ok' : serena?.state === 'error' ? 'degraded' : 'unknown'
     : status?.overall ?? 'unknown'
-  const headerHealthLabel = isLiveProfileRuntime ? 'live read-only profile runtime' : isLiveExtensionSettings ? 'live model beta' : isLiveSessionAdmin ? 'live read-only beta' : section === 'integrations' ? serena?.state ?? 'checking' : status?.overall ?? 'checking'
+  const headerHealthLabel = isLiveProfileRuntime ? workbenchLabDetails.profiles.statusLabel : isLiveExtensionSettings ? workbenchLabDetails.extensions.statusLabel : isLiveSessionAdmin ? workbenchLabDetails['session-admin'].statusLabel : section === 'integrations' ? serena?.state ?? 'checking' : status?.overall ?? 'checking'
+  const workbenchLab = section === 'extensions' || section === 'profiles' || section === 'session-admin'
+    ? workbenchLabDetails[section]
+    : null
 
   return (
     <>
@@ -332,9 +378,9 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
           <button type="button" className={section === 'mcp' ? 'active' : ''} onClick={() => setSection('mcp')}><Package size={15} /><span><strong>MCP & tools</strong><small>Nous catalog and servers</small></span></button>
           <button type="button" className={section === 'skills' ? 'active' : ''} onClick={() => setSection('skills')}><LibraryBig size={15} /><span><strong>Skills</strong><small>Preview and security scan</small></span></button>
           <div className="system-nav-divider"><span>WORKBENCH LABS</span></div>
-          <button type="button" className={section === 'extensions' ? 'active' : ''} onClick={() => setSection('extensions')}><SlidersHorizontal size={15} /><span><strong>Advanced extensions</strong><small>Live model assignments</small></span></button>
-          <button type="button" className={section === 'profiles' ? 'active' : ''} onClick={() => setSection('profiles')}><Layers3 size={15} /><span><strong>Profiles & runtime</strong><small>Verified read-only beta</small></span></button>
-          <button type="button" className={section === 'session-admin' ? 'active' : ''} onClick={() => setSection('session-admin')}><Bot size={15} /><span><strong>Session administration</strong><small>Verified read-only beta</small></span></button>
+          <button type="button" className={section === 'extensions' ? 'active' : ''} onClick={() => setSection('extensions')}><SlidersHorizontal size={15} /><span><strong>{workbenchLabDetails.extensions.navigationLabel}</strong><small>{workbenchLabDetails.extensions.navigationSummary}</small></span></button>
+          <button type="button" className={section === 'profiles' ? 'active' : ''} onClick={() => setSection('profiles')}><Layers3 size={15} /><span><strong>{workbenchLabDetails.profiles.navigationLabel}</strong><small>{workbenchLabDetails.profiles.navigationSummary}</small></span></button>
+          <button type="button" className={section === 'session-admin' ? 'active' : ''} onClick={() => setSection('session-admin')}><Bot size={15} /><span><strong>{workbenchLabDetails['session-admin'].navigationLabel}</strong><small>{workbenchLabDetails['session-admin'].navigationSummary}</small></span></button>
         </nav>
         <footer><ShieldCheck size={12} /> system v{HERMES_SYSTEM_ADAPTER_VERSION} · Serena v{SERENA_HEALTH_ADAPTER_VERSION} · MCP v{HERMES_MCP_ADAPTER_VERSION} · Skills v{HERMES_SKILLS_ADAPTER_VERSION}</footer>
       </aside>
@@ -422,12 +468,12 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
 
           {status && section === 'mcp' && <HermesMcpWorkspace />}
           {status && section === 'skills' && <HermesSkillsWorkspace />}
-          {isLiveProfileRuntime && <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>Live read-only profile runtime</strong><small>Profile inventory, active selection, SOUL, model assignment, and terminal settings are read from Hermes. Writes remain unavailable until durable concurrent-write recovery is complete.</small></span></aside>}
-          {isLiveExtensionSettings && <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>Live model assignments beta</strong><small>Catalog and assignment state come from verified Hermes routes. Only one main or auxiliary assignment can be reviewed and written at a time; unsupported extension writes are not shown.</small></span></aside>}
-          {isLiveSessionAdmin && <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>Live read-only beta</strong><small>Session list, honest statistics, latest-descendant paths, and bounded text export use verified Hermes routes. Unsupported mutations remain visible but disabled.</small></span></aside>}
-          {section === 'extensions' && <HermesExtensionSettingsWorkspace controller={liveExtensionSettingsController} mode="live-model-assignments" />}
-          {section === 'profiles' && <HermesProfileRuntimeWorkspace adapter={liveProfileRuntimeBridge} initialProfileId="default" interactionMode="read-only" />}
-          {section === 'session-admin' && <HermesSessionAdminWorkspace profileId="default" adapter={liveHermesSessionAdminAdapter} />}
+          {workbenchLab && <section className="workbench-labs-page" aria-label={`${workbenchLab.title} workspace`}>
+            <aside className="workbench-labs-banner live" role="note"><ShieldCheck size={16} /><span><strong>What this page is for</strong><small>{workbenchLab.purpose}</small></span><dl><div><dt>Available now</dt><dd>{workbenchLab.availableNow}</dd></div><div><dt>Not available</dt><dd>{workbenchLab.unavailableNow}</dd></div></dl></aside>
+            {section === 'extensions' && <HermesExtensionSettingsWorkspace controller={liveExtensionSettingsController} mode="live-model-assignments" />}
+            {section === 'profiles' && <HermesProfileRuntimeWorkspace adapter={liveProfileRuntimeBridge} initialProfileId="default" interactionMode="read-only" />}
+            {section === 'session-admin' && <HermesSessionAdminWorkspace profileId="default" adapter={liveHermesSessionAdminAdapter} />}
+          </section>}
         </div>
       </main>
     </>
