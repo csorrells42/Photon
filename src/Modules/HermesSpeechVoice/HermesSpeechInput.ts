@@ -112,7 +112,7 @@ export class HermesSpeechInputController {
     this.forceBrowserCapture = Boolean(dependencies?.getUserMedia || dependencies?.createRecorder)
     this.dependencies = {
       createRecorder: dependencies?.createRecorder ?? ((stream) => new MediaRecorder(stream) as MediaRecorderLike),
-      fetch: dependencies?.fetch ?? fetch,
+      fetch: dependencies?.fetch ?? ((input, init) => globalThis.fetch(input, init)),
       getUserMedia: dependencies?.getUserMedia ?? defaultGetUserMedia,
       readBlob: dependencies?.readBlob ?? defaultReadBlob,
       setTimer: dependencies?.setTimer ?? setTimeout,
@@ -273,10 +273,12 @@ export class HermesSpeechInputController {
       publish?.({ phase: 'ready', transcript })
     } catch (error) {
       if (generation === this.generation && !abort.signal.aborted) {
+        console.error('Hermes local transcription request failed.', error)
+        const detail = error instanceof Error ? error.message.trim().slice(0, 160) : ''
         this.fail(
           generation,
           error instanceof TypeError
-            ? 'Local Whisper could not reach the Hermes runtime.'
+            ? `Local Whisper could not reach the Hermes runtime${detail ? `: ${detail}` : '.'}`
             : 'Local Whisper could not transcribe this recording.',
         )
       }

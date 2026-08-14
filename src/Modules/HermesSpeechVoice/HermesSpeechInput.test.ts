@@ -75,7 +75,8 @@ describe('HermesSpeechInputController', () => {
       ok: true,
       json: async () => ({ ok: true, transcript: 'Native speech', provider: 'local' }),
     } as Response))
-    const controller = new HermesSpeechInputController({ fetch: fetchMock })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new HermesSpeechInputController()
 
     await controller.start((state) => states.push(state))
     expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'audio.speech.start' }))
