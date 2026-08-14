@@ -9,12 +9,16 @@ using System.Diagnostics;
 using HermesDesktop;
 using HermesDeveloperServices;
 using HermesRoslynLanguageServer;
+using NAudio.Wave;
 
 if (args.Contains("--photon-cad-only", StringComparer.Ordinal))
     return await PhotonCadBridgeSmoke.RunAsync() ? 0 : 95;
 
 if (args.Contains("--photon-cad-live-industrial", StringComparer.Ordinal))
     return await PhotonCadBridgeSmoke.RunLiveIndustrialAsync(Directory.GetCurrentDirectory()) ? 0 : 96;
+
+if (args.Contains("--whisper-audio-only", StringComparer.Ordinal))
+    return WhisperCaptureNormalizationPassed() ? 0 : 971;
 
 const string marker = "__HERMES_CONPTY_OK__";
 
@@ -52,6 +56,8 @@ if (!DesktopOptions.IsValidWorkbenchNonce(identityProof)
     return 8;
 }
 Console.WriteLine("Desktop Workbench challenge-response identity binding passed.");
+
+if (!WhisperCaptureNormalizationPassed()) return 971;
 
 var protectedDocumentPaths = new[]
 {
@@ -858,6 +864,33 @@ if (account is null || !account.Value.GetProperty("payload").TryGetProperty("res
 
 Console.WriteLine($"Codex app-server handshake passed; PID {ready.Value.GetProperty("processId").GetInt32()}, no model turn sent.");
 return 0;
+
+static bool WhisperCaptureNormalizationPassed()
+{
+    using var rawSpeech = new MemoryStream();
+    using (var writer = new WaveFileWriter(rawSpeech, WaveFormat.CreateIeeeFloatWaveFormat(48_000, 2)))
+    {
+        for (var frame = 0; frame < 48_000 * 2; frame++)
+        {
+            writer.WriteSample(0.125f);
+            writer.WriteSample(-0.0625f);
+        }
+    }
+    var sourceBytes = rawSpeech.ToArray();
+    var whisperBytes = WindowsAudioDeviceBridge.NormalizeSpeechCapture(sourceBytes);
+    using var normalized = new WaveFileReader(new MemoryStream(whisperBytes, writable: false));
+    if (normalized.WaveFormat.SampleRate != 16_000
+        || normalized.WaveFormat.Channels != 1
+        || normalized.WaveFormat.BitsPerSample != 16
+        || normalized.WaveFormat.Encoding != WaveFormatEncoding.Pcm
+        || whisperBytes.Length >= sourceBytes.Length / 4)
+    {
+        Console.Error.WriteLine("Desktop Whisper capture normalization failed.");
+        return false;
+    }
+    Console.WriteLine("Desktop Whisper capture normalization to compact 16 kHz mono PCM passed.");
+    return true;
+}
 
 static async Task SendJsonAsync(CodexAppServerBridge bridge, string json)
 {

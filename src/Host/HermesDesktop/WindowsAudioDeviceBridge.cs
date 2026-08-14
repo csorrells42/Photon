@@ -6,6 +6,7 @@ using System.Text.Json;
 using NAudio.CoreAudioApi;
 using NAudio.CoreAudioApi.Interfaces;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace HermesDesktop;
 
@@ -408,21 +409,53 @@ internal sealed class WindowsAudioDeviceBridge : IMMNotificationClient, IDisposa
             : null;
         if (forTranscription)
         {
-            var dataUrl = "data:audio/wav;base64," + Convert.ToBase64String(sample);
+            byte[] transcriptionSample;
+            try
+            {
+                transcriptionSample = NormalizeSpeechCapture(sample);
+            }
+            catch (Exception exception)
+            {
+                CryptographicOperations.ZeroMemory(sample);
+                PostError(requestId, "speech-normalization-failed", $"The microphone recording could not be prepared for local Whisper: {Friendly(exception)}");
+                return;
+            }
+            DesktopLog.Write($"Windows speech capture normalized for Whisper: requestId={requestId}, sourceBytes={sample.Length}, uploadBytes={transcriptionSample.Length}, format=16 bit PCM: 16000Hz 1 channel.");
+            var dataUrl = "data:audio/wav;base64," + Convert.ToBase64String(transcriptionSample);
             _post(new
             {
                 type = "audio.speech.captured",
                 version = ProtocolVersion,
                 requestId,
                 durationMilliseconds = duration,
-                byteCount = sample.Length,
+                byteCount = transcriptionSample.Length,
                 mimeType = "audio/wav",
                 dataUrl
             });
             CryptographicOperations.ZeroMemory(sample);
+            CryptographicOperations.ZeroMemory(transcriptionSample);
             return;
         }
         _post(new { type = "audio.micTest.ready", version = ProtocolVersion, requestId, durationMilliseconds = duration, byteCount = sample.Length, peak, rms, warning, format });
+    }
+
+    internal static byte[] NormalizeSpeechCapture(byte[] waveBytes)
+    {
+        ArgumentNullException.ThrowIfNull(waveBytes);
+        using var input = new WaveFileReader(new MemoryStream(waveBytes, writable: false));
+        ISampleProvider samples = input.ToSampleProvider();
+        samples = samples.WaveFormat.Channels switch
+        {
+            1 => samples,
+            2 => new StereoToMonoSampleProvider(samples) { LeftVolume = 0.5f, RightVolume = 0.5f },
+            _ => throw new InvalidDataException($"Whisper capture supports mono or stereo input, not {samples.WaveFormat.Channels} channels."),
+        };
+        if (samples.WaveFormat.SampleRate != 16_000)
+            samples = new WdlResamplingSampleProvider(samples, 16_000);
+
+        using var output = new MemoryStream();
+        WaveFileWriter.WriteWavFileToStream(output, new SampleToWaveProvider16(samples));
+        return output.ToArray();
     }
 
     private void PlaybackStopped(object? sender, StoppedEventArgs args)
