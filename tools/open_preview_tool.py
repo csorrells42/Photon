@@ -79,7 +79,9 @@ OPEN_PREVIEW_SCHEMA = {
         "web URL (a bare domain like www.cnn.com is fine), "
         "a localhost dev-server URL, or a file path. In authenticated Workbench "
         "mode, local paths must be inside /workspace and open in the source editor; "
-        "web URLs open in the isolated browser. The pane opens for the current window only."
+        "web URLs open in the isolated browser. Set bookmark=true when the user asks "
+        "Photon to save the page; it is stored in the same visible browser bookmarks "
+        "bar used by the star button. The pane opens for the current window only."
     ),
     "parameters": {
         "type": "object",
@@ -97,7 +99,7 @@ OPEN_PREVIEW_SCHEMA = {
             },
             "bookmark": {
                 "type": "boolean",
-                "description": "Also save this web page to the persistent Photon browser bookmarks list.",
+                "description": "Also save this web page to the visible persistent Photon browser bookmarks bar.",
                 "default": False,
             },
         },

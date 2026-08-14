@@ -170,13 +170,19 @@ def renderer_safe_server(scope: Optional[str], name: str, config: Dict[str, Any]
     # metadata-only until a trusted broker can attest a separately typed safe
     # representation. The raw configuration remains untouched and fully usable by
     # standalone Hermes; it simply never crosses into renderer memory.
+    # The authentication *mode* is a closed, non-secret enum and is required
+    # to make the existing renderer-owned OAuth flow reachable.  Continue to
+    # suppress it when the raw shape is malformed or contradictory; headers,
+    # tokens, URLs, commands, arguments, environment values, and tool choices
+    # remain outside renderer memory.
+    auth, auth_safe = renderer_safe_auth(config)
     return {
         "url": "",
         "command": "",
         "args": [],
         "tools": [],
         "env": {},
-        "auth": None,
+        "auth": auth if auth_safe else None,
         "revision": server_revision(scope, name, config),
         "editable": False,
         "editor_block_reason": "requires-trusted-reentry",

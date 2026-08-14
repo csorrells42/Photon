@@ -123,6 +123,19 @@ for _win_var in USERPROFILE HOMEDRIVE HOMEPATH LOCALAPPDATA APPDATA SYSTEMROOT T
   fi
 done
 
+# WSL does not normally inherit Windows TEMP/TMP. When the selected venv is a
+# Windows venv, leaving them absent makes tempfile fall back to the user's
+# shared Windows temp root, where a stale pytest ACL can break every test at
+# fixture setup. Keep this runner's temp data inside the already-ignored venv.
+if [[ "$PYTHON" == *.exe ]] && command -v wslpath >/dev/null 2>&1; then
+  WINDOWS_TEST_TEMP="$VENV/.pytest-tmp"
+  mkdir -p "$WINDOWS_TEST_TEMP"
+  WINDOWS_TEST_TEMP="$(wslpath -w "$WINDOWS_TEST_TEMP")"
+  # WSL otherwise replaces these values with the Windows process defaults
+  # when launching python.exe, even though they are present in `env -i`.
+  WIN_ENV+=("TEMP=$WINDOWS_TEST_TEMP" "TMP=$WINDOWS_TEST_TEMP" "WSLENV=TEMP:TMP")
+fi
+
 # ── Test-runner knobs (computed before we drop env) ────────────────────────
 # The runner's own documented environment knobs must survive the hermetic
 # `env -i` below, or they are silent no-ops for anyone invoking this script:
@@ -166,6 +179,13 @@ echo "▶ pre-compiling bytecode cache"
 "$PYTHON" -m compileall -q -j 0 -- $(git ls-files '*.py') >/dev/null 2>&1 || true
 
 echo "▶ launching test runner"
+RUNNER_PATH="$SCRIPT_DIR/run_tests_parallel.py"
+# A Windows venv is usable from WSL, but Windows Python does not understand
+# WSL's /mnt/<drive>/... paths. Convert the runner path while leaving relative
+# test arguments alone; the Windows process inherits this checkout as its cwd.
+if [[ "$PYTHON" == *.exe ]] && command -v wslpath >/dev/null 2>&1; then
+  RUNNER_PATH="$(wslpath -w "$RUNNER_PATH")"
+fi
 exec env -i \
   PATH="$PATH" \
   HOME="$HOME" \
@@ -180,4 +200,4 @@ exec env -i \
   ${HERMES_E2E_BROWSER:+HERMES_E2E_BROWSER="$HERMES_E2E_BROWSER"} \
   ${EXTRA_PYTHONPATH:+PYTHONPATH="$EXTRA_PYTHONPATH"} \
   ${EXTRA_PYTEST_PLUGINS:+PYTEST_PLUGINS="$EXTRA_PYTEST_PLUGINS"} \
-  "$PYTHON" "$SCRIPT_DIR/run_tests_parallel.py" "$@"
+  "$PYTHON" "$RUNNER_PATH" "$@"

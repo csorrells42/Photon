@@ -289,7 +289,7 @@ class TestMcpEndpoints:
         )
 
         assert response.status_code == 200
-        assert response.json()["auth"] is None
+        assert response.json()["auth"] == "header"
         assert response.json()["url"] == ""
         assert response.json()["editable"] is False
         assert "bearer_token" not in response.json()
@@ -312,7 +312,7 @@ class TestMcpEndpoints:
         )
 
         assert response.status_code == 200
-        assert response.json()["auth"] is None
+        assert response.json()["auth"] == "oauth"
         assert response.json()["url"] == ""
         assert response.json()["editable"] is False
 
