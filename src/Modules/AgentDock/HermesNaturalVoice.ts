@@ -1,4 +1,5 @@
 export const HERMES_NATURAL_VOICE_ENDPOINT = '/api/audio/speak-local'
+export const HERMES_NATURAL_VOICE_CLIENT_REVISION = 2
 import { applyHermesAudioOutput } from '../HermesSpeechVoice/HermesAudioDevicePreferences'
 import { HermesWindowsAudioHost } from '../HermesSpeechVoice/HermesWindowsAudioHost'
 export const HERMES_NATURAL_VOICE_MAX_TEXT = 8_000
@@ -69,6 +70,7 @@ export function prepareHermesNaturalVoiceText(markdown: string): string {
 }
 
 export class HermesNaturalVoicePlayer {
+  readonly revision = HERMES_NATURAL_VOICE_CLIENT_REVISION
   private readonly dependencies: NaturalVoiceDependencies
   private generation = 0
   private active: { messageId: string; audio: NaturalVoiceAudio | null; abort: AbortController } | null = null
@@ -114,6 +116,7 @@ export class HermesNaturalVoicePlayer {
     try {
       const response = await this.dependencies.fetch(`${HERMES_NATURAL_VOICE_ENDPOINT}?profile=${encodeURIComponent(this.profileId)}`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
         signal: abort.signal,
@@ -158,6 +161,11 @@ export class HermesNaturalVoicePlayer {
     }
     if (publishIdle) this.publish?.(HERMES_NATURAL_VOICE_IDLE)
     this.publish = null
+  }
+
+  dispose(): void {
+    this.stop(false)
+    this.nativeAudio.dispose()
   }
 
   private finish(generation: number): void {

@@ -49,6 +49,7 @@ describe('HermesNaturalVoice', () => {
 
     expect(fetchVoice).toHaveBeenCalledWith(`${HERMES_NATURAL_VOICE_ENDPOINT}?profile=default`, expect.objectContaining({
       method: 'POST',
+      credentials: 'include',
       body: JSON.stringify({ text: 'Hello Chris.' }),
     }))
     expect(states).toEqual(['loading', 'playing'])

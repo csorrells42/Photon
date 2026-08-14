@@ -63,6 +63,7 @@ import type { HermesSession } from '../HermesSessions/HermesSessionApi'
 import { ModelControlPopover } from '../HermesSettings/ModelControlPopover'
 import { HermesReasoningControl } from './HermesReasoningControl'
 import {
+  HERMES_NATURAL_VOICE_CLIENT_REVISION,
   HERMES_NATURAL_VOICE_IDLE,
   HermesNaturalVoicePlayer,
 } from './HermesNaturalVoice'
@@ -525,7 +526,10 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
   const lastAutoSpokenMessageIdRef = useRef<string | null>(null)
   const quarkActiveRef = useRef(false)
   const quarkAwaitingCompletionRef = useRef<number | null>(null)
-  if (!naturalVoicePlayerRef.current) naturalVoicePlayerRef.current = new HermesNaturalVoicePlayer()
+  if (naturalVoicePlayerRef.current?.revision !== HERMES_NATURAL_VOICE_CLIENT_REVISION) {
+    naturalVoicePlayerRef.current?.dispose()
+    naturalVoicePlayerRef.current = new HermesNaturalVoicePlayer()
+  }
   if (!speechInputControllerRef.current) speechInputControllerRef.current = new HermesSpeechInputController()
   quarkActiveRef.current = quarkActive
   const captureReadingAnchor = useCallback(() => {
