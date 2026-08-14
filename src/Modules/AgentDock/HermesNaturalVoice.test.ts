@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   HERMES_NATURAL_VOICE_ENDPOINT,
   HERMES_NATURAL_VOICE_MAX_TEXT,
@@ -15,6 +15,10 @@ class FakeAudio {
 }
 
 describe('HermesNaturalVoice', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('turns markdown into bounded conversational speech text', () => {
     const source = `# Result\nUse [the guide](https://example.test) and \`build\`.\n\`\`\`ts\nsecret()\n\`\`\`\n${'word '.repeat(2_000)}`
     const spoken = prepareHermesNaturalVoiceText(source)
@@ -38,10 +42,8 @@ describe('HermesNaturalVoice', () => {
       }),
     } as Response))
     const states: string[] = []
-    const player = new HermesNaturalVoicePlayer({
-      fetch: fetchVoice,
-      createAudio: () => audio,
-    })
+    vi.stubGlobal('fetch', fetchVoice)
+    const player = new HermesNaturalVoicePlayer({ createAudio: () => audio })
 
     await player.toggle('message-1', 'Hello **Chris**.', (state) => states.push(state.phase))
 

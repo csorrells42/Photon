@@ -83,7 +83,7 @@ export class HermesNaturalVoicePlayer {
 
   constructor(dependencies?: Partial<NaturalVoiceDependencies>) {
     this.dependencies = {
-      fetch: dependencies?.fetch ?? fetch,
+      fetch: dependencies?.fetch ?? ((input, init) => globalThis.fetch(input, init)),
       createAudio: dependencies?.createAudio ?? ((source) => new Audio(source) as unknown as NaturalVoiceAudio),
     }
   }

@@ -40,6 +40,8 @@ describe('QuarkCompanion', () => {
     const transcript = 'How is the build going?'
     const prompt = quarkConversationPrompt(`  ${transcript}  `)
     expect(prompt).toContain('one to three short sentences')
+    expect(prompt).toContain('one person talking with another')
+    expect(prompt).toContain('Do not sound like a reference library')
     expect(prompt).toContain('User said: How is the build going?')
     expect(prompt.length).toBeLessThan(600)
     expect(hermesVisiblePromptText(prompt, transcript)).toBe(transcript)

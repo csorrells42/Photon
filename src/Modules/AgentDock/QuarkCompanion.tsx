@@ -50,8 +50,8 @@ type Props = {
 }
 
 export const QUARK_CONVERSATION_GUIDANCE = [
-  'Conversation mode: reply naturally in one to three short sentences.',
-  'Do not narrate tools, repeat the user, recite page contents, use tables, or produce long Markdown unless explicitly asked.',
+  'Conversation mode: speak naturally as one person talking with another in one to three short sentences.',
+  'Do not sound like a reference library: avoid formal exposition, narrating tools, repeating the user, reciting page contents, tables, or long Markdown unless explicitly asked.',
 ].join(' ')
 
 export function quarkConversationPrompt(transcript: string): string {
