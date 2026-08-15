@@ -20,7 +20,7 @@ class _Backend:
 
     def search(self, query, *, filters, top_k=10, rerank=False):
         self.searches.append((query, filters))
-        return []
+        return list(self.rows[:top_k])
 
     def add(self, messages, *, user_id, agent_id, infer=False, metadata=None):
         self.adds.append({
@@ -74,12 +74,18 @@ def _strict_mode(monkeypatch):
     live_principals._reset_for_tests()
 
 
-def _provider(monkeypatch, subject: str, backend_type=_Backend) -> tuple[Mem0MemoryProvider, _Backend]:
+def _provider(
+    monkeypatch, subject: str, backend_type=_Backend
+) -> tuple[Mem0MemoryProvider, _Backend]:
     # Deliberately include the legacy fallback and an operator override.  Both
     # must be ignored when identity comes from the authenticated Workbench.
     monkeypatch.setattr(
         "plugins.memory.mem0._load_config",
-        lambda: {"mode": "oss", "user_id": "hermes-user", "oss": {"vector_store": {"provider": "qdrant"}}},
+        lambda: {
+            "mode": "oss",
+            "user_id": "hermes-user",
+            "oss": {"vector_store": {"provider": "qdrant"}},
+        },
     )
     backend = backend_type()
     provider = Mem0MemoryProvider()
@@ -114,12 +120,18 @@ def test_raw_id_mutation_is_unavailable_without_atomic_owner_filter(monkeypatch)
     schema_names = {schema["name"] for schema in provider.get_tool_schemas()}
     assert schema_names == {"mem0_search", "mem0_add"}
 
-    update = json.loads(provider.handle_tool_call(
-        "mem0_update", {"memory_id": "owned-by-someone-else", "text": "changed"},
-    ))
-    delete = json.loads(provider.handle_tool_call(
-        "mem0_delete", {"memory_id": "owned-by-someone-else"},
-    ))
+    update = json.loads(
+        provider.handle_tool_call(
+            "mem0_update",
+            {"memory_id": "owned-by-someone-else", "text": "changed"},
+        )
+    )
+    delete = json.loads(
+        provider.handle_tool_call(
+            "mem0_delete",
+            {"memory_id": "owned-by-someone-else"},
+        )
+    )
     assert "disabled" in update["error"]
     assert "disabled" in delete["error"]
     assert backend.raw_mutations == []
@@ -131,12 +143,18 @@ def test_exact_owner_filtered_delete_is_available_without_enabling_update(monkey
     schema_names = {schema["name"] for schema in provider.get_tool_schemas()}
     assert schema_names == {"mem0_search", "mem0_add", "mem0_delete"}
 
-    update = json.loads(provider.handle_tool_call(
-        "mem0_update", {"memory_id": "72a8548f-4841-41ee-b37a-b8c3d736503c", "text": "changed"},
-    ))
-    deleted = json.loads(provider.handle_tool_call(
-        "mem0_delete", {"memory_id": "72a8548f-4841-41ee-b37a-b8c3d736503c"},
-    ))
+    update = json.loads(
+        provider.handle_tool_call(
+            "mem0_update",
+            {"memory_id": "72a8548f-4841-41ee-b37a-b8c3d736503c", "text": "changed"},
+        )
+    )
+    deleted = json.loads(
+        provider.handle_tool_call(
+            "mem0_delete",
+            {"memory_id": "72a8548f-4841-41ee-b37a-b8c3d736503c"},
+        )
+    )
     assert "disabled" in update["error"]
     assert deleted["memory_id"] == "72a8548f-4841-41ee-b37a-b8c3d736503c"
     assert backend.owned_deletes == [
@@ -184,9 +202,73 @@ def test_background_review_add_uses_parent_principal_and_no_inference(monkeypatc
 def test_memory_prompt_marks_recall_as_non_authoritative(monkeypatch):
     provider, _ = _provider(monkeypatch, "alice")
     prompt = provider.system_prompt_block().lower()
-    for term in ("untrusted", "authorization", "permissions", "identity proof", "consent", "current user intent"):
+    for term in (
+        "untrusted",
+        "authorization",
+        "permissions",
+        "identity proof",
+        "consent",
+        "current user intent",
+    ):
         assert term in prompt
     assert "alice" not in prompt
+
+
+def test_authenticated_recall_is_bounded_redacted_and_marked_untrusted(monkeypatch):
+    provider, backend = _provider(monkeypatch, "alice")
+    backend.rows.extend([
+        {"id": "safe", "memory": "Uses metric fasteners", "score": 0.9},
+        {
+            "id": "secret",
+            "memory": "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz",
+            "score": 0.8,
+        },
+        {
+            "id": "path",
+            "memory": r"Private source is C:\Users\Chris\project.py",
+            "score": 0.7,
+        },
+        {
+            "id": "redacted",
+            "memory": "Rotate sk-proj-abcdefghijklmnopqrstuvwxyz soon",
+            "score": 0.6,
+        },
+        {
+            "id": "container-path",
+            "memory": "Identity receipt is at /opt/data/private/receipt.json",
+            "score": 0.5,
+        },
+    ])
+
+    result = json.loads(
+        provider.handle_tool_call(
+            "mem0_search",
+            {"query": "project", "top_k": 50},
+        )
+    )
+
+    assert result["treatment"] == "untrusted_context"
+    assert result["count"] == 2
+    assert result["results"] == [
+        {"id": "safe", "memory": "Uses metric fasteners", "score": 0.9},
+        {"id": "redacted", "memory": "Rotate «redacted:sk-…» soon", "score": 0.6},
+    ]
+    assert backend.searches == [("project", {"user_id": provider._user_id})]
+
+
+def test_authenticated_recall_surfaces_real_backend_error_not_admission_error(
+    monkeypatch,
+):
+    provider, backend = _provider(monkeypatch, "alice")
+
+    def fail(*_args, **_kwargs):
+        raise ConnectionError("qdrant unavailable")
+
+    backend.search = fail
+    result = json.loads(provider.handle_tool_call("mem0_search", {"query": "health"}))
+
+    assert "Search failed: qdrant unavailable" in result["error"]
+    assert "admission" not in result["error"].lower()
 
 
 def test_logical_archive_is_additive_retry_safe_and_full_owner_delete_only(monkeypatch):
@@ -200,11 +282,22 @@ def test_logical_archive_is_additive_retry_safe_and_full_owner_delete_only(monke
     )
 
     result = provider.import_logical_records(
-        [first], principal_id=provider._user_id, infer=False, idempotency_key="op-1",
+        [first],
+        principal_id=provider._user_id,
+        infer=False,
+        idempotency_key="op-1",
     )
-    assert (result.imported, result.duplicates, result.conflicts, result.skipped) == (1, 0, 0, 0)
+    assert (result.imported, result.duplicates, result.conflicts, result.skipped) == (
+        1,
+        0,
+        0,
+        0,
+    )
     retry = provider.import_logical_records(
-        [first], principal_id=provider._user_id, infer=False, idempotency_key="op-1",
+        [first],
+        principal_id=provider._user_id,
+        infer=False,
+        idempotency_key="op-1",
     )
     assert (retry.imported, retry.duplicates) == (0, 1)
 
@@ -212,10 +305,18 @@ def test_logical_archive_is_additive_retry_safe_and_full_owner_delete_only(monke
     assert [record.portable_id for record in page.records] == ["portable-a"]
     with pytest.raises(ValueError, match="complete"):
         provider.delete_logical_records([], principal_id=provider._user_id)
-    assert provider.delete_logical_records(
-        ["portable-a"], principal_id=provider._user_id,
-    ) == 1
+    assert (
+        provider.delete_logical_records(
+            ["portable-a"],
+            principal_id=provider._user_id,
+        )
+        == 1
+    )
     # Crash-safe retry after delete_all committed but before journal update.
-    assert provider.delete_logical_records(
-        ["portable-a"], principal_id=provider._user_id,
-    ) == 1
+    assert (
+        provider.delete_logical_records(
+            ["portable-a"],
+            principal_id=provider._user_id,
+        )
+        == 1
+    )

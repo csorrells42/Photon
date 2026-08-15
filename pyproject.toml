@@ -197,6 +197,15 @@ voice = [
   "sounddevice==0.5.5",
   "numpy==2.4.3",
 ]
+# The Docker runtime keeps voice itself lazy, but GPU inference still needs
+# the CUDA shared libraries available before Python starts.  These Linux x64
+# wheels provide the CUDA 12 cuBLAS/cuDNN ABI required by CTranslate2 4.8.x;
+# the Dockerfile registers their library directories with ldconfig.  Other
+# architectures retain the existing CPU fallback.
+docker-cuda = [
+  "nvidia-cublas-cu12==12.9.2.10; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "nvidia-cudnn-cu12==9.24.0.43; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 # "Hey Hermes" wake word — on-device hotword detection. All engines are
 # optional; openWakeWord (ONNX) is the free default, sherpa-onnx adds
 # open-vocabulary phrases (any typed phrase, zero training), Porcupine is

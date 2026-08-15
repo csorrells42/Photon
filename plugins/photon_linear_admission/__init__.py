@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from tools.registry import registry, tool_error, tool_result
@@ -34,9 +35,7 @@ _RAW_LINEAR_READ_ONLY = {
     "mcp__linear__list_issue_labels",
     "mcp__linear__get_issue_status",
 }
-_PENDING_ALLOWED = {
-    # Discovery is read-only and is required when admission tools are deferred
-    # behind Hermes' tool-search layer. Execution remains governed below.
+_ADMISSION_CONTROL_TOOLS = {
     "tool_describe",
     "tool_search",
     "photon_linear_inspect",
@@ -45,8 +44,84 @@ _PENDING_ALLOWED = {
     "photon_linear_status",
     "photon_linear_cancel",
 }
+_READ_CONTEXT_TOOLS = {
+    "mem0_search",
+}
+_MEMORY_MUTATION_TOOLS = {
+    "mem0_add",
+    "mem0_update",
+    "mem0_delete",
+}
+_WORK_TRACKING_MUTATION_TOOLS = {
+    "photon_linear_progress",
+    "photon_linear_complete",
+}
 _authority: PhotonLinearAuthority | None = None
 _authority_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class CapabilityPolicy:
+    """Admission semantics for one model-visible tool action."""
+
+    access_class: str
+    mutation: bool
+    requires_issue_admission: bool
+    result_treatment: str = "ordinary_tool_result"
+
+
+_READ_CONTEXT_POLICY = CapabilityPolicy(
+    access_class="read_context",
+    mutation=False,
+    requires_issue_admission=False,
+    result_treatment="untrusted_context",
+)
+_READ_WORK_POLICY = CapabilityPolicy(
+    access_class="read_work",
+    mutation=False,
+    requires_issue_admission=False,
+    result_treatment="untrusted_context",
+)
+_ADMISSION_CONTROL_POLICY = CapabilityPolicy(
+    access_class="admission_control",
+    mutation=False,
+    requires_issue_admission=False,
+)
+_MEMORY_MUTATION_POLICY = CapabilityPolicy(
+    access_class="memory_mutation",
+    mutation=True,
+    # Memory writes remain deliberately closed unless the exact admitted work
+    # authorizes them. Keeping this as a distinct class prevents opening writes
+    # merely because read-only recall is available.
+    requires_issue_admission=True,
+)
+_WORK_TRACKING_MUTATION_POLICY = CapabilityPolicy(
+    access_class="work_tracking_mutation",
+    mutation=True,
+    requires_issue_admission=True,
+)
+_ENGINEERING_EXECUTION_POLICY = CapabilityPolicy(
+    access_class="engineering_execute",
+    mutation=True,
+    requires_issue_admission=True,
+)
+
+
+def capability_policy(tool_name: str) -> CapabilityPolicy:
+    """Classify a tool by explicit action semantics, defaulting fail-closed."""
+    if tool_name in _READ_CONTEXT_TOOLS:
+        return _READ_CONTEXT_POLICY
+    if tool_name in _RAW_LINEAR_READ_ONLY:
+        return _READ_WORK_POLICY
+    if tool_name in _ADMISSION_CONTROL_TOOLS:
+        return _ADMISSION_CONTROL_POLICY
+    if tool_name in _MEMORY_MUTATION_TOOLS:
+        return _MEMORY_MUTATION_POLICY
+    if tool_name in _WORK_TRACKING_MUTATION_TOOLS or tool_name.startswith(
+        _RAW_LINEAR_PREFIX
+    ):
+        return _WORK_TRACKING_MUTATION_POLICY
+    return _ENGINEERING_EXECUTION_POLICY
 
 
 def _load_issue(issue_id: str):
@@ -79,15 +154,20 @@ def _session(kwargs: Mapping[str, Any]) -> str:
 def _safe(handler):
     def wrapped(args: dict, **kwargs):
         try:
-            return tool_result(handler(args if isinstance(args, dict) else {}, **kwargs))
+            return tool_result(
+                handler(args if isinstance(args, dict) else {}, **kwargs)
+            )
         except AdmissionError as exc:
-            return tool_error(str(exc), success=False, code="photon_linear_admission_rejected")
+            return tool_error(
+                str(exc), success=False, code="photon_linear_admission_rejected"
+            )
         except Exception:
             return tool_error(
                 "Photon Linear admission failed safely before work was authorized.",
                 success=False,
                 code="photon_linear_admission_unavailable",
             )
+
     return wrapped
 
 
@@ -100,19 +180,25 @@ def _inspect(args: dict, **kwargs):
 @_safe
 def _begin(args: dict, **kwargs):
     session_id = _session(kwargs)
-    return _get_authority().admit_dual(args.get("issueId"), args.get("issueRevision"), session_id)
+    return _get_authority().admit_dual(
+        args.get("issueId"), args.get("issueRevision"), session_id
+    )
 
 
 @_safe
 def _direct_override(args: dict, **kwargs):
     session_id = _session(kwargs)
-    return _get_authority().admit_direct(args.get("issueId"), args.get("issueRevision"), session_id)
+    return _get_authority().admit_direct(
+        args.get("issueId"), args.get("issueRevision"), session_id
+    )
 
 
 @_safe
 def _status(args: dict, **kwargs):
     session_id = _session(kwargs)
-    return _get_authority().status(args.get("issueId"), args.get("issueRevision"), session_id)
+    return _get_authority().status(
+        args.get("issueId"), args.get("issueRevision"), session_id
+    )
 
 
 @_safe
@@ -145,6 +231,7 @@ def _pre_tool_call(
 ):
     values = args if isinstance(args, Mapping) else {}
     try:
+        policy = capability_policy(tool_name)
         if tool_name == "photon_linear_begin":
             issue, challenge = _get_authority().prepare_dual(
                 values.get("issueId"), values.get("issueRevision"), session_id
@@ -169,7 +256,7 @@ def _pre_tool_call(
                 ),
                 "rule_key": f"photon-linear-direct:{issue.identifier}:{challenge}",
             }
-        if tool_name.startswith(_RAW_LINEAR_PREFIX) and tool_name not in _RAW_LINEAR_READ_ONLY:
+        if tool_name.startswith(_RAW_LINEAR_PREFIX) and policy.mutation:
             return {
                 "action": "block",
                 "message": (
@@ -177,7 +264,11 @@ def _pre_tool_call(
                     "photon_linear_complete under an active exact-revision admission. Photon cannot close issues."
                 ),
             }
-        if session_id and tool_name not in _PENDING_ALLOWED and tool_name not in _RAW_LINEAR_READ_ONLY:
+        if policy.requires_issue_admission:
+            if not session_id:
+                raise AdmissionError(
+                    "A live Photon conversation session is required for this capability."
+                )
             _get_authority().enforce_session_tool(session_id)
     except AdmissionError as exc:
         return {"action": "block", "message": str(exc)}
@@ -192,15 +283,23 @@ def _pre_tool_call(
 _ISSUE_FIELDS = {
     "type": "object",
     "properties": {
-        "issueId": {"type": "string", "description": "Linear issue identifier, for example CLS-6."},
-        "issueRevision": {"type": "string", "description": "Exact revision returned by photon_linear_inspect."},
+        "issueId": {
+            "type": "string",
+            "description": "Linear issue identifier, for example CLS-6.",
+        },
+        "issueRevision": {
+            "type": "string",
+            "description": "Exact revision returned by photon_linear_inspect.",
+        },
     },
     "required": ["issueId", "issueRevision"],
     "additionalProperties": False,
 }
 
 
-def _tool_schema(name: str, description: str, parameters: Mapping[str, Any]) -> dict[str, Any]:
+def _tool_schema(
+    name: str, description: str, parameters: Mapping[str, Any]
+) -> dict[str, Any]:
     """Return the complete registry schema used by deferred tool discovery."""
     return {
         "name": name,
@@ -211,30 +310,48 @@ def _tool_schema(name: str, description: str, parameters: Mapping[str, Any]) -> 
 
 def register(ctx) -> None:
     global _authority
-    # A new plugin process receives a fresh boot nonce and therefore cannot
-    # reuse approvals or admissions from an earlier process.
-    _authority = PhotonLinearAuthority(_load_issue, _write_comment)
-    ctx.register_hook("pre_tool_call", _pre_tool_call)
-    inspect_description = (
-        "Inspect a Linear issue as context only and return its exact revision and Photon generation binding."
+    # The dashboard and gateway share one runtime boot nonce. A new Photon
+    # runtime rotates it, so prior receipts cannot cross the restart boundary.
+    _authority = PhotonLinearAuthority(
+        _load_issue,
+        _write_comment,
+        shared_runtime_boot=True,
     )
+    ctx.register_hook("pre_tool_call", _pre_tool_call)
+    inspect_description = "Inspect a Linear issue as context only and return its exact revision and Photon generation binding."
     ctx.register_tool(
         name="photon_linear_inspect",
         toolset="photon-linear",
-        schema=_tool_schema("photon_linear_inspect", inspect_description, {
-            "type": "object",
-            "properties": {"issueId": _ISSUE_FIELDS["properties"]["issueId"]},
-            "required": ["issueId"],
-            "additionalProperties": False,
-        }),
+        schema=_tool_schema(
+            "photon_linear_inspect",
+            inspect_description,
+            {
+                "type": "object",
+                "properties": {"issueId": _ISSUE_FIELDS["properties"]["issueId"]},
+                "required": ["issueId"],
+                "additionalProperties": False,
+            },
+        ),
         handler=_inspect,
         description=inspect_description,
         emoji="🔎",
     )
     for name, handler, description in (
-        ("photon_linear_begin", _begin, "Begin exact-revision work after Architect receipt plus visible Chris approval."),
-        ("photon_linear_direct_override", _direct_override, "Begin exact-revision work after an explicit visible Chris override."),
-        ("photon_linear_status", _status, "Inspect admission state without granting authority."),
+        (
+            "photon_linear_begin",
+            _begin,
+            "Begin exact-revision work after Architect receipt plus visible Chris approval.",
+        ),
+        (
+            "photon_linear_direct_override",
+            _direct_override,
+            "Begin exact-revision work after an explicit visible Chris override.",
+        ),
+        (
+            "photon_linear_status",
+            _status,
+            "Inspect admission state without granting authority.",
+        ),
     ):
         ctx.register_tool(
             name=name,
@@ -247,16 +364,20 @@ def register(ctx) -> None:
     ctx.register_tool(
         name="photon_linear_progress",
         toolset="photon-linear",
-        schema=_tool_schema("photon_linear_progress", "Post bounded progress to the exact admitted issue. Cannot change issue state.", {
-            "type": "object",
-            "properties": {
-                "admissionId": {"type": "string"},
-                "issueId": {"type": "string"},
-                "text": {"type": "string", "maxLength": 4096},
+        schema=_tool_schema(
+            "photon_linear_progress",
+            "Post bounded progress to the exact admitted issue. Cannot change issue state.",
+            {
+                "type": "object",
+                "properties": {
+                    "admissionId": {"type": "string"},
+                    "issueId": {"type": "string"},
+                    "text": {"type": "string", "maxLength": 4096},
+                },
+                "required": ["admissionId", "issueId", "text"],
+                "additionalProperties": False,
             },
-            "required": ["admissionId", "issueId", "text"],
-            "additionalProperties": False,
-        }),
+        ),
         handler=_progress,
         description="Post bounded progress to the exact admitted issue. Cannot change issue state.",
         emoji="📝",
@@ -264,28 +385,48 @@ def register(ctx) -> None:
     ctx.register_tool(
         name="photon_linear_complete",
         toolset="photon-linear",
-        schema=_tool_schema("photon_linear_complete", "Record bounded maintenance evidence and hand the issue to Chris for review; never closes it.", {
-            "type": "object",
-            "properties": {
-                "admissionId": {"type": "string"},
-                "issueId": {"type": "string"},
-                "maintenanceRecord": {
-                    "type": "object",
-                    "properties": {
-                        "purpose": {"type": "string"},
-                        "components": {"type": "array", "items": {"type": "string"}},
-                        "sourceAnchors": {"type": "array", "items": {"type": "string"}},
-                        "contract": {"type": "string"},
-                        "tests": {"type": "array", "items": {"type": "string"}},
-                        "limitations": {"type": "array", "items": {"type": "string"}},
+        schema=_tool_schema(
+            "photon_linear_complete",
+            "Record bounded maintenance evidence and hand the issue to Chris for review; never closes it.",
+            {
+                "type": "object",
+                "properties": {
+                    "admissionId": {"type": "string"},
+                    "issueId": {"type": "string"},
+                    "maintenanceRecord": {
+                        "type": "object",
+                        "properties": {
+                            "purpose": {"type": "string"},
+                            "components": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "sourceAnchors": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "contract": {"type": "string"},
+                            "tests": {"type": "array", "items": {"type": "string"}},
+                            "limitations": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": [
+                            "purpose",
+                            "components",
+                            "sourceAnchors",
+                            "contract",
+                            "tests",
+                            "limitations",
+                        ],
+                        "additionalProperties": False,
                     },
-                    "required": ["purpose", "components", "sourceAnchors", "contract", "tests", "limitations"],
-                    "additionalProperties": False,
                 },
+                "required": ["admissionId", "issueId", "maintenanceRecord"],
+                "additionalProperties": False,
             },
-            "required": ["admissionId", "issueId", "maintenanceRecord"],
-            "additionalProperties": False,
-        }),
+        ),
         handler=_complete,
         description="Record bounded maintenance evidence and hand the issue to Chris for review; never closes it.",
         emoji="✅",
@@ -293,12 +434,16 @@ def register(ctx) -> None:
     ctx.register_tool(
         name="photon_linear_cancel",
         toolset="photon-linear",
-        schema=_tool_schema("photon_linear_cancel", "Cancel only the exact active Photon Linear admission.", {
-            "type": "object",
-            "properties": {"admissionId": {"type": "string"}},
-            "required": ["admissionId"],
-            "additionalProperties": False,
-        }),
+        schema=_tool_schema(
+            "photon_linear_cancel",
+            "Cancel only the exact active Photon Linear admission.",
+            {
+                "type": "object",
+                "properties": {"admissionId": {"type": "string"}},
+                "required": ["admissionId"],
+                "additionalProperties": False,
+            },
+        ),
         handler=_cancel,
         description="Cancel only the exact active Photon Linear admission.",
         emoji="🛑",

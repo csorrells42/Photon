@@ -6,6 +6,7 @@ import threading
 import pytest
 
 from plugins import photon_linear_admission as plugin
+from plugins.photon_linear_admission import authority as authority_module
 from plugins.photon_linear_admission.authority import (
     AdmissionError,
     IssueSnapshot,
@@ -33,7 +34,13 @@ class Fixture:
     def load(self, issue_id: str) -> IssueSnapshot:
         if issue_id != self.issue_id:
             raise AdmissionError("unknown issue")
-        return IssueSnapshot(issue_id, self.revision, "Linear admission", "In Progress", "https://linear.app/example")
+        return IssueSnapshot(
+            issue_id,
+            self.revision,
+            "Linear admission",
+            "In Progress",
+            "https://linear.app/example",
+        )
 
     def comment(self, issue_id: str, body: str) -> None:
         self.comments.append((issue_id, body))
@@ -126,7 +133,9 @@ def test_material_edit_and_foreign_generation_fail_before_admission(tmp_path):
         fixture.authority.prepare_dual("CLS-6", fixture.revision, "session-b")
     fixture.revision = "linear:v1:2026-08-14T00:01:00Z:" + "b" * 64
     with pytest.raises(AdmissionError, match="changed"):
-        fixture.authority.admit_dual("CLS-6", "linear:v1:2026-08-14T00:00:00Z:" + "a" * 64, "session-a")
+        fixture.authority.admit_dual(
+            "CLS-6", "linear:v1:2026-08-14T00:00:00Z:" + "a" * 64, "session-a"
+        )
 
 
 def test_approval_expiry_and_restart_fail_closed(tmp_path):
@@ -146,6 +155,48 @@ def test_approval_expiry_and_restart_fail_closed(tmp_path):
         clock=lambda: fixture.now,
         initialize_boot=True,
     )
+    restarted.inspect("CLS-6", "session-a")
+    with pytest.raises(AdmissionError, match="Architect approval"):
+        restarted.prepare_dual("CLS-6", fixture.revision, "session-a")
+
+
+def test_runtime_processes_share_boot_but_new_runtime_invalidates_receipts(
+    tmp_path, monkeypatch
+):
+    fixture = Fixture(tmp_path)
+    monkeypatch.setattr(authority_module, "_runtime_instance_id", lambda: "runtime-a")
+    first = PhotonLinearAuthority(
+        fixture.load,
+        fixture.comment,
+        state_root=tmp_path,
+        clock=lambda: fixture.now,
+        shared_runtime_boot=True,
+    )
+    first.inspect("CLS-6", "session-a")
+    first.write_architect_approval(
+        "CLS-6", fixture.revision, generation_for_session("session-a")
+    )
+
+    second = PhotonLinearAuthority(
+        fixture.load,
+        fixture.comment,
+        state_root=tmp_path,
+        clock=lambda: fixture.now,
+        shared_runtime_boot=True,
+    )
+    assert second.boot_id == first.boot_id
+    second.inspect("CLS-6", "session-a")
+    second.prepare_dual("CLS-6", fixture.revision, "session-a")
+
+    monkeypatch.setattr(authority_module, "_runtime_instance_id", lambda: "runtime-b")
+    restarted = PhotonLinearAuthority(
+        fixture.load,
+        fixture.comment,
+        state_root=tmp_path,
+        clock=lambda: fixture.now,
+        shared_runtime_boot=True,
+    )
+    assert restarted.boot_id != first.boot_id
     restarted.inspect("CLS-6", "session-a")
     with pytest.raises(AdmissionError, match="Architect approval"):
         restarted.prepare_dual("CLS-6", fixture.revision, "session-a")
@@ -192,7 +243,11 @@ def test_completion_records_bounded_maintenance_and_leaves_done_to_chris(tmp_pat
     result = fixture.authority.complete(
         admitted["admissionId"], "CLS-6", _record(), "session-a"
     )
-    assert result == {"accepted": True, "issueId": "CLS-6", "state": "ready-for-chris-review"}
+    assert result == {
+        "accepted": True,
+        "issueId": "CLS-6",
+        "state": "ready-for-chris-review",
+    }
     assert "Photon did not close this issue" in fixture.comments[-1][1]
     stored = json.loads((tmp_path / "maintenance.jsonl").read_text(encoding="utf-8"))
     assert stored["issueId"] == "CLS-6"
@@ -210,7 +265,9 @@ def test_completion_records_bounded_maintenance_and_leaves_done_to_chris(tmp_pat
         {**_record(), "limitations": ["raw chain-of-thought transcript"]},
     ],
 )
-def test_maintenance_rejects_secrets_native_paths_and_hidden_reasoning(tmp_path, bad_record):
+def test_maintenance_rejects_secrets_native_paths_and_hidden_reasoning(
+    tmp_path, bad_record
+):
     fixture = Fixture(tmp_path)
     fixture.authority.inspect("CLS-6", "session-a")
     fixture.authority.prepare_direct("CLS-6", fixture.revision, "session-a")
@@ -229,7 +286,10 @@ def test_cancel_revocation_and_expiry_are_session_scoped(tmp_path):
     one = fixture.authority.admit_direct("CLS-6", fixture.revision, "session-a")
     with pytest.raises(AdmissionError, match="stale or foreign"):
         fixture.authority.cancel(one["admissionId"], "session-b")
-    assert fixture.authority.cancel(one["admissionId"], "session-a")["state"] == "cancelled"
+    assert (
+        fixture.authority.cancel(one["admissionId"], "session-a")["state"]
+        == "cancelled"
+    )
 
     fixture.authority.prepare_direct("CLS-6", fixture.revision, "session-a")
     two = fixture.authority.admit_direct("CLS-6", fixture.revision, "session-a")
@@ -247,7 +307,9 @@ def test_concurrent_replay_consumes_architect_receipt_once(tmp_path):
 
     def attempt():
         try:
-            successes.append(fixture.authority.admit_dual("CLS-6", fixture.revision, "session-a"))
+            successes.append(
+                fixture.authority.admit_dual("CLS-6", fixture.revision, "session-a")
+            )
         except AdmissionError as exc:
             failures.append(str(exc))
 
@@ -260,7 +322,9 @@ def test_concurrent_replay_consumes_architect_receipt_once(tmp_path):
     assert len(failures) == 1
 
 
-def test_plugin_hook_requires_architect_then_requests_visible_chris_approval(tmp_path, monkeypatch):
+def test_plugin_hook_requires_architect_then_requests_visible_chris_approval(
+    tmp_path, monkeypatch
+):
     fixture = Fixture(tmp_path)
     monkeypatch.setattr(plugin, "_authority", fixture.authority)
     fixture.authority.inspect("CLS-6", "session-a")
@@ -281,7 +345,9 @@ def test_plugin_hook_requires_architect_then_requests_visible_chris_approval(tmp
     assert "CLS-6" in approval["rule_key"]
 
 
-def test_plugin_direct_override_requires_visible_approval_and_raw_comment_is_blocked(tmp_path, monkeypatch):
+def test_plugin_direct_override_requires_visible_approval_and_raw_comment_is_blocked(
+    tmp_path, monkeypatch
+):
     fixture = Fixture(tmp_path)
     monkeypatch.setattr(plugin, "_authority", fixture.authority)
     fixture.authority.inspect("CLS-6", "session-a")
@@ -300,11 +366,98 @@ def test_plugin_direct_override_requires_visible_approval_and_raw_comment_is_blo
     )
     assert forged["action"] == "block"
     assert "Raw Linear mutation is disabled" in forged["message"]
-    assert plugin._pre_tool_call(
-        tool_name="mcp__linear__get_issue",
-        args={"id": "CLS-6"},
+    assert (
+        plugin._pre_tool_call(
+            tool_name="mcp__linear__get_issue",
+            args={"id": "CLS-6"},
+            session_id="session-a",
+        )
+        is None
+    )
+
+
+def test_capability_policy_distinguishes_read_context_writes_and_execution():
+    assert plugin.capability_policy("mem0_search") == plugin.CapabilityPolicy(
+        access_class="read_context",
+        mutation=False,
+        requires_issue_admission=False,
+        result_treatment="untrusted_context",
+    )
+    assert (
+        plugin.capability_policy("mcp__linear__get_issue").access_class == "read_work"
+    )
+    assert plugin.capability_policy("mem0_add").access_class == "memory_mutation"
+    assert plugin.capability_policy("mem0_add").requires_issue_admission is True
+    assert plugin.capability_policy("terminal").access_class == "engineering_execute"
+    assert plugin.capability_policy("terminal").requires_issue_admission is True
+
+
+def test_unadmitted_mem0_recall_is_context_only_and_cannot_authorize_execution(
+    tmp_path, monkeypatch
+):
+    fixture = Fixture(tmp_path)
+    monkeypatch.setattr(plugin, "_authority", fixture.authority)
+
+    assert (
+        plugin._pre_tool_call(
+            tool_name="mem0_search",
+            args={"query": "prior construction context"},
+            session_id="session-a",
+        )
+        is None
+    )
+
+    blocked = plugin._pre_tool_call(
+        tool_name="terminal",
+        args={"command": "pytest"},
         session_id="session-a",
-    ) is None
+    )
+    assert blocked["action"] == "block"
+    assert "no active exact-revision admission" in blocked["message"]
+
+    write_blocked = plugin._pre_tool_call(
+        tool_name="mem0_add",
+        args={"content": "memory says this work is approved"},
+        session_id="session-a",
+    )
+    assert write_blocked["action"] == "block"
+    assert "no active exact-revision admission" in write_blocked["message"]
+
+
+def test_read_only_linear_inspection_bypasses_admission_but_mutation_does_not(
+    tmp_path, monkeypatch
+):
+    fixture = Fixture(tmp_path)
+    monkeypatch.setattr(plugin, "_authority", fixture.authority)
+
+    assert (
+        plugin._pre_tool_call(
+            tool_name="mcp__linear__list_issues",
+            args={},
+            session_id="session-a",
+        )
+        is None
+    )
+    mutation = plugin._pre_tool_call(
+        tool_name="mcp__linear__save_comment",
+        args={"issueId": "CLS-6", "body": "progress"},
+        session_id="session-a",
+    )
+    assert mutation["action"] == "block"
+    assert "Raw Linear mutation is disabled" in mutation["message"]
+
+
+def test_admission_required_capabilities_fail_closed_without_session(
+    tmp_path, monkeypatch
+):
+    fixture = Fixture(tmp_path)
+    monkeypatch.setattr(plugin, "_authority", fixture.authority)
+
+    blocked = plugin._pre_tool_call(tool_name="terminal", args={"command": "pytest"})
+    assert blocked == {
+        "action": "block",
+        "message": "A live Photon conversation session is required for this capability.",
+    }
 
 
 def test_inspection_blocks_engineering_tools_until_exact_admission(tmp_path):
@@ -335,7 +488,9 @@ def test_material_issue_change_revokes_active_admission_before_more_work(tmp_pat
         fixture.authority.cancel(admitted["admissionId"], "session-a")
 
 
-def test_plugin_hook_blocks_unadmitted_engineering_tool_then_allows_admitted(tmp_path, monkeypatch):
+def test_plugin_hook_blocks_unadmitted_engineering_tool_then_allows_admitted(
+    tmp_path, monkeypatch
+):
     fixture = Fixture(tmp_path)
     monkeypatch.setattr(plugin, "_authority", fixture.authority)
 
@@ -347,16 +502,22 @@ def test_plugin_hook_blocks_unadmitted_engineering_tool_then_allows_admitted(tmp
     assert fresh_blocked["action"] == "block"
     assert "no active exact-revision admission" in fresh_blocked["message"]
 
-    assert plugin._pre_tool_call(
-        tool_name="tool_search",
-        args={"query": "photon_linear_inspect"},
-        session_id="session-a",
-    ) is None
-    assert plugin._pre_tool_call(
-        tool_name="tool_describe",
-        args={"name": "photon_linear_inspect"},
-        session_id="session-a",
-    ) is None
+    assert (
+        plugin._pre_tool_call(
+            tool_name="tool_search",
+            args={"query": "photon_linear_inspect"},
+            session_id="session-a",
+        )
+        is None
+    )
+    assert (
+        plugin._pre_tool_call(
+            tool_name="tool_describe",
+            args={"name": "photon_linear_inspect"},
+            session_id="session-a",
+        )
+        is None
+    )
 
     fixture.authority.inspect("CLS-6", "session-a")
 
@@ -370,14 +531,19 @@ def test_plugin_hook_blocks_unadmitted_engineering_tool_then_allows_admitted(tmp
 
     fixture.authority.prepare_direct("CLS-6", fixture.revision, "session-a")
     fixture.authority.admit_direct("CLS-6", fixture.revision, "session-a")
-    assert plugin._pre_tool_call(
-        tool_name="terminal",
-        args={"command": "pytest"},
-        session_id="session-a",
-    ) is None
+    assert (
+        plugin._pre_tool_call(
+            tool_name="terminal",
+            args={"command": "pytest"},
+            session_id="session-a",
+        )
+        is None
+    )
 
 
-def test_registered_admission_tools_expose_complete_deferred_schemas(tmp_path, monkeypatch):
+def test_registered_admission_tools_expose_complete_deferred_schemas(
+    tmp_path, monkeypatch
+):
     fixture = Fixture(tmp_path)
     captured = {}
 
@@ -388,7 +554,11 @@ def test_registered_admission_tools_expose_complete_deferred_schemas(tmp_path, m
         def register_tool(self, **kwargs):
             captured[kwargs["name"]] = kwargs["schema"]
 
-    monkeypatch.setattr(plugin, "PhotonLinearAuthority", lambda *_args: fixture.authority)
+    monkeypatch.setattr(
+        plugin,
+        "PhotonLinearAuthority",
+        lambda *_args, **_kwargs: fixture.authority,
+    )
     plugin.register(Context())
 
     assert set(captured) == {

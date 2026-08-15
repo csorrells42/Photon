@@ -15,6 +15,7 @@ as authority.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import hmac
@@ -27,6 +28,11 @@ import time
 from typing import Any, Callable, Mapping, Optional
 
 from hermes_constants import get_hermes_home
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Photon runs this authority in Linux.
+    fcntl = None
 
 
 MAX_TEXT = 8_192
@@ -72,6 +78,38 @@ class ActiveAdmission:
     admitted_at: int
     expires_at: int
     progress_count: int = 0
+
+
+def _runtime_instance_id() -> str:
+    """Return one opaque identity shared by processes in this Photon runtime."""
+    explicit = os.environ.get("PHOTON_RUNTIME_INSTANCE_ID", "").strip()
+    if explicit:
+        return sha256(explicit.encode("utf-8")).hexdigest()
+
+    material: list[str] = []
+    for path in (Path("/etc/hostname"), Path("/proc/1/stat")):
+        try:
+            material.append(path.read_text(encoding="utf-8")[:8_192])
+        except OSError:
+            continue
+    if not material:
+        # Non-Linux callers can opt into cross-process sharing with the
+        # environment variable above. This fallback remains process-scoped.
+        material.append(f"{os.getpid()}:{time.monotonic_ns()}")
+    return sha256("\n".join(material).encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path):
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, "a+b") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _bounded_text(value: Any, maximum: int = MAX_TEXT) -> str:
@@ -174,6 +212,7 @@ class PhotonLinearAuthority:
         state_root: Optional[Path] = None,
         clock: Callable[[], float] = time.time,
         initialize_boot: bool = True,
+        shared_runtime_boot: bool = False,
     ) -> None:
         self._issue_loader = issue_loader
         self._comment_writer = comment_writer
@@ -190,7 +229,9 @@ class PhotonLinearAuthority:
         self._pending: dict[str, tuple[str, str, str]] = {}
         self._direct_challenges: dict[tuple[str, str, str], tuple[str, int]] = {}
         self._key = self._load_or_create_key()
-        if initialize_boot:
+        if shared_runtime_boot:
+            self._boot_id = self._load_or_create_runtime_boot()
+        elif initialize_boot:
             self._boot_id = secrets.token_hex(24)
             self._atomic_json(self._boot_path, {"bootId": self._boot_id, "startedAt": int(self._clock())})
             self._atomic_json(self._approval_path, {"approvals": []})
@@ -574,6 +615,32 @@ class PhotonLinearAuthority:
             return _safe_token(payload.get("bootId"), label="authority boot identifier")
         except (OSError, ValueError, AdmissionError) as exc:
             raise AdmissionError("The live Photon admission authority is unavailable.") from exc
+
+    def _load_or_create_runtime_boot(self) -> str:
+        """Share one boot nonce across the dashboard and gateway processes."""
+        runtime_id = _runtime_instance_id()
+        with _exclusive_file_lock(self._root / "boot.lock"):
+            try:
+                payload = json.loads(self._boot_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                payload = {}
+            if payload.get("runtimeId") == runtime_id:
+                try:
+                    return _safe_token(payload.get("bootId"), label="authority boot identifier")
+                except AdmissionError:
+                    pass
+
+            boot_id = secrets.token_hex(24)
+            self._atomic_json(
+                self._boot_path,
+                {
+                    "bootId": boot_id,
+                    "runtimeId": runtime_id,
+                    "startedAt": int(self._clock()),
+                },
+            )
+            self._atomic_json(self._approval_path, {"approvals": []})
+            return boot_id
 
     def _read_approvals(self) -> list[ArchitectApproval]:
         try:

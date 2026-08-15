@@ -261,10 +261,29 @@ RUN cd plugins/platforms/photon/sidecar && \
 # avoids the cross-platform failures that kept [matrix] out of [all]
 # while still making Matrix work in the published container. Fixes #30399.
 #
+# CUDA 12 cuBLAS/cuDNN are baked for Linux x64 so an NVIDIA device passed by
+# the Photon launcher is immediately usable by lazy-installed faster-whisper.
+# The packages are marker-gated in pyproject.toml, so arm64 images stay CPU-only.
 # The editable link is created after the source copy below.
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
-RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix --extra mem0 --extra kokoro-tts
+RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix --extra mem0 --extra kokoro-tts --extra docker-cuda
+
+# CTranslate2 loads CUDA libraries through the system dynamic loader rather
+# than importing the Python namespace that owns these wheels.  Register the
+# pinned wheel directories once at image build time.  Keep non-amd64 builds
+# valid: their dependency markers intentionally omit the NVIDIA wheels.
+RUN if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
+        py_site="/opt/hermes/.venv/lib/python3.13/site-packages"; \
+        printf '%s\n' \
+            "$py_site/nvidia/cublas/lib" \
+            "$py_site/nvidia/cudnn/lib" \
+            "$py_site/nvidia/cuda_nvrtc/lib" \
+            > /etc/ld.so.conf.d/010-photon-cuda.conf; \
+        ldconfig; \
+        ldconfig -p | grep -q 'libcublas.so.12'; \
+        ldconfig -p | grep -q 'libcudnn.so.9'; \
+    fi
 
 # ---------- Frontend build (cached independently from Python source) ----------
 # Copy only the frontend source trees first so that Python-only changes don't

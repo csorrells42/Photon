@@ -131,3 +131,28 @@ def test_dockerfile_bakes_local_kokoro_voice_engine() -> None:
         if line.startswith("RUN uv sync --frozen --no-install-project")
     )
     assert "--extra kokoro-tts" in sync_instruction
+
+
+def test_dockerfile_bakes_pinned_cuda_runtime_for_local_stt() -> None:
+    """NVIDIA-enabled containers must have CTranslate2's runtime libraries.
+
+    Passing the GPU through Docker only supplies the host driver.  cuBLAS and
+    cuDNN must live in the immutable image and be registered with the dynamic
+    linker before faster-whisper is imported.  The dependency markers keep
+    non-Linux/non-x64 builds on the supported CPU fallback.
+    """
+    text = _dockerfile_text()
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+    sync_instruction = next(
+        line for line in text.splitlines()
+        if line.startswith("RUN uv sync --frozen --no-install-project")
+    )
+
+    assert "--extra docker-cuda" in sync_instruction
+    assert 'nvidia-cublas-cu12==12.9.2.10' in pyproject
+    assert 'nvidia-cudnn-cu12==9.24.0.43' in pyproject
+    assert "sys_platform == 'linux' and platform_machine == 'x86_64'" in pyproject
+    assert "/nvidia/cublas/lib" in text
+    assert "/nvidia/cudnn/lib" in text
+    assert "ldconfig -p | grep -q 'libcublas.so.12'" in text
+    assert "ldconfig -p | grep -q 'libcudnn.so.9'" in text
