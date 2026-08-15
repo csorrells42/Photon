@@ -317,6 +317,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'docker_com
 Push-Location $bundleRoot
 $previousEnvironment = [Environment]::GetEnvironmentVariable('HERMES_IMAGE_REFERENCE', 'Process')
 $previousWorkspaceEnvironment = [Environment]::GetEnvironmentVariable('HERMES_HOST_WORKSPACE_PATH', 'Process')
+$previousComposeFile = [Environment]::GetEnvironmentVariable('COMPOSE_FILE', 'Process')
 try {
     $env:HERMES_HOST_WORKSPACE_PATH = Get-ConfiguredWorkspacePath
     $candidate = Get-PhotonRuntimeGeneration -BundleRoot $bundleRoot -GenerationId $GenerationId
@@ -358,6 +359,10 @@ try {
         $confirmation = Read-Host 'Type ADOPT to switch the Hermes container to this verified generation'
         if ($confirmation -cne 'ADOPT') { Write-Host 'Adoption cancelled. Nothing changed.'; return }
     }
+
+    $gpuEnabled = Set-PhotonRuntimeComposeSelection -BundleRoot $bundleRoot -ImageReference $candidate.ImageId
+    if ($gpuEnabled) { Write-Host 'NVIDIA acceleration enabled for the verified runtime.' -ForegroundColor Green }
+    else { Write-Host 'NVIDIA acceleration unavailable; retaining the verified CPU fallback.' -ForegroundColor DarkGray }
 
     $base = Get-PhotonRuntimeGenerationBase -BundleRoot $bundleRoot
     $mutexPath = Join-Path $base 'runtime-generation.adoption.lock'
@@ -417,5 +422,7 @@ finally {
     else { $env:HERMES_IMAGE_REFERENCE = $previousEnvironment }
     if ($null -eq $previousWorkspaceEnvironment) { Remove-Item Env:\HERMES_HOST_WORKSPACE_PATH -ErrorAction SilentlyContinue }
     else { $env:HERMES_HOST_WORKSPACE_PATH = $previousWorkspaceEnvironment }
+    if ($null -eq $previousComposeFile) { Remove-Item Env:\COMPOSE_FILE -ErrorAction SilentlyContinue }
+    else { $env:COMPOSE_FILE = $previousComposeFile }
     Pop-Location
 }

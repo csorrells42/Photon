@@ -10,6 +10,11 @@
       "id": "photon-relentless-repair",
       "file": "photon-relentless-repair.yaml",
       "sha256": "F17549334A414C21F5AA5C7587C4D7FEEE89AE844E1D61A23C3A175E14EF39C5"
+    },
+    {
+      "id": "photon-web-research",
+      "file": "photon-web-research.yaml",
+      "sha256": "BA0BAF92CEE47F0D95999590B0F63578B146C7D62F2722882E02349A6B3B5E35"
     }
   ]
 }

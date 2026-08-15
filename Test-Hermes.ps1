@@ -34,7 +34,7 @@ $requiredFiles = @(
     'docker-compose.yml', 'launcher.settings.json', 'Launch-Hermes.ps1', 'Shutdown-Hermes.ps1',
     'Update-Hermes.ps1', 'Test-Hermes.ps1', 'Show-HermesBridge.ps1', 'Photon-McpGateway.ps1',
     'mcp-profiles\profiles.lock.json', 'mcp-profiles\photon-engineering-discovery.yaml',
-    'mcp-profiles\photon-relentless-repair.yaml', 'src\package-lock.json',
+    'mcp-profiles\photon-relentless-repair.yaml', 'mcp-profiles\photon-web-research.yaml', 'src\package-lock.json',
     'tests\Install-Hermes.Smoke.ps1', 'tests\Shutdown-Hermes.Smoke.ps1', 'tests\Update-Hermes.Smoke.ps1'
 )
 $missingFiles = @($requiredFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $bundleRoot $_) -PathType Leaf) })
@@ -44,7 +44,7 @@ else { Add-Check 'Bundle files' 'OK' "$($requiredFiles.Count) required files are
 try {
     . (Join-Path $bundleRoot 'Photon-McpGateway.ps1')
     Assert-PhotonMcpProfileAssets | Out-Null
-    Add-Check 'Photon MCP profiles' 'OK' 'Both Docker MCP profiles match their SHA-256 receipts.'
+    Add-Check 'Photon MCP profiles' 'OK' 'All three Docker MCP profiles match their SHA-256 receipts.'
 }
 catch { Add-Check 'Photon MCP profiles' 'ERROR' $_.Exception.Message }
 

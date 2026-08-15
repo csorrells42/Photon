@@ -22,6 +22,7 @@ if ($runtimeGenerationScript.Count -ne 1) {
     throw 'Verified runtime generation support is missing. Reinstall Phos Agape Aphthartos.'
 }
 . ([string]$runtimeGenerationScript[0])
+$previousComposeFile = [Environment]::GetEnvironmentVariable('COMPOSE_FILE', 'Process')
 
 New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
 $photonMcpLifecycleScript = Join-Path $bundleRoot 'Photon-McpGateway.ps1'
@@ -740,6 +741,9 @@ try {
     $photonMcpGatewayStarted = Start-PhotonMcpGateway -WorkspacePath $script:workspacePath
     Start-Serena
     $env:HERMES_IMAGE_REFERENCE = Get-HermesLaunchImageReference
+    $gpuEnabled = Set-PhotonRuntimeComposeSelection -BundleRoot $bundleRoot -ImageReference $env:HERMES_IMAGE_REFERENCE
+    if ($gpuEnabled) { Write-Host 'NVIDIA acceleration enabled for Photon speech recognition.' -ForegroundColor Green }
+    else { Write-Host 'NVIDIA acceleration unavailable; Photon speech recognition will use CPU fallback.' -ForegroundColor DarkGray }
     & docker compose up -d --remove-orphans
     if ($LASTEXITCODE -ne 0) { throw 'Docker Compose failed to start Hermes.' }
 
@@ -765,5 +769,7 @@ try {
     Write-Host 'Photon, Docker MCP tools, Serena, the Assistant Conversation Bus, and Phos Agape Aphthartos are running.' -ForegroundColor Green
 }
 finally {
+    if ($null -eq $previousComposeFile) { Remove-Item Env:\COMPOSE_FILE -ErrorAction SilentlyContinue }
+    else { $env:COMPOSE_FILE = $previousComposeFile }
     Pop-Location
 }

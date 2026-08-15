@@ -44,7 +44,7 @@ try {
         'Install-ArduinoToolchain.ps1', 'arduino-toolchain.lock.json', 'Install-OpenSshToolchain.ps1', 'Test-Hermes.ps1',
         'Install-PhotonModels.ps1', 'Install-PhotonCadRuntime.ps1', 'photon-cad-assets.lock.json',
         'Launch-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1', 'Show-HermesBridge.ps1', 'Photon-McpGateway.ps1',
-        'mcp-profiles\profiles.lock.json', 'mcp-profiles\photon-engineering-discovery.yaml', 'mcp-profiles\photon-relentless-repair.yaml',
+        'mcp-profiles\profiles.lock.json', 'mcp-profiles\photon-engineering-discovery.yaml', 'mcp-profiles\photon-relentless-repair.yaml', 'mcp-profiles\photon-web-research.yaml',
         'Invoke-HermesFrontend.ps1', 'README.md', 'THIRD-PARTY-NOTICES.md',
         'licenses\netcoredbg-LICENSE.txt', '.serena\project.yml'
     )
@@ -273,6 +273,7 @@ try {
             'Hermes-Remote-Install/mcp-profiles/profiles.lock.json',
             'Hermes-Remote-Install/mcp-profiles/photon-engineering-discovery.yaml',
             'Hermes-Remote-Install/mcp-profiles/photon-relentless-repair.yaml',
+            'Hermes-Remote-Install/mcp-profiles/photon-web-research.yaml',
             'Hermes-Remote-Install/Update-Hermes.ps1',
             'Hermes-Remote-Install/Show-HermesBridge.ps1',
             'Hermes-Remote-Install/Invoke-HermesFrontend.ps1',

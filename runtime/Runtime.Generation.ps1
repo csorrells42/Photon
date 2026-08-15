@@ -31,6 +31,65 @@ function Assert-PhotonRuntimePlainItem {
     return $item
 }
 
+function Set-PhotonRuntimeComposeSelection {
+    param(
+        [Parameter(Mandatory = $true)][string]$BundleRoot,
+        [Parameter(Mandatory = $true)][string]$ImageReference
+    )
+
+    $root = [IO.Path]::GetFullPath($BundleRoot)
+    $composePath = [IO.Path]::GetFullPath((Join-Path $root 'docker-compose.yml'))
+    Assert-PhotonRuntimePlainItem -Path $composePath -Kind File | Out-Null
+    # Never inherit a caller-controlled Compose file. CPU-only hosts use the
+    # canonical deployment unchanged; the GPU overlay is selected only after
+    # Docker proves that it can inject the NVIDIA driver into this exact image.
+    $env:COMPOSE_FILE = $composePath
+
+    $probeSource = "import ctypes; ctypes.CDLL('libcuda.so.1')"
+    $probe = Invoke-PhotonRuntimeDocker -Arguments @(
+        'run', '--rm', '--gpus', 'all', '--network', 'none',
+        '--entrypoint', 'python', $ImageReference, '-c', $probeSource
+    ) -AllowFailure
+    if ($probe.ExitCode -ne 0) { return $false }
+
+    $generatedRoot = Join-Path $root 'logs\runtime-compose'
+    if (Test-Path -LiteralPath $generatedRoot) {
+        Assert-PhotonRuntimePlainItem -Path $generatedRoot -Kind Directory | Out-Null
+    }
+    else {
+        New-Item -ItemType Directory -Path $generatedRoot -Force | Out-Null
+        Assert-PhotonRuntimePlainItem -Path $generatedRoot -Kind Directory | Out-Null
+    }
+    $gpuOverridePath = Join-Path $generatedRoot 'docker-compose.gpu.yml'
+    $gpuOverride = @'
+services:
+  gateway:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+'@
+    $gpuOverride = $gpuOverride.Replace("`r`n", "`n") + "`n"
+    if (Test-Path -LiteralPath $gpuOverridePath) {
+        Assert-PhotonRuntimePlainItem -Path $gpuOverridePath -Kind File | Out-Null
+        if ([IO.File]::ReadAllText($gpuOverridePath).Replace("`r`n", "`n") -cne $gpuOverride) {
+            throw 'runtime_gpu_compose_override_mismatch'
+        }
+    }
+    else {
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($gpuOverride)
+        $stream = [IO.File]::Open($gpuOverridePath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) }
+        finally { $stream.Dispose(); [Array]::Clear($bytes, 0, $bytes.Length) }
+    }
+
+    $env:COMPOSE_FILE = $composePath + [IO.Path]::PathSeparator + $gpuOverridePath
+    return $true
+}
+
 function Read-PhotonRuntimeJson {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$FailureCode)
     Assert-PhotonRuntimePlainItem -Path $Path -Kind File | Out-Null

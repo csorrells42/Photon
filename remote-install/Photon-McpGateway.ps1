@@ -5,6 +5,7 @@ $script:photonMcpPort = 9131
 $script:photonMcpServerName = 'photon_docker_gateway'
 $script:photonMcpDefaultProfile = 'photon-engineering-discovery'
 $script:photonMcpRepairProfile = 'photon-relentless-repair'
+$script:photonMcpResearchProfile = 'photon-web-research'
 $script:photonMcpProfileRoot = Join-Path $bundleRoot 'mcp-profiles'
 $script:photonMcpPidPath = Join-Path $logsPath 'photon-mcp.pid'
 $script:photonMcpIdentityPath = Join-Path $logsPath 'photon-mcp.process.json'
@@ -49,7 +50,7 @@ function Assert-PhotonMcpProfileAssets {
     try { $lock = Get-Content -Raw -LiteralPath $lockPath | ConvertFrom-Json }
     catch { throw 'Photon Docker MCP profile lock is invalid. Reinstall Phos Agape Aphthartos.' }
 
-    $expectedIds = @($script:photonMcpDefaultProfile, $script:photonMcpRepairProfile)
+    $expectedIds = @($script:photonMcpDefaultProfile, $script:photonMcpRepairProfile, $script:photonMcpResearchProfile)
     $profiles = @($lock.profiles)
     if ([int]$lock.version -ne 1 -or $profiles.Count -ne $expectedIds.Count) {
         throw 'Photon Docker MCP profile lock has an unsupported shape.'
@@ -77,14 +78,77 @@ function Assert-PhotonMcpProfileAssets {
 }
 
 function ConvertTo-PhotonMcpWorkspaceConfigArgument {
-    param([Parameter(Mandatory)][string]$WorkspacePath)
+    param(
+        [Parameter(Mandatory)][string]$WorkspacePath,
+        [ValidateSet('desktop-commander.paths', 'markitdown.paths')]
+        [string]$ConfigKey = 'desktop-commander.paths',
+        [switch]$ContainerPath
+    )
 
-    $resolved = [IO.Path]::GetFullPath($WorkspacePath)
-    if ($resolved.Length -gt 1024 -or $resolved.IndexOfAny([char[]](0..31)) -ge 0 -or $resolved.Contains('"')) {
+    $resolved = if ($ContainerPath) { $WorkspacePath } else { [IO.Path]::GetFullPath($WorkspacePath) }
+    if ($resolved.Length -gt 1024 -or $resolved.IndexOfAny([char[]](0..31)) -ge 0 -or $resolved.Contains('"') -or
+        ($ContainerPath -and $resolved -notmatch '^/[A-Za-z0-9._ /-]+$')) {
         throw 'The Photon MCP workspace path is invalid or too long.'
     }
     $portable = $resolved.Replace('\', '/')
-    return 'desktop-commander.paths=[\"' + $portable + '\"]'
+    return $ConfigKey + '=[\"' + $portable + '\"]'
+}
+
+function ConvertTo-PhotonMcpContainerWorkspacePath {
+    param([Parameter(Mandatory)][string]$WorkspacePath)
+
+    $resolved = [IO.Path]::GetFullPath($WorkspacePath)
+    $root = [IO.Path]::GetPathRoot($resolved)
+    if ($root -notmatch '^[A-Za-z]:\\$') {
+        throw 'Photon MCP workspace mounts require a local Windows drive.'
+    }
+    $relative = $resolved.Substring($root.Length).Replace('\', '/')
+    if ([string]::IsNullOrWhiteSpace($relative)) {
+        throw 'Photon MCP workspace mounts cannot expose an entire drive.'
+    }
+    return '/' + $relative
+}
+
+function Set-PhotonMcpWorkspaceProfileConfig {
+    param(
+        [Parameter(Mandatory)][string]$ProfileId,
+        [Parameter(Mandatory)][ValidateSet('desktop-commander.paths', 'markitdown.paths')][string]$ConfigKey,
+        [Parameter(Mandatory)][string]$WorkspacePath,
+        [Parameter(Mandatory)][string]$CapabilityLabel
+    )
+
+    $configuredWorkspacePath = if ($ConfigKey -ceq 'markitdown.paths') {
+        ConvertTo-PhotonMcpContainerWorkspacePath -WorkspacePath $WorkspacePath
+    } else {
+        [IO.Path]::GetFullPath($WorkspacePath).Replace('\', '/')
+    }
+    $configArgument = ConvertTo-PhotonMcpWorkspaceConfigArgument -WorkspacePath $configuredWorkspacePath `
+        -ConfigKey $ConfigKey -ContainerPath:($ConfigKey -ceq 'markitdown.paths')
+    if ((Invoke-PhotonMcpDockerQuiet -Arguments @('mcp', 'profile', 'config', $ProfileId, '--set', $configArgument)) -ne 0) {
+        throw "Docker could not bind the $CapabilityLabel profile to the Hermes workspace."
+    }
+
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $rawConfig = (& docker mcp profile config $ProfileId --get-all --format json 2>$null) -join [Environment]::NewLine
+        $configExitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previousErrorAction }
+    if ($configExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($rawConfig)) {
+        throw "Docker could not verify the $CapabilityLabel profile workspace binding."
+    }
+    try { $config = $rawConfig | ConvertFrom-Json }
+    catch { throw "Docker returned malformed $CapabilityLabel profile configuration." }
+    $property = $config.PSObject.Properties[$ConfigKey]
+    $configuredPaths = @()
+    if ($null -ne $property) {
+        $configuredPaths = @($property.Value)
+    }
+    $expectedPath = $configuredWorkspacePath
+    if ($configuredPaths.Count -ne 1 -or ([string]$configuredPaths[0]).Replace('\', '/') -cne $expectedPath) {
+        throw "The $CapabilityLabel profile is not restricted to the configured Hermes workspace."
+    }
 }
 
 function Install-PhotonMcpProfiles {
@@ -102,28 +166,10 @@ function Install-PhotonMcpProfiles {
         }
     }
 
-    $configArgument = ConvertTo-PhotonMcpWorkspaceConfigArgument -WorkspacePath $WorkspacePath
-    if ((Invoke-PhotonMcpDockerQuiet -Arguments @('mcp', 'profile', 'config', $script:photonMcpRepairProfile, '--set', $configArgument)) -ne 0) {
-        throw 'Docker could not bind the repair profile to the Hermes workspace.'
-    }
-
-    $previousErrorAction = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        $rawConfig = (& docker mcp profile config $script:photonMcpRepairProfile --get-all --format json 2>$null) -join [Environment]::NewLine
-        $configExitCode = $LASTEXITCODE
-    }
-    finally { $ErrorActionPreference = $previousErrorAction }
-    if ($configExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($rawConfig)) {
-        throw 'Docker could not verify the repair profile workspace binding.'
-    }
-    try { $config = $rawConfig | ConvertFrom-Json }
-    catch { throw 'Docker returned malformed repair profile configuration.' }
-    $configuredPaths = @($config.'desktop-commander.paths')
-    $expectedPath = [IO.Path]::GetFullPath($WorkspacePath).Replace('\', '/')
-    if ($configuredPaths.Count -ne 1 -or ([string]$configuredPaths[0]).Replace('\', '/') -cne $expectedPath) {
-        throw 'The repair profile is not restricted to the configured Hermes workspace.'
-    }
+    Set-PhotonMcpWorkspaceProfileConfig -ProfileId $script:photonMcpRepairProfile `
+        -ConfigKey 'desktop-commander.paths' -WorkspacePath $WorkspacePath -CapabilityLabel 'repair'
+    Set-PhotonMcpWorkspaceProfileConfig -ProfileId $script:photonMcpResearchProfile `
+        -ConfigKey 'markitdown.paths' -WorkspacePath $WorkspacePath -CapabilityLabel 'web research'
 }
 
 function Get-PhotonMcpGatewayTokenFromLog {
@@ -196,9 +242,21 @@ function Start-PhotonMcpGateway {
         '--transport', 'streaming', '--host', '127.0.0.1', '--port', [string]$script:photonMcpPort,
         '--cpus', '1', '--memory', '768Mb', '--block-secrets', '--verify-signatures'
     )
-    $process = Start-Process -FilePath $dockerExecutable -ArgumentList $arguments -WorkingDirectory $bundleRoot `
-        -WindowStyle Hidden -RedirectStandardOutput $script:photonMcpStdoutPath `
-        -RedirectStandardError $script:photonMcpStderrPath -PassThru
+    $allowedBindPath = ConvertTo-PhotonMcpContainerWorkspacePath -WorkspacePath $WorkspacePath
+    $previousAllowedBindPaths = $env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS
+    try {
+        $env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS = $allowedBindPath
+        $process = Start-Process -FilePath $dockerExecutable -ArgumentList $arguments -WorkingDirectory $WorkspacePath `
+            -WindowStyle Hidden -RedirectStandardOutput $script:photonMcpStdoutPath `
+            -RedirectStandardError $script:photonMcpStderrPath -PassThru
+    }
+    finally {
+        if ($null -eq $previousAllowedBindPaths) {
+            Remove-Item Env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS -ErrorAction SilentlyContinue
+        } else {
+            $env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS = $previousAllowedBindPaths
+        }
+    }
 
     $deadline = [DateTime]::UtcNow.AddSeconds(120)
     $token = $null
@@ -290,5 +348,10 @@ function Test-PhotonMcpGatewaySecuritySmoke {
     $argument = ConvertTo-PhotonMcpWorkspaceConfigArgument -WorkspacePath (Join-Path $bundleRoot 'workspace')
     if ($argument -notmatch '^desktop-commander\.paths=\[\\"[A-Za-z]:/.+\\"\]$') {
         throw 'Photon MCP workspace argument security smoke failed.'
+    }
+    $researchPath = ConvertTo-PhotonMcpContainerWorkspacePath -WorkspacePath (Join-Path $bundleRoot 'workspace')
+    $researchArgument = ConvertTo-PhotonMcpWorkspaceConfigArgument -WorkspacePath $researchPath -ConfigKey 'markitdown.paths' -ContainerPath
+    if ($researchArgument -notmatch '^markitdown\.paths=\[\\"/[A-Za-z0-9._ /-]+\\"\]$') {
+        throw 'Photon MCP web-research workspace argument security smoke failed.'
     }
 }

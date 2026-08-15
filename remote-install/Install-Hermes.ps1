@@ -67,7 +67,7 @@ function Test-PortableBundle {
     $required = @(
         'Install Hermes.cmd', 'Launch Hermes.cmd', 'Check Hermes.cmd', 'Shutdown Hermes.cmd', 'Update Hermes.cmd',
         'Install-Hermes.ps1', 'Install-NetCoreDbg.ps1', 'Install-RoslynLanguageServer.ps1', 'roslyn-language-server.lock.json', 'Install-ArduinoToolchain.ps1', 'arduino-toolchain.lock.json', 'Install-OpenSshToolchain.ps1', 'Install-PhotonModels.ps1', 'Install-PhotonCadRuntime.ps1', 'photon-cad-assets.lock.json', 'Launch-Hermes.ps1', 'Test-Hermes.ps1', 'Shutdown-Hermes.ps1', 'Update-Hermes.ps1', 'Photon-McpGateway.ps1',
-        'mcp-profiles/profiles.lock.json', 'mcp-profiles/photon-engineering-discovery.yaml', 'mcp-profiles/photon-relentless-repair.yaml',
+        'mcp-profiles/profiles.lock.json', 'mcp-profiles/photon-engineering-discovery.yaml', 'mcp-profiles/photon-relentless-repair.yaml', 'mcp-profiles/photon-web-research.yaml',
         'Invoke-HermesFrontend.ps1', 'docker-compose.yml', 'launcher.settings.json', '.vscode/tasks.json',
         'src/package-lock.json', 'client/HermesDesktop.exe', 'tools/assistant-bus/assistant-bus.exe', 'licenses/netcoredbg-LICENSE.txt',
         'toolchains/netcoredbg-win64.zip', 'toolchains/microsoft.codeanalysis.languageserver.win-x64.5.0.0-1.25277.114.nupkg', 'toolchains/dotnet-sdk-10.0.302-win-x64.zip', 'toolchains/arduino-cli_1.5.1_Windows_64bit.zip', 'runtime/Runtime.Common.ps1', 'runtime/Runtime.Generation.ps1',
