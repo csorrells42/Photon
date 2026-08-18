@@ -1339,6 +1339,8 @@ from hermes_cli.web_models import (  # noqa: F401
     _MoaReferenceControls,
     MoaPresetPayload,
     MoaConfigPayload,
+    FallbackChainPayload,
+    ModelDefaultsPayload,
     FsWriteText,
     GitPathBody,
     GitFileBody,
@@ -6424,11 +6426,29 @@ _AUX_TASK_SLOTS: Tuple[str, ...] = (
     "approval",
     "mcp",
     "title_generation",
+    "memory_query_rewrite",
+    "tts_audio_tags",
     "triage_specifier",
     "kanban_decomposer",
     "profile_describer",
     "curator",
 )
+
+
+def _all_aux_task_slots() -> Tuple[str, ...]:
+    """Return native and plugin-registered auxiliary slots in stable order."""
+    slots = list(_AUX_TASK_SLOTS)
+    try:
+        from hermes_cli.plugins import get_plugin_auxiliary_tasks
+
+        for entry in get_plugin_auxiliary_tasks():
+            key = str(entry.get("key") or "").strip()
+            if key and key not in slots:
+                slots.append(key)
+    except Exception:
+        # Plugin discovery must not take the built-in routing surface down.
+        _log.debug("Plugin auxiliary route discovery failed", exc_info=True)
+    return tuple(slots)
 
 
 @app.get("/api/model/options")
@@ -6578,13 +6598,16 @@ def get_auxiliary_models(profile: Optional[str] = None):
             aux_cfg = {}
 
         tasks = []
-        for slot in _AUX_TASK_SLOTS:
+        for slot in _all_aux_task_slots():
             slot_cfg = aux_cfg.get(slot, {}) if isinstance(aux_cfg.get(slot), dict) else {}
             tasks.append({
                 "task": slot,
                 "provider": str(slot_cfg.get("provider", "auto") or "auto"),
                 "model": str(slot_cfg.get("model", "") or ""),
                 "base_url": str(slot_cfg.get("base_url", "") or ""),
+                "api_mode": str(slot_cfg.get("api_mode", "") or ""),
+                "key_env": str(slot_cfg.get("key_env") or slot_cfg.get("api_key_env") or ""),
+                "has_inline_api_key": bool(slot_cfg.get("api_key")),
             })
 
         model_cfg = cfg.get("model", {})
@@ -6604,15 +6627,30 @@ def get_auxiliary_models(profile: Optional[str] = None):
         raise HTTPException(status_code=500, detail="Failed to read auxiliary config")
 
 
+def _moa_models_payload(raw_moa: Any) -> dict:
+    from hermes_cli.moa_config import normalize_moa_config
+
+    normalized = normalize_moa_config(raw_moa)
+    if isinstance(raw_moa, dict):
+        # These operational controls live at the MoA top level rather than
+        # inside a preset.  normalize_moa_config deliberately focuses on
+        # execution/preset fields, so project them here for complete
+        # dashboard/Photon round trips.
+        normalized["save_traces"] = bool(raw_moa.get("save_traces", False))
+        normalized["trace_dir"] = str(raw_moa.get("trace_dir") or "")
+    else:
+        normalized["save_traces"] = False
+        normalized["trace_dir"] = ""
+    return normalized
+
+
 @app.get("/api/model/moa")
 def get_moa_models(profile: Optional[str] = None):
     """Return the configured Mixture-of-Agents provider/model slots."""
     try:
-        from hermes_cli.moa_config import normalize_moa_config
-
         with _profile_scope(profile):
             cfg = load_config()
-            return normalize_moa_config(cfg.get("moa") if isinstance(cfg, dict) else {})
+            return _moa_models_payload(cfg.get("moa") if isinstance(cfg, dict) else {})
     except HTTPException:
         raise
     except Exception:
@@ -6628,7 +6666,8 @@ def set_moa_models(body: MoaConfigPayload, profile: Optional[str] = None):
 
         def _slot_dict(slot: MoaModelSlot) -> dict:
             # Drop unset optionals so saved slots stay minimal ({provider, model}).
-            return {k: v for k, v in slot.dict().items() if v is not None}
+            values = slot.model_dump() if hasattr(slot, "model_dump") else slot.dict()
+            return {k: v for k, v in values.items() if v is not None}
 
         def _preset_dict(preset: MoaPresetPayload) -> dict:
             return {
@@ -6668,6 +6707,9 @@ def set_moa_models(body: MoaConfigPayload, profile: Optional[str] = None):
                     )
                 )
 
+            if body.privacy_filter is not None:
+                raw["privacy_filter"] = body.privacy_filter
+
             # Reject-don't-repair: normalize_moa_config() silently swaps any
             # preset containing incomplete slots for the hardcoded defaults —
             # correct tolerance for hand-edited configs at READ time, silent
@@ -6681,17 +6723,190 @@ def set_moa_models(body: MoaConfigPayload, profile: Optional[str] = None):
                     detail="Invalid MoA config: " + "; ".join(problems),
                 )
             normalized = normalize_moa_config(raw)
+            # An older client that omits privacy_filter must not reset an
+            # existing mode merely because the normalizer's default is off.
+            if body.privacy_filter is None:
+                normalized.pop("privacy_filter", None)
+            if body.save_traces is not None:
+                normalized["save_traces"] = body.save_traces
+            if body.trace_dir is not None:
+                normalized["trace_dir"] = body.trace_dir.strip()
             # Merge instead of overwrite so that hand-edited keys not declared
             # in MoaConfigPayload (e.g. save_traces, trace_dir) survive a GUI
             # save.  See issue #58819.
             cfg.setdefault("moa", {}).update(normalized)
             save_config(cfg)
-            return {"ok": True, **normalized}
+            return {"ok": True, **_moa_models_payload(cfg.get("moa"))}
     except HTTPException:
         raise
     except Exception:
         _log.exception("PUT /api/model/moa failed")
         raise HTTPException(status_code=500, detail="Failed to save MoA config")
+
+
+@app.get("/api/model/fallback")
+def get_fallback_models(profile: Optional[str] = None):
+    """Return the effective ordered fallback chain without credential material."""
+    try:
+        from hermes_cli.fallback_config import get_fallback_chain
+
+        with _profile_scope(profile):
+            cfg = load_config()
+        chain = []
+        for entry in get_fallback_chain(cfg):
+            chain.append({
+                "provider": str(entry.get("provider") or ""),
+                "model": str(entry.get("model") or ""),
+                "base_url": str(entry.get("base_url") or ""),
+                "api_mode": str(entry.get("api_mode") or entry.get("transport") or ""),
+                "key_env": str(entry.get("key_env") or entry.get("api_key_env") or ""),
+                "has_inline_api_key": bool(entry.get("api_key")),
+            })
+        model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
+        primary = {
+            "provider": str(model_cfg.get("provider") or "") if isinstance(model_cfg, dict) else "",
+            "model": str(model_cfg.get("default") or model_cfg.get("model") or "") if isinstance(model_cfg, dict) else str(model_cfg or ""),
+        }
+        return {"entries": chain, "primary": primary}
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("GET /api/model/fallback failed")
+        raise HTTPException(status_code=500, detail="Failed to read fallback config")
+
+
+@app.put("/api/model/fallback")
+def set_fallback_models(body: FallbackChainPayload, profile: Optional[str] = None):
+    """Replace the ordered fallback chain using the same canonical config as the CLI."""
+    from hermes_cli.fallback_config import get_fallback_chain
+
+    if len(body.entries) > 32:
+        raise HTTPException(status_code=422, detail="Fallback chains are limited to 32 entries")
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for index, item in enumerate(body.entries):
+        provider = item.provider.strip()
+        model = item.model.strip()
+        base_url = item.base_url.strip().rstrip("/")
+        api_mode = item.api_mode.strip()
+        key_env = item.key_env.strip()
+        if not provider or not model:
+            raise HTTPException(status_code=422, detail=f"Fallback entry {index + 1} requires provider and model")
+        if len(provider) > 128 or len(model) > 512 or len(base_url) > 2048 or len(api_mode) > 64 or len(key_env) > 256:
+            raise HTTPException(status_code=422, detail=f"Fallback entry {index + 1} exceeds supported limits")
+        if any(ord(character) < 32 for character in provider + model + base_url + api_mode + key_env):
+            raise HTTPException(status_code=422, detail=f"Fallback entry {index + 1} contains control characters")
+        if key_env and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_env):
+            raise HTTPException(status_code=422, detail=f"Fallback entry {index + 1} has an invalid environment variable name")
+        identity = (provider.lower(), model.lower(), base_url.lower())
+        if identity in seen:
+            raise HTTPException(status_code=422, detail=f"Fallback entry {index + 1} duplicates an earlier backend")
+        seen.add(identity)
+        entry = {"provider": provider, "model": model}
+        if base_url:
+            entry["base_url"] = base_url
+        if api_mode:
+            entry["api_mode"] = api_mode
+        if key_env:
+            entry["key_env"] = key_env
+        normalized.append(entry)
+
+    try:
+        with _profile_scope(body.profile or profile):
+            cfg = load_config()
+            # Inline keys are intentionally never returned to Photon. Preserve
+            # one only when the edited row still identifies the exact same
+            # backend; changing provider/model/base URL must not reattach a
+            # secret to a different destination.
+            existing_by_identity = {
+                (
+                    str(entry.get("provider") or "").strip().lower(),
+                    str(entry.get("model") or "").strip().lower(),
+                    str(entry.get("base_url") or "").strip().rstrip("/").lower(),
+                ): entry
+                for entry in get_fallback_chain(cfg)
+                if isinstance(entry, dict)
+            }
+            for entry in normalized:
+                identity = (
+                    entry["provider"].lower(),
+                    entry["model"].lower(),
+                    str(entry.get("base_url") or "").lower(),
+                )
+                existing = existing_by_identity.get(identity)
+                if isinstance(existing, dict) and existing.get("api_key"):
+                    entry["api_key"] = existing["api_key"]
+            cfg["fallback_providers"] = normalized
+            cfg.pop("fallback_model", None)
+            save_config(cfg)
+        return {"ok": True, **get_fallback_models(body.profile or profile)}
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("PUT /api/model/fallback failed")
+        raise HTTPException(status_code=500, detail="Failed to save fallback config")
+
+
+_MODEL_DEFAULT_REASONING_OPTIONS = (
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+)
+
+
+def _model_defaults_payload(cfg: dict) -> dict:
+    agent_cfg = cfg.get("agent") if isinstance(cfg, dict) else None
+    if not isinstance(agent_cfg, dict):
+        agent_cfg = {}
+    raw_effort = str(agent_cfg.get("reasoning_effort") or "").strip().lower()
+    if raw_effort in {"false", "disabled", "off"}:
+        raw_effort = "none"
+    reasoning_effort = (
+        raw_effort if raw_effort in _MODEL_DEFAULT_REASONING_OPTIONS else "medium"
+    )
+    raw_tier = str(agent_cfg.get("service_tier") or "").strip().lower()
+    service_tier = "fast" if raw_tier in {"fast", "priority", "on"} else "normal"
+    return {
+        "reasoning_effort": reasoning_effort,
+        "reasoning_options": list(_MODEL_DEFAULT_REASONING_OPTIONS),
+        "service_tier": service_tier,
+    }
+
+
+@app.get("/api/model/defaults")
+def get_model_defaults(profile: Optional[str] = None):
+    """Return the profile defaults used by new Hermes model sessions."""
+    try:
+        with _profile_scope(profile):
+            cfg = load_config()
+        return _model_defaults_payload(cfg)
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("GET /api/model/defaults failed")
+        raise HTTPException(status_code=500, detail="Failed to read model defaults")
+
+
+@app.put("/api/model/defaults")
+def set_model_defaults(body: ModelDefaultsPayload, profile: Optional[str] = None):
+    """Update only reasoning/speed defaults without replacing profile config."""
+    try:
+        with _profile_scope(body.profile or profile):
+            cfg = load_config()
+            agent_cfg = cfg.get("agent")
+            if not isinstance(agent_cfg, dict):
+                agent_cfg = {}
+            else:
+                agent_cfg = dict(agent_cfg)
+            agent_cfg["reasoning_effort"] = body.reasoning_effort
+            agent_cfg["service_tier"] = body.service_tier
+            cfg["agent"] = agent_cfg
+            save_config(cfg)
+        return {"ok": True, **get_model_defaults(body.profile or profile)}
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("PUT /api/model/defaults failed")
+        raise HTTPException(status_code=500, detail="Failed to save model defaults")
 
 
 @app.post("/api/model/set")
@@ -6708,6 +6923,10 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
     task = (body.task or "").strip().lower()
     base_url = (body.base_url or "").strip()
     api_key = (body.api_key or "").strip()
+    key_env = (body.key_env or "").strip()
+    api_mode = (body.api_mode or "").strip()
+    if key_env and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_env):
+        raise HTTPException(status_code=400, detail="key_env must be an environment variable name")
 
     if scope not in {"main", "auxiliary"}:
         raise HTTPException(status_code=400, detail="scope must be 'main' or 'auxiliary'")
@@ -6744,7 +6963,7 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
         def _apply_assignment():
             with _profile_scope(body.profile or profile):
                 return _apply_model_assignment_sync(
-                    scope, provider, model, task, base_url, api_key
+                    scope, provider, model, task, base_url, api_key, key_env, api_mode
                 )
 
         return await asyncio.to_thread(_apply_assignment)
@@ -6756,7 +6975,8 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
 
 
 def _apply_model_assignment_sync(
-    scope: str, provider: str, model: str, task: str, base_url: str, api_key: str = ""
+    scope: str, provider: str, model: str, task: str, base_url: str, api_key: str = "",
+    key_env: str = "", api_mode: str = "",
 ):
     """Synchronous body of POST /api/model/set.
 
@@ -6855,7 +7075,7 @@ def _apply_model_assignment_sync(
         stale_aux: list[dict] = []
         aux_cfg = cfg.get("auxiliary", {})
         if isinstance(aux_cfg, dict):
-            for slot in _AUX_TASK_SLOTS:
+            for slot in _all_aux_task_slots():
                 slot_cfg = aux_cfg.get(slot)
                 if not isinstance(slot_cfg, dict):
                     continue
@@ -6888,7 +7108,7 @@ def _apply_model_assignment_sync(
 
     if task == "__reset__":
         # Reset every slot to provider="auto", model="" — keeps other fields intact.
-        for slot in _AUX_TASK_SLOTS:
+        for slot in _all_aux_task_slots():
             slot_cfg = aux.get(slot)
             if not isinstance(slot_cfg, dict):
                 slot_cfg = {}
@@ -6904,9 +7124,10 @@ def _apply_model_assignment_sync(
     if not provider:
         raise HTTPException(status_code=400, detail="provider required for auxiliary")
 
-    targets = [task] if task else list(_AUX_TASK_SLOTS)
+    available_slots = _all_aux_task_slots()
+    targets = [task] if task else list(available_slots)
     for slot in targets:
-        if slot not in _AUX_TASK_SLOTS:
+        if slot not in available_slots:
             raise HTTPException(status_code=400, detail=f"unknown auxiliary task: {slot}")
         slot_cfg = aux.get(slot)
         if not isinstance(slot_cfg, dict):
@@ -6927,9 +7148,19 @@ def _apply_model_assignment_sync(
             slot_cfg["base_url"] = base_url
             if api_key:
                 slot_cfg["api_key"] = api_key
+            if key_env:
+                slot_cfg["key_env"] = key_env
+                slot_cfg.pop("api_key_env", None)
+                slot_cfg.pop("api_key", None)
         elif new_provider != prev_provider and new_provider != "custom":
             slot_cfg.pop("base_url", None)
             clear_model_endpoint_credentials(slot_cfg)
+        if api_mode:
+            slot_cfg["api_mode"] = api_mode
+            slot_cfg.pop("transport", None)
+        elif new_provider != prev_provider:
+            slot_cfg.pop("api_mode", None)
+            slot_cfg.pop("transport", None)
         aux[slot] = slot_cfg
 
     cfg["auxiliary"] = aux
@@ -7418,6 +7649,7 @@ def _custom_endpoint_response(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "name": str(raw_entry.get("name") or endpoint_id),
                 "base_url": base_url,
                 "model": endpoint_model,
+                "api_mode": str(raw_entry.get("api_mode") or ""),
                 "models": models,
                 "context_length": raw_entry.get("context_length"),
                 "discover_models": bool(raw_entry.get("discover_models", True)),
@@ -7436,6 +7668,7 @@ def _custom_endpoint_response(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "name": "Custom",
             "base_url": current_base_url,
             "model": current_model,
+            "api_mode": str(model_cfg.get("api_mode") or ""),
             "models": [current_model] if current_model else [],
             "context_length": model_cfg.get("context_length"),
             "discover_models": True,
@@ -7453,6 +7686,7 @@ def _custom_endpoint_response(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "provider": current_provider,
             "model": current_model,
             "base_url": current_base_url,
+            "api_mode": str(model_cfg.get("api_mode") or ""),
         },
     }
 
@@ -7475,7 +7709,7 @@ def _detach_main_model_from_provider(cfg: Dict[str, Any], provider_key: str) -> 
         return
     if str(model_cfg.get("provider") or "").strip().lower() != provider_key:
         return
-    for field in ("provider", "base_url", "api_key", "key_env"):
+    for field in ("provider", "base_url", "api_key", "key_env", "api_mode"):
         model_cfg.pop(field, None)
     cfg["model"] = model_cfg
 
@@ -7485,6 +7719,7 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
     name = (body.name or "").strip()
     base_url = (body.base_url or "").strip().rstrip("/")
     model = (body.model or "").strip()
+    api_mode = (body.api_mode or "").strip()
 
     if not name:
         raise HTTPException(status_code=400, detail="name required")
@@ -7505,7 +7740,7 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
 
     # Merge onto the existing entry rather than replacing it. A providers.<name>
     # block is not owned by this panel: it can carry hand-written keys the
-    # dashboard has no field for — ``api_mode``, ``key_env``/``api_key_env``,
+    # dashboard does not own — ``key_env``/``api_key_env``,
     # ``extra_headers`` (which may themselves carry credentials),
     # ``request_overrides`` — and rebuilding from scratch silently dropped every
     # one of them on an unrelated edit, leaving a provider that no longer
@@ -7517,6 +7752,10 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
         "model": model,
         "discover_models": bool(body.discover_models),
     })
+    if api_mode:
+        entry["api_mode"] = api_mode
+    else:
+        entry.pop("api_mode", None)
     # Same for the model map: merge rather than replace, so existing models
     # keep their context lengths. ``body.models`` is the catalogue the panel's
     # Test button already discovered — without it only the one hand-typed
@@ -7569,31 +7808,37 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
         if entry.get("key_env") and isinstance(cfg["model"], dict):
             cfg["model"]["key_env"] = entry["key_env"]
             cfg["model"].pop("api_key", None)
+        if api_mode and isinstance(cfg["model"], dict):
+            cfg["model"]["api_mode"] = api_mode
 
     return endpoint_id, entry
 
 
 @app.get("/api/providers/custom-endpoints")
-def list_custom_endpoints():
-    """Return configured OpenAI-compatible custom endpoints for Desktop."""
+def list_custom_endpoints(profile: Optional[str] = None):
+    """Return custom endpoints for the requested Hermes profile."""
     try:
-        return _custom_endpoint_response(load_config())
+        with _profile_scope(profile):
+            return _custom_endpoint_response(load_config())
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("GET /api/providers/custom-endpoints failed")
         raise HTTPException(status_code=500, detail="Failed to list custom endpoints")
 
 
 @app.post("/api/providers/custom-endpoints")
-def upsert_custom_endpoint(body: CustomEndpointUpdate):
+def upsert_custom_endpoint(body: CustomEndpointUpdate, profile: Optional[str] = None):
     """Create or update a v12+ ``providers`` custom endpoint entry."""
     try:
-        cfg = load_config()
-        endpoint_id, _entry = _write_custom_endpoint(cfg, body)
-        save_config(cfg)
-        response = _custom_endpoint_response(cfg)
-        response["ok"] = True
-        response["id"] = endpoint_id
-        return response
+        with _profile_scope(profile):
+            cfg = load_config()
+            endpoint_id, _entry = _write_custom_endpoint(cfg, body)
+            save_config(cfg)
+            response = _custom_endpoint_response(cfg)
+            response["ok"] = True
+            response["id"] = endpoint_id
+            return response
     except HTTPException:
         raise
     except Exception:
@@ -7602,31 +7847,34 @@ def upsert_custom_endpoint(body: CustomEndpointUpdate):
 
 
 @app.post("/api/providers/custom-endpoints/{endpoint_id}/activate")
-def activate_custom_endpoint(endpoint_id: str):
+def activate_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
     """Set a configured custom endpoint as the default model provider."""
     try:
-        cfg = load_config()
-        provider_key = _custom_endpoint_id(endpoint_id)
-        providers = cfg.get("providers")
-        entry = providers.get(provider_key) if isinstance(providers, dict) else None
-        if not isinstance(entry, dict):
-            raise HTTPException(status_code=404, detail="custom endpoint not found")
+        with _profile_scope(profile):
+            cfg = load_config()
+            provider_key = _custom_endpoint_id(endpoint_id)
+            providers = cfg.get("providers")
+            entry = providers.get(provider_key) if isinstance(providers, dict) else None
+            if not isinstance(entry, dict):
+                raise HTTPException(status_code=404, detail="custom endpoint not found")
 
-        models = _models_from_custom_endpoint_entry(entry)
-        model = str(entry.get("model") or (models[0] if models else "")).strip()
-        base_url = str(entry.get("base_url") or "").strip()
-        if not model or not base_url:
-            raise HTTPException(status_code=400, detail="custom endpoint is incomplete")
+            models = _models_from_custom_endpoint_entry(entry)
+            model = str(entry.get("model") or (models[0] if models else "")).strip()
+            base_url = str(entry.get("base_url") or "").strip()
+            if not model or not base_url:
+                raise HTTPException(status_code=400, detail="custom endpoint is incomplete")
 
-        model_cfg = _apply_main_model_assignment(cfg.get("model", {}), provider_key, model, base_url)
-        if entry.get("key_env"):
-            model_cfg["key_env"] = entry["key_env"]
-            model_cfg.pop("api_key", None)
-        elif entry.get("api_key"):
-            model_cfg["api_key"] = entry["api_key"]
-        cfg["model"] = model_cfg
-        save_config(cfg)
-        return {"ok": True, "provider": provider_key, "model": model}
+            model_cfg = _apply_main_model_assignment(cfg.get("model", {}), provider_key, model, base_url)
+            if entry.get("key_env"):
+                model_cfg["key_env"] = entry["key_env"]
+                model_cfg.pop("api_key", None)
+            elif entry.get("api_key"):
+                model_cfg["api_key"] = entry["api_key"]
+            if entry.get("api_mode"):
+                model_cfg["api_mode"] = entry["api_mode"]
+            cfg["model"] = model_cfg
+            save_config(cfg)
+            return {"ok": True, "provider": provider_key, "model": model}
     except HTTPException:
         raise
     except Exception:
@@ -7635,22 +7883,23 @@ def activate_custom_endpoint(endpoint_id: str):
 
 
 @app.delete("/api/providers/custom-endpoints/{endpoint_id}")
-def delete_custom_endpoint(endpoint_id: str):
+def delete_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
     """Remove a configured custom endpoint from ``providers``."""
     try:
-        cfg = load_config()
-        provider_key = _custom_endpoint_id(endpoint_id)
-        providers = cfg.get("providers")
-        if not isinstance(providers, dict) or provider_key not in providers:
-            raise HTTPException(status_code=404, detail="custom endpoint not found")
-        providers.pop(provider_key, None)
-        cfg["providers"] = providers
-        _detach_main_model_from_provider(cfg, provider_key)
-        remove_env_value(custom_endpoint_key_env(provider_key))
-        save_config(cfg)
-        response = _custom_endpoint_response(cfg)
-        response["ok"] = True
-        return response
+        with _profile_scope(profile):
+            cfg = load_config()
+            provider_key = _custom_endpoint_id(endpoint_id)
+            providers = cfg.get("providers")
+            if not isinstance(providers, dict) or provider_key not in providers:
+                raise HTTPException(status_code=404, detail="custom endpoint not found")
+            providers.pop(provider_key, None)
+            cfg["providers"] = providers
+            _detach_main_model_from_provider(cfg, provider_key)
+            remove_env_value(custom_endpoint_key_env(provider_key))
+            save_config(cfg)
+            response = _custom_endpoint_response(cfg)
+            response["ok"] = True
+            return response
     except HTTPException:
         raise
     except Exception:
@@ -7668,17 +7917,18 @@ def _runtime_profile_entry(cfg: Dict[str, Any], endpoint_id: str) -> Tuple[str, 
 
 
 @app.post("/api/providers/custom-endpoints/{endpoint_id}/profiles")
-def upsert_runtime_profile(endpoint_id: str, body: RuntimeProfileUpdate):
+def upsert_runtime_profile(endpoint_id: str, body: RuntimeProfileUpdate, profile: Optional[str] = None):
     """Create or update one explicit omission-based per-model profile."""
     from hermes_cli.runtime_profiles import RuntimeProfileError, upsert_profile
     try:
-        cfg = load_config()
-        _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
-        profile_id = upsert_profile(entry, body)
-        save_config(cfg)
-        response = _custom_endpoint_response(cfg)
-        response.update({"ok": True, "profile_id": profile_id})
-        return response
+        with _profile_scope(profile):
+            cfg = load_config()
+            _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
+            profile_id = upsert_profile(entry, body)
+            save_config(cfg)
+            response = _custom_endpoint_response(cfg)
+            response.update({"ok": True, "profile_id": profile_id})
+            return response
     except RuntimeProfileError as exception:
         raise HTTPException(status_code=400, detail=str(exception))
     except HTTPException:
@@ -7689,17 +7939,18 @@ def upsert_runtime_profile(endpoint_id: str, body: RuntimeProfileUpdate):
 
 
 @app.post("/api/providers/custom-endpoints/{endpoint_id}/profiles/activate")
-def activate_runtime_profile(endpoint_id: str, body: RuntimeProfileActivation):
+def activate_runtime_profile(endpoint_id: str, body: RuntimeProfileActivation, profile: Optional[str] = None):
     """Select a named profile or restore server-default omission for one model."""
     from hermes_cli.runtime_profiles import RuntimeProfileError, activate_profile
     try:
-        cfg = load_config()
-        _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
-        activate_profile(entry, body.model, body.profile_id)
-        save_config(cfg)
-        response = _custom_endpoint_response(cfg)
-        response["ok"] = True
-        return response
+        with _profile_scope(profile):
+            cfg = load_config()
+            _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
+            activate_profile(entry, body.model, body.profile_id)
+            save_config(cfg)
+            response = _custom_endpoint_response(cfg)
+            response["ok"] = True
+            return response
     except RuntimeProfileError as exception:
         raise HTTPException(status_code=400, detail=str(exception))
     except HTTPException:
@@ -7710,16 +7961,17 @@ def activate_runtime_profile(endpoint_id: str, body: RuntimeProfileActivation):
 
 
 @app.delete("/api/providers/custom-endpoints/{endpoint_id}/profiles/{profile_id}")
-def delete_runtime_profile(endpoint_id: str, profile_id: str):
+def delete_runtime_profile(endpoint_id: str, profile_id: str, profile: Optional[str] = None):
     from hermes_cli.runtime_profiles import RuntimeProfileError, delete_profile
     try:
-        cfg = load_config()
-        _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
-        delete_profile(entry, profile_id)
-        save_config(cfg)
-        response = _custom_endpoint_response(cfg)
-        response["ok"] = True
-        return response
+        with _profile_scope(profile):
+            cfg = load_config()
+            _provider_key, entry = _runtime_profile_entry(cfg, endpoint_id)
+            delete_profile(entry, profile_id)
+            save_config(cfg)
+            response = _custom_endpoint_response(cfg)
+            response["ok"] = True
+            return response
     except KeyError:
         raise HTTPException(status_code=404, detail="runtime profile not found")
     except RuntimeProfileError as exception:
@@ -12982,8 +13234,7 @@ def _pool_entry_summary(entry: Any, index: int) -> Dict[str, Any]:
     }
 
 
-@app.get("/api/credentials/pool")
-async def list_credential_pool():
+def _list_credential_pool_sync():
     from agent.credential_pool import load_pool
     from hermes_cli.auth import read_credential_pool
 
@@ -13009,8 +13260,19 @@ async def list_credential_pool():
     return {"providers": providers}
 
 
+@app.get("/api/credentials/pool")
+async def list_credential_pool(profile: Optional[str] = None):
+    with _config_profile_scope(profile):
+        return await asyncio.to_thread(_list_credential_pool_sync)
+
+
 @app.post("/api/credentials/pool")
-async def add_credential_pool_entry(body: CredentialPoolAdd):
+async def add_credential_pool_entry(body: CredentialPoolAdd, profile: Optional[str] = None):
+    with _config_profile_scope(profile):
+        return await asyncio.to_thread(_add_credential_pool_entry_sync, body)
+
+
+def _add_credential_pool_entry_sync(body: CredentialPoolAdd):
     import uuid as _uuid
     from agent.credential_pool import (
         load_pool,
@@ -13062,7 +13324,16 @@ async def add_credential_pool_entry(body: CredentialPoolAdd):
 
 
 @app.delete("/api/credentials/pool/{provider}/{index}")
-async def remove_credential_pool_entry(provider: str, index: int):
+async def remove_credential_pool_entry(
+    provider: str, index: int, profile: Optional[str] = None
+):
+    with _config_profile_scope(profile):
+        return await asyncio.to_thread(
+            _remove_credential_pool_entry_sync, provider, index
+        )
+
+
+def _remove_credential_pool_entry_sync(provider: str, index: int):
     """Remove a pool entry.  ``index`` is 1-based (matches the list response).
 
     Removal must be sticky (#55217): ``load_pool()`` re-seeds entries from

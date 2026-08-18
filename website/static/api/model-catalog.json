@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-08-03T22:03:15Z",
+  "updated_at": "2026-08-15T15:19:44Z",
   "metadata": {
     "source": "hermes-agent repo",
     "docs": "https://hermes-agent.nousresearch.com/docs/reference/model-catalog"
@@ -94,7 +94,7 @@
         },
         {
           "id": "deepseek/deepseek-v4-flash",
-          "description": "DeepSeek V4 Flash Latest · default",
+          "description": "default",
           "default": true
         },
         {
@@ -115,7 +115,7 @@
         },
         {
           "id": "z-ai/glm-5.2",
-          "description": ""
+          "description": "default"
         },
         {
           "id": "z-ai/glm-5.1",
@@ -232,7 +232,8 @@
           "id": "deepseek/deepseek-v4-pro"
         },
         {
-          "id": "deepseek/deepseek-v4-flash"
+          "id": "deepseek/deepseek-v4-flash",
+          "default": true
         },
         {
           "id": "deepseek/deepseek-v4-flash-0731"
@@ -247,8 +248,7 @@
           "id": "minimax/minimax-m3"
         },
         {
-          "id": "z-ai/glm-5.2",
-          "default": true
+          "id": "z-ai/glm-5.2"
         },
         {
           "id": "z-ai/glm-5.1"

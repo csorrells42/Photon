@@ -104,7 +104,7 @@ def build_catalog() -> dict:
 def main() -> int:
     catalog = build_catalog()
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as fh:
+    with open(OUTPUT_PATH, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(catalog, fh, indent=2)
         fh.write("\n")
 

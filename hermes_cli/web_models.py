@@ -55,6 +55,9 @@ class CustomEndpointUpdate(BaseModel):
     name: str
     base_url: str
     model: str
+    # Hermes custom providers support all three HTTP transports offered by the
+    # native ``hermes model`` flow. Empty means URL/provider auto-detection.
+    api_mode: Literal["", "chat_completions", "codex_responses", "anthropic_messages"] = ""
     api_key: Optional[str] = None
     context_length: Optional[int] = None
     discover_models: bool = True
@@ -157,6 +160,10 @@ class ModelAssignment(BaseModel):
     # endpoint that requires auth works from the GUI. Mirrors the key the
     # ``hermes model`` custom flow collects.
     api_key: str = ""
+    # Safe credential indirection for custom/local routes. The variable name is
+    # visible to the UI; its value remains in Hermes's environment store.
+    key_env: str = ""
+    api_mode: str = ""
     confirm_expensive_model: bool = False
     profile: Optional[str] = None
 
@@ -167,6 +174,10 @@ class MoaModelSlot(BaseModel):
     # Optional per-slot reasoning effort. Declared so a client round-tripping
     # the GET payload doesn't have it stripped at parse time and wiped on save.
     reasoning_effort: Optional[str] = None
+    # Optional per-reference output cap.  Hermes supports this on each slot in
+    # addition to the preset-wide reference_max_tokens value; declaring it here
+    # prevents the web/Photon round trip from silently stripping the override.
+    max_tokens: Optional[int] = Field(default=None, ge=1)
     enabled: bool = True
 
 
@@ -225,6 +236,32 @@ class MoaConfigPayload(_MoaReferenceControls):
     reference_max_tokens: Optional[int] = None
     fanout: Optional[str] = None
     enabled: bool = True
+    # Top-level MoA runtime controls.  Optional preserves compatibility with
+    # older clients: omitted values leave hand-edited configuration untouched.
+    privacy_filter: Optional[Literal["", "display", "full"]] = None
+    save_traces: Optional[bool] = None
+    trace_dir: Optional[str] = Field(default=None, max_length=2048)
+    profile: Optional[str] = None
+
+
+class FallbackModelEntry(BaseModel):
+    provider: str
+    model: str
+    base_url: str = ""
+    api_mode: str = ""
+    key_env: str = ""
+
+
+class FallbackChainPayload(BaseModel):
+    entries: list[FallbackModelEntry] = Field(default_factory=list)
+    profile: Optional[str] = None
+
+
+class ModelDefaultsPayload(BaseModel):
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] = "medium"
+    service_tier: Literal["normal", "fast"] = "normal"
     profile: Optional[str] = None
 
 

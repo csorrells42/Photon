@@ -6,6 +6,8 @@ profile switcher can target any profile's HERMES_HOME. These tests pin:
 reads/writes land in the REQUESTED profile, the dashboard's own profile
 stays untouched, and the chat PTY env is scoped via HERMES_HOME.
 """
+import json
+
 import pytest
 import yaml
 
@@ -160,6 +162,67 @@ class TestProfileScopedMcp:
 
 
 class TestProfileScopedModel:
+    @pytest.mark.parametrize(
+        "api_mode",
+        ["", "chat_completions", "codex_responses", "anthropic_messages"],
+    )
+    def test_custom_endpoint_transport_is_lossless_and_profile_scoped(
+        self, client, isolated_profiles, api_mode
+    ):
+        response = client.post(
+            "/api/providers/custom-endpoints",
+            params={"profile": "worker_beta"},
+            json={
+                "id": "local-runtime",
+                "name": "Local Runtime",
+                "base_url": "http://host.docker.internal:1234/v1",
+                "model": "qwen/local",
+                "api_mode": api_mode,
+                "make_default": True,
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        endpoint = next(
+            item for item in body["endpoints"] if item["id"] == "local-runtime"
+        )
+        assert endpoint["api_mode"] == api_mode
+        assert body["current"]["api_mode"] == api_mode
+        worker_cfg = _cfg(isolated_profiles["worker_beta"])
+        assert worker_cfg["providers"]["local-runtime"].get("api_mode", "") == api_mode
+        assert worker_cfg["model"].get("api_mode", "") == api_mode
+        assert "local-runtime" not in _cfg(isolated_profiles["default"]).get(
+            "providers", {}
+        )
+
+        readback = client.get(
+            "/api/providers/custom-endpoints",
+            params={"profile": "worker_beta"},
+        )
+        assert readback.status_code == 200
+        assert readback.json()["current"]["api_mode"] == api_mode
+
+    def test_custom_endpoint_rejects_unknown_transport(
+        self, client, isolated_profiles
+    ):
+        response = client.post(
+            "/api/providers/custom-endpoints",
+            params={"profile": "worker_beta"},
+            json={
+                "id": "invalid-transport",
+                "name": "Invalid",
+                "base_url": "http://host.docker.internal:1234/v1",
+                "model": "qwen/local",
+                "api_mode": "almost-openai",
+            },
+        )
+
+        assert response.status_code == 422
+        assert "invalid-transport" not in _cfg(
+            isolated_profiles["worker_beta"]
+        ).get("providers", {})
+
     def test_model_set_main_scoped(self, client, isolated_profiles):
         resp = client.post(
             "/api/model/set",
@@ -189,6 +252,235 @@ class TestProfileScopedModel:
         with empty model info ("no model set" — silently wrong)."""
         resp = client.get("/api/model/info", params={"profile": "ghost"})
         assert resp.status_code == 404
+
+    def test_fallback_chain_read_write_is_profile_scoped(self, client, isolated_profiles):
+        """Photon edits the same ordered fallback chain used by Hermes."""
+        payload = {
+            "entries": [
+                {"provider": "openai-codex", "model": "gpt-5.6-sol"},
+                {
+                    "provider": "custom",
+                    "model": "qwen3-4b",
+                    "base_url": "http://host.docker.internal:1234/v1/",
+                    "api_mode": "responses",
+                    "key_env": "LM_API_KEY",
+                },
+            ],
+            "profile": "worker_beta",
+        }
+
+        response = client.put("/api/model/fallback", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["entries"] == [
+            {"provider": "openai-codex", "model": "gpt-5.6-sol", "base_url": "", "api_mode": "", "key_env": "", "has_inline_api_key": False},
+            {
+                "provider": "custom",
+                "model": "qwen3-4b",
+                "base_url": "http://host.docker.internal:1234/v1",
+                "api_mode": "responses",
+                "key_env": "LM_API_KEY",
+                "has_inline_api_key": False,
+            },
+        ]
+        worker_cfg = _cfg(isolated_profiles["worker_beta"])
+        assert worker_cfg["fallback_providers"] == [
+            {"provider": "openai-codex", "model": "gpt-5.6-sol"},
+            {
+                "provider": "custom",
+                "model": "qwen3-4b",
+                "base_url": "http://host.docker.internal:1234/v1",
+                "api_mode": "responses",
+                "key_env": "LM_API_KEY",
+            },
+        ]
+        assert "fallback_providers" not in _cfg(isolated_profiles["default"])
+
+        readback = client.get("/api/model/fallback", params={"profile": "worker_beta"})
+        assert readback.status_code == 200
+        assert readback.json()["entries"] == response.json()["entries"]
+
+    def test_model_defaults_are_narrow_and_profile_scoped(self, client, isolated_profiles):
+        worker_home = isolated_profiles["worker_beta"]
+        (worker_home / "config.yaml").write_text(
+            yaml.safe_dump({
+                "agent": {"reasoning_effort": "low", "service_tier": "priority", "max_turns": 77},
+                "unrelated": {"preserve": True},
+            }),
+            encoding="utf-8",
+        )
+
+        readback = client.get("/api/model/defaults", params={"profile": "worker_beta"})
+        assert readback.status_code == 200
+        assert readback.json() == {
+            "reasoning_effort": "low",
+            "reasoning_options": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+            "service_tier": "fast",
+        }
+
+        response = client.put(
+            "/api/model/defaults",
+            json={
+                "profile": "worker_beta",
+                "reasoning_effort": "ultra",
+                "service_tier": "normal",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["reasoning_effort"] == "ultra"
+        assert response.json()["service_tier"] == "normal"
+        saved = _cfg(worker_home)
+        assert saved["agent"] == {
+            "reasoning_effort": "ultra",
+            "service_tier": "normal",
+            "max_turns": 77,
+        }
+        assert saved["unrelated"] == {"preserve": True}
+        assert "agent" not in _cfg(isolated_profiles["default"])
+
+    def test_model_defaults_reject_unknown_variations(self, client, isolated_profiles):
+        response = client.put(
+            "/api/model/defaults",
+            json={
+                "profile": "worker_beta",
+                "reasoning_effort": "maximum-ish",
+                "service_tier": "turbo",
+            },
+        )
+
+        assert response.status_code == 422
+        assert "agent" not in _cfg(isolated_profiles["worker_beta"])
+
+    def test_credential_rotation_pool_reads_selected_profile(self, client, isolated_profiles):
+        def store(label, token):
+            return {
+                "version": 1,
+                "credential_pool": {
+                    "openrouter": [{
+                        "id": label,
+                        "label": label,
+                        "auth_type": "api_key",
+                        "priority": 0,
+                        "source": "manual",
+                        "access_token": token,
+                    }],
+                },
+            }
+
+        (isolated_profiles["default"] / "auth.json").write_text(
+            json.dumps(store("default-pool", "default-secret")), encoding="utf-8"
+        )
+        (isolated_profiles["worker_beta"] / "auth.json").write_text(
+            json.dumps(store("worker-pool", "worker-secret")), encoding="utf-8"
+        )
+
+        response = client.get(
+            "/api/credentials/pool", params={"profile": "worker_beta"}
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["providers"][0]["entries"][0]["label"] == "worker-pool"
+        assert "default-pool" not in response.text
+        assert "worker-secret" not in response.text
+
+    def test_fallback_reorder_preserves_inline_secret_without_returning_it(self, client, isolated_profiles):
+        worker_home = isolated_profiles["worker_beta"]
+        (worker_home / "config.yaml").write_text(
+            yaml.safe_dump({
+                "fallback_providers": [
+                    {"provider": "custom", "model": "private", "base_url": "http://model.local/v1", "api_key": "never-return-this"},
+                    {"provider": "openrouter", "model": "public"},
+                ],
+            }),
+            encoding="utf-8",
+        )
+
+        readback = client.get("/api/model/fallback", params={"profile": "worker_beta"})
+        assert readback.status_code == 200
+        assert "never-return-this" not in readback.text
+        assert readback.json()["entries"][0]["has_inline_api_key"] is True
+
+        response = client.put(
+            "/api/model/fallback",
+            json={
+                "profile": "worker_beta",
+                "entries": [
+                    {"provider": "openrouter", "model": "public"},
+                    {"provider": "custom", "model": "private", "base_url": "http://model.local/v1"},
+                ],
+            },
+        )
+        assert response.status_code == 200
+        assert "never-return-this" not in response.text
+        assert _cfg(worker_home)["fallback_providers"][1]["api_key"] == "never-return-this"
+
+    def test_fallback_chain_rejects_duplicate_backend(self, client, isolated_profiles):
+        response = client.put(
+            "/api/model/fallback",
+            json={
+                "profile": "worker_beta",
+                "entries": [
+                    {"provider": "OpenRouter", "model": "model-a"},
+                    {"provider": "openrouter", "model": "MODEL-A"},
+                ],
+            },
+        )
+
+        assert response.status_code == 422
+        assert "duplicates" in response.json()["detail"]
+        assert "fallback_providers" not in _cfg(isolated_profiles["worker_beta"])
+
+    def test_auxiliary_custom_route_exposes_controls_but_not_inline_secret(self, client, isolated_profiles):
+        worker_home = isolated_profiles["worker_beta"]
+        (worker_home / "config.yaml").write_text(
+            yaml.safe_dump({
+                "auxiliary": {
+                    "vision": {
+                        "provider": "custom",
+                        "model": "vision-local",
+                        "base_url": "http://vision.local/v1",
+                        "api_mode": "chat_completions",
+                        "api_key": "hidden-inline-key",
+                    },
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        readback = client.get("/api/model/auxiliary", params={"profile": "worker_beta"})
+        assert readback.status_code == 200
+        assert "hidden-inline-key" not in readback.text
+        vision = next(item for item in readback.json()["tasks"] if item["task"] == "vision")
+        assert vision == {
+            "task": "vision",
+            "provider": "custom",
+            "model": "vision-local",
+            "base_url": "http://vision.local/v1",
+            "api_mode": "chat_completions",
+            "key_env": "",
+            "has_inline_api_key": True,
+        }
+
+        response = client.post(
+            "/api/model/set",
+            json={
+                "scope": "auxiliary",
+                "task": "vision",
+                "provider": "custom",
+                "model": "vision-local",
+                "base_url": "http://vision.local/v1",
+                "api_mode": "responses",
+                "key_env": "VISION_MODEL_KEY",
+                "profile": "worker_beta",
+                "confirm_expensive_model": True,
+            },
+        )
+        assert response.status_code == 200
+        saved = _cfg(worker_home)["auxiliary"]["vision"]
+        assert saved["key_env"] == "VISION_MODEL_KEY"
+        assert saved["api_mode"] == "responses"
+        assert "api_key" not in saved
 
 
 class TestProfileScopedPostSetup:
