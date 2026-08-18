@@ -8,7 +8,7 @@ public sealed class BridgeSettingsLoader(BridgeClientPolicy? policy = null)
 
     public static string DefaultSettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "hermes", "conversation-bridge.json");
+        "HermesWorkbench", "conversation-bridge.json");
 
     public BridgeConnectionSettings Load(string? path = null)
     {

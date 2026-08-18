@@ -1,7 +1,7 @@
 services:
   gateway:
     image: ${HERMES_IMAGE_REFERENCE:?Set HERMES_IMAGE_REFERENCE through the verified launcher or installer}
-    container_name: hermes
+    container_name: photon
     restart: unless-stopped
     volumes:
       - ./data:/opt/data
@@ -20,7 +20,6 @@ services:
       - HERMES_WORKBENCH=1
       - HERMES_WORKBENCH_AUTHENTICATED_MEM0=1
       - HERMES_LAZY_INSTALL_TARGET=/opt/data/lazy-packages
-      - HERMES_WRITE_SAFE_ROOT=/workspace
       - HERMES_MEM0_MODEL_URL=http://host.docker.internal:12434/engines/v1
       - HERMES_MEM0_QDRANT_URL=http://memory-vector:6333
     depends_on:
@@ -34,11 +33,6 @@ services:
     image: qdrant/qdrant@sha256:affb67e1d6f2f93d7d20b90d238a7d4b974d36351c162e73bda794e4b2e03483
     restart: unless-stopped
     init: true
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
     pids_limit: 256
     mem_limit: 1g
     cpus: 2.0

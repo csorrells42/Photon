@@ -4,13 +4,14 @@ import { HermesConsolePanel } from '../HermesConsole/HermesConsolePanel'
 import type { DeveloperBuildResult } from '../DeveloperServices/DesktopDeveloperServicesClient'
 import { workspaceRelativePath } from '../DeveloperServices/DesktopDeveloperServicesClient'
 import { isNativeTerminalAvailable } from './DesktopHostTerminalClient'
+import type { NativeTerminalCommandRequest } from './DesktopHostTerminalClient'
 import { useAssistantDisplayName } from '../AssistantIdentity/AssistantIdentity'
 
 const NativeTerminalSurface = lazy(() => import('./NativeTerminalSurface').then((module) => ({ default: module.NativeTerminalSurface })))
 
 type TerminalTab = 'powershell' | 'hermes' | 'output' | 'problems'
 
-export function TerminalDock({ buildResult, onOpenWorkspacePath }: { buildResult?: DeveloperBuildResult | null; onOpenWorkspacePath?: (path: string) => void }) {
+export function TerminalDock({ buildResult, commandRequest, onCommandHandled, onOpenWorkspacePath }: { buildResult?: DeveloperBuildResult | null; commandRequest?: NativeTerminalCommandRequest | null; onCommandHandled?: (nonce: number) => void; onOpenWorkspacePath?: (path: string) => void }) {
   const [assistantName] = useAssistantDisplayName()
   const [active, setActive] = useState<TerminalTab>('powershell')
   const [nativeAvailable, setNativeAvailable] = useState(isNativeTerminalAvailable())
@@ -25,6 +26,10 @@ export function TerminalDock({ buildResult, onOpenWorkspacePath }: { buildResult
     if (!buildResult) return
     setActive(buildResult.diagnostics.length > 0 ? 'problems' : 'output')
   }, [buildResult?.requestId])
+
+  useEffect(() => {
+    if (commandRequest) setActive('powershell')
+  }, [commandRequest?.nonce])
 
   const output = buildResult ? [buildResult.output.standardOutput, buildResult.output.standardError].filter(Boolean).join('\n') : ''
   const operationLabel = buildResult?.operation === 'analyze' ? 'Analysis' : 'Build'
@@ -42,7 +47,7 @@ export function TerminalDock({ buildResult, onOpenWorkspacePath }: { buildResult
       </div>
       <div className={`terminal-dock-surface ${active === 'powershell' ? 'active' : ''}`}>
         {nativeAvailable
-          ? <Suspense fallback={<div className="native-terminal-unavailable"><TerminalSquare size={18} /><span><strong>Loading terminal renderer…</strong></span></div>}><NativeTerminalSurface /></Suspense>
+          ? <Suspense fallback={<div className="native-terminal-unavailable"><TerminalSquare size={18} /><span><strong>Loading terminal renderer…</strong></span></div>}><NativeTerminalSurface commandRequest={commandRequest} onCommandHandled={onCommandHandled} /></Suspense>
           : <div className="native-terminal-unavailable"><MonitorUp size={20} /><span><strong>PowerShell is available in the desktop app</strong><small>The browser keeps the same Workbench, but native command execution stays disabled for security. Use the {assistantName} Console tab here.</small></span></div>}
       </div>
       <div className={`terminal-dock-surface ${active === 'hermes' ? 'active' : ''}`}><HermesConsolePanel embedded /></div>

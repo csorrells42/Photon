@@ -578,6 +578,7 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
     loadingSession,
     messages,
     modelCatalog,
+    defaultModelSelection,
     modelLoading,
     modelSelection,
     modelSwitching,
@@ -1282,6 +1283,7 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
           approvalMode={approvalMode}
           approvalModeSaving={approvalModeSaving}
           catalog={modelCatalog}
+          defaultSelection={defaultModelSelection}
           loading={modelLoading}
           onCancelConfirmation={cancelModelConfirmation}
           onClose={() => setModelMenuOpen(false)}
@@ -1450,11 +1452,16 @@ export function AgentDock({ sessionRequest, onSessionOpened, onSignIn, dockContr
               className="model-button"
               aria-expanded={modelMenuOpen}
               disabled={loadingSession}
-              title={loadingSession ? 'Model controls are unavailable while a conversation is opening' : 'Model and approval controls'}
+              title={loadingSession
+                ? 'Model controls are unavailable while a conversation is opening'
+                : modelSelection && defaultModelSelection && (modelSelection.model !== defaultModelSelection.model || modelSelection.provider !== defaultModelSelection.provider)
+                  ? `This conversation: ${modelSelection.provider}/${modelSelection.model}. Default for new conversations: ${defaultModelSelection.provider}/${defaultModelSelection.model}.`
+                  : 'Model and approval controls'}
               onClick={() => setModelMenuOpen((open) => !open)}
             >
               <WandSparkles size={15} />
               {modelSelection?.model ? modelSelection.model.split('/').pop() : assistantName}
+              {modelSelection && defaultModelSelection && (modelSelection.model !== defaultModelSelection.model || modelSelection.provider !== defaultModelSelection.provider) ? <small>session</small> : null}
               <ChevronDown size={13} />
             </button>
             <HermesReasoningControl

@@ -8,6 +8,7 @@ import { TerminalDock } from '../NativeTerminal/TerminalDock'
 import type { DeveloperBuildResult } from '../DeveloperServices/DesktopDeveloperServicesClient'
 import type { DesktopLanguageToolingPublication } from '../LanguageToolingProviders'
 import { desktopDocumentClient } from './DesktopDocumentClient'
+import type { NativeTerminalCommandRequest } from '../NativeTerminal/DesktopHostTerminalClient'
 
 type Props = {
   path?: string | null
@@ -16,9 +17,11 @@ type Props = {
   languageToolingResult?: DesktopLanguageToolingPublication | null
   onOpenWorkspacePath?: (path: string) => void
   selection?: { path: string; line: number; column: number; nonce: number } | null
+  terminalCommandRequest?: NativeTerminalCommandRequest | null
+  onTerminalCommandHandled?: (nonce: number) => void
 }
 
-export function WorkspaceEditor({ path, onClose, buildResult, languageToolingResult, onOpenWorkspacePath, selection = null }: Props) {
+export function WorkspaceEditor({ path, onClose, buildResult, languageToolingResult, onOpenWorkspacePath, selection = null, terminalCommandRequest = null, onTerminalCommandHandled }: Props) {
   const [file, setFile] = useState<WorkspaceFile | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -104,7 +107,7 @@ export function WorkspaceEditor({ path, onClose, buildResult, languageToolingRes
         )}
       </div>
       {documentStatus && <div className="document-operation-status" role="status">{saving ? 'Saving…' : documentStatus}</div>}
-      <TerminalDock buildResult={buildResult} onOpenWorkspacePath={onOpenWorkspacePath} />
+      <TerminalDock buildResult={buildResult} commandRequest={terminalCommandRequest} onCommandHandled={onTerminalCommandHandled} onOpenWorkspacePath={onOpenWorkspacePath} />
     </main>
   )
 }

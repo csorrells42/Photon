@@ -1,6 +1,7 @@
 import { hermesGateway } from '../HermesGateway/HermesGatewayClient'
 
 export const HERMES_MODEL_ADAPTER_VERSION = 1
+export const HERMES_DEFAULT_MODEL_CHANGED_EVENT = 'hermes-default-model-changed'
 
 export type HermesApprovalMode = 'manual' | 'smart' | 'off'
 

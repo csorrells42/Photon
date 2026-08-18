@@ -46,6 +46,23 @@ button { color: inherit; }
 
 .panel-sourceControl .source-control-workspace { grid-column: 2 / 4; grid-row: 2; }
 
+/* Model management is a workspace, not an Explorer-side panel. Keep it on the
+   full canvas at every window width; responsive rules only adjust rail size. */
+.workbench.layout-code.panel-models {
+  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-areas:
+    'title title'
+    'rail editor'
+    'status status';
+}
+.layout-code.panel-models .agents-area { display: none; }
+.layout-code.panel-models .hermes-model-management {
+  display: grid;
+  grid-area: editor;
+  grid-column: 2;
+  grid-row: 2;
+}
+
 .titlebar {
   grid-area: title;
   display: flex;
@@ -177,9 +194,9 @@ button { color: inherit; }
   .workbench.layout-code.panel-explorer,.workbench.layout-code.panel-run,.workbench.layout-code.panel-sessions,.workbench.layout-code.panel-search,.workbench.layout-code.panel-containers,.workbench.layout-code.panel-cad{grid-template-columns:42px minmax(150px,32%) minmax(0,1fr);grid-template-areas:'title title title' 'rail explorer editor' 'status status status'}
   .layout-code.panel-explorer .explorer,.layout-code.panel-explorer .editor-area,.layout-code.panel-run .explorer,.layout-code.panel-run .editor-area,.layout-code.panel-sessions .explorer,.layout-code.panel-sessions .editor-area,.layout-code.panel-search .explorer,.layout-code.panel-search .workspace-search,.layout-code.panel-containers .explorer,.layout-code.panel-containers .docker-control,.layout-code.panel-cad .explorer,.layout-code.panel-cad .photon-cad-desktop{display:grid}
   .layout-code.panel-explorer .agents-area,.layout-code.panel-run .agents-area,.layout-code.panel-sessions .agents-area,.layout-code.panel-search .agents-area,.layout-code.panel-containers .agents-area,.layout-code.panel-cad .agents-area{display:none}
-  .workbench.layout-code.panel-browser,.workbench.layout-code.panel-sourceControl,.workbench.layout-code.panel-system,.workbench.layout-code.panel-usage{grid-template-columns:42px minmax(0,1fr);grid-template-areas:'title title' 'rail editor' 'status status'}
-  .layout-code.panel-browser .agents-area,.layout-code.panel-sourceControl .agents-area,.layout-code.panel-system .agents-area,.layout-code.panel-usage .agents-area{display:none}
-  .layout-code.panel-browser .browser-workspace,.layout-code.panel-sourceControl .source-control-workspace,.layout-code.panel-system .system-workspace,.layout-code.panel-usage .usage-intelligence{display:grid;grid-area:editor;grid-column:2;grid-row:2}
+  .workbench.layout-code.panel-browser,.workbench.layout-code.panel-models,.workbench.layout-code.panel-sourceControl,.workbench.layout-code.panel-system,.workbench.layout-code.panel-usage{grid-template-columns:42px minmax(0,1fr);grid-template-areas:'title title' 'rail editor' 'status status'}
+  .layout-code.panel-browser .agents-area,.layout-code.panel-models .agents-area,.layout-code.panel-sourceControl .agents-area,.layout-code.panel-system .agents-area,.layout-code.panel-usage .agents-area{display:none}
+  .layout-code.panel-browser .browser-workspace,.layout-code.panel-models .hermes-model-management,.layout-code.panel-sourceControl .source-control-workspace,.layout-code.panel-system .system-workspace,.layout-code.panel-usage .usage-intelligence{display:grid;grid-area:editor;grid-column:2;grid-row:2}
 }
 @container (max-width:900px){
   .workbench.layout-code.panel-cad{grid-template-columns:42px minmax(0,1fr);grid-template-areas:'title title' 'rail editor' 'status status'}
@@ -293,3 +310,6 @@ button { color: inherit; }
 .assistant-name-setting{display:grid;gap:7px;padding:10px 5px;border-top:1px solid rgba(255,255,255,.065);color:#c9cfdb}.assistant-name-setting>span{display:flex;align-items:baseline;justify-content:space-between;gap:10px}.assistant-name-setting small{color:#626d80;font-size:8px;font-weight:400}.assistant-name-setting input{min-width:0;border:1px solid rgba(142,116,248,.28);border-radius:6px;background:#0d111b;color:#dce2ee;padding:7px 8px;outline:none}.assistant-name-setting input:focus{border-color:#8064ff;box-shadow:0 0 0 2px rgba(118,93,229,.17)}.view-menu-popover .assistant-name-reset{margin:0 5px 6px;width:calc(100% - 10px);justify-content:center;color:#748095!important}
 .approval-explanation{display:grid;gap:7px;margin-top:9px}.approval-explanation>section{border:1px solid rgba(231,174,83,.12);border-radius:7px;background:rgba(8,10,15,.42);padding:7px 8px}.approval-explanation>section.missing{border-color:rgba(218,102,122,.24);background:rgba(119,35,51,.1)}.approval-explanation strong{display:block;margin-bottom:3px;color:#c9b898;font-size:7.5px;text-transform:uppercase;letter-spacing:.06em}.approval-explanation p{margin:0;color:#b7becb;font-size:8.5px;line-height:1.45}.approval-explanation .missing p{color:#d79ba6}.approval-command{margin-top:8px;border:1px solid rgba(231,174,83,.13);border-radius:7px;background:rgba(7,8,12,.48);overflow:hidden}.approval-command>summary{min-height:28px;display:flex;align-items:center;padding:0 8px;cursor:pointer;color:#9b8e7b;font-size:8px}.approval-command>pre{max-height:150px;margin:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-top:1px solid rgba(231,174,83,.12);padding:7px 8px;color:#d0c1a9;font:8.5px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.approval-review{display:flex;align-items:center;gap:8px;margin-top:8px}.approval-review button{height:28px;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(128,100,255,.35);border-radius:6px;background:rgba(111,82,218,.17);padding:0 9px;color:#d1c8f8;font-size:8.5px}.approval-review button:hover{border-color:rgba(154,132,245,.55);background:rgba(111,82,218,.26)}.approval-review span{min-width:0;color:#7f899a;font-size:7.5px;line-height:1.35}
 .workbench-menu-popover hr{height:1px;margin:5px 2px;border:0;background:rgba(255,255,255,.07)}.source-control-closed{min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border-right:1px solid var(--line);background:#0c1018;color:#68748a;text-align:center}.source-control-closed strong{color:#b8c1cf;font-size:10px}.source-control-closed button{border:1px solid rgba(128,100,255,.32);border-radius:6px;background:rgba(128,100,255,.12);padding:7px 10px;color:#b8acf4;font-size:8px}.document-operation-status{position:absolute;right:10px;bottom:145px;z-index:8;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid rgba(128,100,255,.22);border-radius:5px;background:#101522;padding:4px 7px;color:#94a0b4;font-size:7px}
+
+/* Distinguish the live conversation model from Hermes's global default. */
+.model-button>small{border-radius:4px;background:rgba(219,162,75,.13);padding:2px 4px;color:#d2a85f;font-size:6.5px;text-transform:uppercase;letter-spacing:.05em}.model-truth-summary{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 9px 0;padding:8px;border:1px solid rgba(89,190,222,.13);border-radius:8px;background:rgba(27,95,119,.07)}.model-truth-summary>span{min-width:0;display:flex;flex-direction:column;gap:3px}.model-truth-summary small{color:#657789;font-size:7px;text-transform:uppercase;letter-spacing:.05em}.model-truth-summary strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#b9cfda;font-size:8px}.model-truth-summary p{grid-column:1/-1;display:flex;align-items:flex-start;gap:5px;margin:1px 0 0;color:#d2a85f;font-size:7.5px;line-height:1.35}

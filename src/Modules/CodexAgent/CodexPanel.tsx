@@ -275,8 +275,8 @@ export function CodexPanel({ active, dockControls }: { active: boolean; dockCont
     if (!threadId) {
       const result = object(await client.request('thread/start', {
         cwd: workspaceRef.current,
-        approvalPolicy: 'on-request',
-        sandbox: 'workspace-write',
+        approvalPolicy: 'never',
+        sandbox: 'danger-full-access',
         personality: 'friendly',
         serviceName: 'hermes_workbench',
       }))

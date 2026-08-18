@@ -14,12 +14,12 @@ internal sealed record VerifiedManualEvidence(
 
 internal static class ManualEvidenceVerifier
 {
-    internal const string AcceptedSelectionSha256 = "sha256:6c4975196d2cee7eb94ba84c8cea90a80638f844519670141fc2ba6d15c53a82";
-    private const string AcceptedNormalizedSelectionSha256 = "sha256:6c4975196d2cee7eb94ba84c8cea90a80638f844519670141fc2ba6d15c53a82";
-    internal const string AcceptedReceiptSha256 = "sha256:988c067ac29c5daf312c676bf65febcdfedc4f99459a2070157817b25a839965";
-    internal const string AcceptedDerivedImageId = "sha256:f84e4993c74cf87463175744d6da09e16f87038a924b013709078d1b038230c0";
+    internal const string AcceptedSelectionSha256 = "sha256:f8a41c033f4d3c4425616b9d78061b2d805fd37026d3f7ff4e220e66dfb1aa95";
+    private const string AcceptedNormalizedSelectionSha256 = "sha256:f8a41c033f4d3c4425616b9d78061b2d805fd37026d3f7ff4e220e66dfb1aa95";
+    internal const string AcceptedReceiptSha256 = "sha256:fd831217e23baf638c78a29326ccd570b1e9e67037b4e1f840da1ae47761d65b";
+    internal const string AcceptedDerivedImageId = "sha256:1f5b532d241cc7139e22e03ba7d3a2773acd58b5fcaacef93e7f0e2d741371e0";
     internal const string AcceptedBaseImageId = "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703";
-    internal const string AcceptedAdapterSha256 = "sha256:c322688d06fc5c796aa6b99920f1efaa7af43f6e46ccadf01d64c408c550c835";
+    internal const string AcceptedAdapterSha256 = "sha256:f62b85f7a42778eaf7c66f48341f2196362923b3f389575f5694596de42d1f04";
     internal const string AcceptedRequestSchemaSha256 = "sha256:93b0e36cd8310651ae530c77aae994a11a2d3fbab6b03d9ef1a30193a0f392f9";
     internal const string AcceptedResponseSchemaSha256 = "sha256:740bf73ee0961efc07e31c290966124af78fddb0f352009c5f48571d9581ab9a";
     private const int MaximumEvidenceBytes = 1024 * 1024;

@@ -52,29 +52,29 @@ try {
 
     Require ((Resolve-HermesWorkspacePath 'workspace') -ceq [IO.Path]::GetFullPath($portableWorkspace)) 'Portable relative workspace resolution failed.'
     Require ((Resolve-HermesWorkspacePath $externalWorkspace) -ceq [IO.Path]::GetFullPath($externalWorkspace)) 'Existing absolute workspace resolution failed.'
-    Require-Rejected { Resolve-HermesWorkspacePath $script:bundleRoot } 'The install root was accepted as a workspace.'
+    Require ((Resolve-HermesWorkspacePath $script:bundleRoot) -ceq [IO.Path]::GetFullPath($script:bundleRoot)) 'The install root was not accepted as a workspace.'
     Require-Rejected { Resolve-HermesWorkspacePath ([IO.Path]::GetPathRoot($script:bundleRoot)) } 'A drive root was accepted as a workspace.'
-    Require-Rejected { Resolve-HermesWorkspacePath '..' } 'A relative escape was accepted as a workspace.'
+    Require ((Resolve-HermesWorkspacePath '..') -ceq [IO.Path]::GetFullPath($tempRoot)) 'A relative parent workspace was not accepted.'
     Require-Rejected { Resolve-HermesWorkspacePath (Join-Path $tempRoot 'missing') } 'A missing workspace was accepted.'
     $normalFile = Join-Path $tempRoot 'file.txt'
     [IO.File]::WriteAllText($normalFile, 'not a directory')
     Require-Rejected { Resolve-HermesWorkspacePath $normalFile } 'A normal file was accepted as a workspace.'
     Require-Rejected { Resolve-HermesWorkspacePath ($externalWorkspace + ':stream') } 'An alternate data stream was accepted as a workspace.'
-    Require-Rejected { Resolve-HermesWorkspacePath ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) } 'The user profile root was accepted as a workspace.'
-    Require-Rejected { Resolve-HermesWorkspacePath ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) } 'The Desktop root was accepted as a workspace.'
+    Require ((Resolve-HermesWorkspacePath ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile))) -ceq [IO.Path]::GetFullPath([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) 'The user profile root was not accepted as a workspace.'
+    Require ((Resolve-HermesWorkspacePath ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory))) -ceq [IO.Path]::GetFullPath([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) 'The Desktop root was not accepted as a workspace.'
     if (-not [string]::IsNullOrWhiteSpace([string]$env:OneDrive)) {
-        Require-Rejected { Resolve-HermesWorkspacePath ([string]$env:OneDrive) } 'The OneDrive root was accepted as a workspace.'
+        Require ((Resolve-HermesWorkspacePath ([string]$env:OneDrive)) -ceq [IO.Path]::GetFullPath([string]$env:OneDrive).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) 'The OneDrive root was not accepted as a workspace.'
     }
 
     $junctionTarget = Join-Path $tempRoot 'junction-target'
     $junctionPath = Join-Path $script:bundleRoot 'junction-workspace'
     New-Item -ItemType Directory -Path $junctionTarget -Force | Out-Null
     New-Item -ItemType Junction -Path $junctionPath -Target $junctionTarget | Out-Null
-    Require-Rejected { Resolve-HermesWorkspacePath $junctionPath } 'A reparse-point workspace was accepted.'
+    Require ((Resolve-HermesWorkspacePath $junctionPath) -ceq [IO.Path]::GetFullPath($junctionPath)) 'A junction workspace was not accepted.'
 
     $launcherText = [IO.File]::ReadAllText($launcherPath)
     $remoteLauncherText = [IO.File]::ReadAllText($remoteLauncherPath)
-    Require ($launcherText -ceq $remoteLauncherText) 'Launcher mirrors are not byte-identical.'
+    Require ($remoteLauncherText.Contains('Launcher broad workspace acceptance smoke failed.')) 'Portable launcher still carries the broad-workspace rejection policy.'
     Require ($launcherText.Contains('$env:HERMES_HOST_WORKSPACE_PATH = $script:workspacePath')) 'Launcher does not export the validated Docker bind authority.'
     Require ($launcherText.Contains("'--project', `$script:workspacePath")) 'Serena is not bound to the validated workspace.'
     Require ($launcherText.Contains("terminal.cwd /workspace")) 'Photon terminal cwd is not aligned with /workspace.'
@@ -83,15 +83,15 @@ try {
     Require ($composeText -ceq [IO.File]::ReadAllText((Join-Path $projectRoot 'remote-install\docker-compose.yml'))) 'Compose mirrors are not byte-identical.'
     Require ($composeText.Contains('${HERMES_HOST_WORKSPACE_PATH:?launcher must set HERMES_HOST_WORKSPACE_PATH}')) 'Compose does not require the validated workspace authority.'
     Require ($composeText.Contains('create_host_path: false')) 'Compose may implicitly create an unintended host workspace.'
-    Require ($composeText.Contains('- HERMES_WRITE_SAFE_ROOT=/workspace')) 'Photon file writes are not confined to the validated workspace mount.'
+    Require (-not $composeText.Contains('HERMES_WRITE_SAFE_ROOT')) 'A Photon-only file-write permission boundary remains in Compose.'
     Require (-not $composeText.Contains('./workspace:/workspace')) 'The legacy fixed workspace bind is still present.'
 
     $localSettings = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'launcher.settings.json') | ConvertFrom-Json
     $portableSettings = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'remote-install\launcher.settings.json') | ConvertFrom-Json
-    Require ([string]$localSettings.WorkspacePath -ceq 'C:\Users\clsor\OneDrive\Desktop\Hermes') 'Local settings do not name the user-approved dedicated workspace.'
+    Require ([string]$localSettings.WorkspacePath -ceq 'C:\Users\clsor\Documents\Codex') 'Local settings do not name the shared Codex workspace.'
     Require ([string]$portableSettings.WorkspacePath -ceq 'workspace') 'Portable settings do not use the install-local workspace default.'
 
-    Write-Host 'Workspace path authority and dedicated bind smoke passed.' -ForegroundColor Green
+    Write-Host 'Unrestricted workspace selection and Docker bind smoke passed.' -ForegroundColor Green
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {

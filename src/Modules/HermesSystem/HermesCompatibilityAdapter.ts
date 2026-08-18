@@ -6,7 +6,7 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 export type HermesRuntimeIdentity = {
   protocolVersion: 1
   observedAtUtc: string | null
-  containerName: 'hermes'
+  containerName: 'photon'
   imageReference: string | null
   imageId: string
   repoDigest: string | null
@@ -35,13 +35,13 @@ function cleanString(value: unknown, pattern: RegExp, maximumLength: number) {
 
 export function normalizeRuntimeIdentity(value: unknown): HermesRuntimeIdentity | null {
   const raw = object(value)
-  if (raw.protocolVersion !== 1 || raw.containerName !== 'hermes') return null
+  if (raw.protocolVersion !== 1 || raw.containerName !== 'photon') return null
   const imageId = cleanString(raw.imageId, /^sha256:[a-f0-9]{64}$/i, 71)
   if (!imageId) return null
   return {
     protocolVersion: 1,
     observedAtUtc: cleanString(raw.observedAtUtc, /^\d{4}-\d{2}-\d{2}T[^\s]{1,40}$/i, 64),
-    containerName: 'hermes',
+    containerName: 'photon',
     imageReference: cleanString(raw.imageReference, /^[a-z0-9./:_-]+$/i, 256),
     imageId,
     repoDigest: cleanString(raw.repoDigest, /^nousresearch\/hermes-agent@sha256:[a-f0-9]{64}$/i, 110),

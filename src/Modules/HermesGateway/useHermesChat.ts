@@ -16,6 +16,7 @@ import { hermesSessionApi, storedMessageText } from '../HermesSessions/HermesSes
 import {
   effectiveHermesReasoningEffort,
   hermesModelAdapter,
+  HERMES_DEFAULT_MODEL_CHANGED_EVENT,
   hermesReasoningControlForSelection,
 } from '../HermesSettings/HermesModelAdapter'
 import type {
@@ -158,6 +159,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
   const [loadingSession, setLoadingSession] = useState(false)
   const [modelCatalog, setModelCatalog] = useState<HermesModelCatalog | null>(null)
   const [modelSelection, setModelSelection] = useState<HermesModelSelection | null>(null)
+  const [defaultModelSelection, setDefaultModelSelection] = useState<HermesModelSelection | null>(null)
   const [modelLoading, setModelLoading] = useState(false)
   const [modelSwitching, setModelSwitching] = useState(false)
   const [modelSwitchPending, setModelSwitchPending] = useState(false)
@@ -221,7 +223,12 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     const generation = modelLoadGeneration.current.begin()
     setModelLoading(true)
     try {
-      const catalog = await hermesModelAdapter.options(targetSessionId, refresh, reasoningSelection)
+      const [catalog, defaultCatalog] = await Promise.all([
+        hermesModelAdapter.options(targetSessionId, refresh, reasoningSelection),
+        targetSessionId
+          ? hermesModelAdapter.options(undefined, refresh)
+          : Promise.resolve(null),
+      ])
       if (!modelLoadGeneration.current.isCurrent(generation)) return
       setModelCatalog(catalog)
       const catalogSelection = catalog.currentModel && catalog.currentProvider
@@ -233,6 +240,10 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
         reasoningSelection,
         Boolean(targetSessionId),
       ))
+      const globalCatalog = defaultCatalog ?? catalog
+      setDefaultModelSelection(globalCatalog.currentModel && globalCatalog.currentProvider
+        ? { model: globalCatalog.currentModel, provider: globalCatalog.currentProvider }
+        : null)
     } catch (reason) {
       if (!modelLoadGeneration.current.isCurrent(generation)) return
       setError(reason instanceof Error ? reason.message : 'Could not load Hermes model options.')
@@ -240,6 +251,26 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
       if (modelLoadGeneration.current.isCurrent(generation)) setModelLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (connection !== 'open') return
+    const synchronize = () => {
+      if (!sessionOpening.current) void loadModelCatalog(true, sessionId.current ?? undefined, modelSelectionRef.current ?? undefined)
+    }
+    const synchronizeWhenVisible = () => {
+      if (document.visibilityState === 'visible') synchronize()
+    }
+    window.addEventListener('focus', synchronize)
+    window.addEventListener(HERMES_DEFAULT_MODEL_CHANGED_EVENT, synchronize)
+    document.addEventListener('visibilitychange', synchronizeWhenVisible)
+    const interval = window.setInterval(synchronize, 5_000)
+    return () => {
+      window.removeEventListener('focus', synchronize)
+      window.removeEventListener(HERMES_DEFAULT_MODEL_CHANGED_EVENT, synchronize)
+      document.removeEventListener('visibilitychange', synchronizeWhenVisible)
+      window.clearInterval(interval)
+    }
+  }, [connection, loadModelCatalog])
 
   const syncApprovalMode = useCallback(async () => {
     if (hermesGateway.connectionState !== 'open') return
@@ -997,6 +1028,7 @@ export function useHermesChat(options: { onDesktopUiAction?: (action: HermesDesk
     loadingSession,
     messages,
     modelCatalog,
+    defaultModelSelection,
     modelLoading,
     modelSelection,
     selectedModelVisionCapability,

@@ -1,6 +1,7 @@
 export const NATIVE_TERMINAL_ADAPTER_VERSION = 1
 
 export type NativeTerminalConnectionState = 'browser' | 'connecting' | 'open' | 'closed' | 'error'
+export type NativeTerminalCommandRequest = { nonce: number; command: string }
 
 export type NativeTerminalFrame = {
   type: 'ready' | 'output' | 'exit' | 'error' | 'pong' | 'unknown'

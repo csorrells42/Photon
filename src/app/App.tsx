@@ -11,6 +11,7 @@ import {
   Files,
   GitBranch,
   Globe2,
+  Gauge,
   LayoutPanelLeft,
   LifeBuoy,
   MapPinned,
@@ -46,6 +47,8 @@ import { desktopDocumentClient } from '../Modules/Workspace/DesktopDocumentClien
 import { BrowserWorkspace, HERMES_HELP_BROWSER_REQUEST } from '../Modules/BrowserWorkspace/BrowserWorkspace'
 import type { BrowserOpenRequest } from '../Modules/BrowserWorkspace/BrowserWorkspace'
 import { desktopBrowserClient } from '../Modules/BrowserWorkspace/DesktopBrowserClient'
+import { HermesModelManagementWorkspace } from '../Modules/HermesModelManagement'
+import type { NativeTerminalCommandRequest } from '../Modules/NativeTerminal/DesktopHostTerminalClient'
 import type { HermesDesktopUiAction } from '../Modules/HermesGateway/HermesDesktopUiAdapter'
 import { workbenchFileStatus } from './WorkbenchFileStatus'
 import { DeferredAppResourceDisposal } from './DeferredAppResourceDisposal'
@@ -87,7 +90,7 @@ import {
 } from './WorkbenchMenuCommands'
 
 type Layout = 'code' | 'chat' | 'split'
-type LeftPanel = 'explorer' | 'search' | 'containers' | 'cad' | 'sessions' | 'sourceControl' | 'run' | 'usage' | 'browser' | 'maps' | 'system'
+type LeftPanel = 'explorer' | 'search' | 'containers' | 'cad' | 'sessions' | 'sourceControl' | 'run' | 'usage' | 'browser' | 'models' | 'maps' | 'system'
 type AgentPanelId = 'hermes' | 'codex'
 type ShellMenu = 'file' | 'edit' | 'view' | 'help'
 
@@ -215,6 +218,7 @@ export function App() {
   const [layout, setLayout] = useState<Layout>('code')
   const [leftPanel, setLeftPanel] = useState<LeftPanel>('explorer')
   const [terminalOpen, setTerminalOpen] = useState(true)
+  const [terminalCommandRequest, setTerminalCommandRequest] = useState<NativeTerminalCommandRequest | null>(null)
   const [sessionRequest, setSessionRequest] = useState<SessionOpenRequest | null>(null)
   const [activeSession, setActiveSession] = useState<HermesSession | null>(null)
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState<string | null>(null)
@@ -222,6 +226,7 @@ export function App() {
   const [workspaceSelection, setWorkspaceSelection] = useState<{ path: string; line: number; column: number; nonce: number } | null>(null)
   const [sourceControlPath, setSourceControlPath] = useState<string | null>('.')
   const [accountRequest, setAccountRequest] = useState(0)
+  const [connectionsRequest, setConnectionsRequest] = useState(0)
   const [browserOpenRequests, setBrowserOpenRequests] = useState<BrowserOpenRequest[]>([])
   const [uiScale, setUiScale] = useState(loadUiScale)
   const [openMenu, setOpenMenu] = useState<ShellMenu | null>(null)
@@ -359,6 +364,25 @@ export function App() {
     setOpenMenu(null)
   }, [])
 
+  const openHermesModels = useCallback(() => {
+    setLayout('code')
+    setLeftPanel('models')
+    setOpenMenu(null)
+  }, [])
+
+  const runHermesExternalSetup = useCallback((command: string) => {
+    setLayout('code')
+    setLeftPanel('explorer')
+    setTerminalOpen(true)
+    setTerminalCommandRequest({ nonce: Date.now(), command })
+  }, [])
+
+  const openHermesConnections = useCallback(() => {
+    setLayout('code')
+    setLeftPanel('system')
+    setConnectionsRequest((current) => current + 1)
+  }, [])
+
   useEffect(() => {
     const openBrowserPage = (event: Event) => {
       const detail = (event as CustomEvent<unknown>).detail
@@ -399,13 +423,14 @@ export function App() {
     { label: 'Show Source Control', detail: 'View', run: () => { setLayout('code'); setLeftPanel('sourceControl') } },
     { label: 'Show Run and Debug', detail: 'View', run: () => { setLayout('code'); setLeftPanel('run') } },
     { label: 'Show Usage Intelligence', detail: 'View', run: () => { setLayout('code'); setLeftPanel('usage') } },
+    { label: 'Manage Hermes Providers and Models', detail: 'Photon', run: openHermesModels },
     { label: 'Open Browser', detail: 'View', run: () => { setLayout('code'); setLeftPanel('browser') } },
     { label: 'Hermes Help', detail: 'Help', run: openHermesHelp },
     { label: 'Show Settings', detail: 'View', run: () => { setLayout('code'); setLeftPanel('system') } },
     { label: `Focus ${assistantName}`, detail: 'Layout', run: () => setLayout('chat') },
     { label: `Show ${assistantName} and Codex`, detail: 'Layout', run: () => setLayout('split') },
     { label: terminalVisible ? 'Hide Terminal' : 'Show Terminal', detail: 'View', run: toggleTerminal },
-  ], [assistantName, fileCommandsAvailable, openHermesHelp, openPhotonCad, terminalVisible])
+  ], [assistantName, fileCommandsAvailable, openHermesHelp, openHermesModels, openPhotonCad, terminalVisible])
   const filteredCommandItems = commandItems.filter((command) => (
     (fileCommandsAvailable || command.detail !== 'File' || command.label.startsWith('Open File'))
     && `${command.label} ${command.detail}`.toLocaleLowerCase().includes(commandQuery.trim().toLocaleLowerCase())
@@ -701,6 +726,7 @@ export function App() {
           <button aria-label="Photon CAD" className={leftPanel === 'cad' ? 'active' : ''} onClick={openPhotonCad}><DraftingCompass size={22} /></button>
           <button aria-label={`${assistantName} sessions`} className={leftPanel === 'sessions' ? 'active' : ''} onClick={() => setLeftPanel('sessions')}><Bot size={22} /></button>
           <button aria-label="Usage intelligence" className={leftPanel === 'usage' ? 'active' : ''} onClick={() => setLeftPanel('usage')}><ChartNoAxesCombined size={22} /></button>
+          <button aria-label="Hermes models and providers" className={leftPanel === 'models' ? 'active' : ''} title="Hermes providers, models, accounts, and routing inside Photon" onClick={openHermesModels}><Gauge size={22} /></button>
           <button aria-label="Browser" className={leftPanel === 'browser' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('browser') }}><Globe2 size={22} /></button>
           <button aria-label="Google Maps" className={leftPanel === 'maps' ? 'active' : ''} onClick={() => { setLayout('code'); setLeftPanel('maps') }}><MapPinned size={22} /></button>
         </div>
@@ -742,7 +768,7 @@ export function App() {
         />
       ) : null}
 
-      {layout !== 'chat' && (leftPanel === 'system' ? <HermesSystemWorkspace accountRequest={accountRequest} /> : leftPanel === 'usage' ? <UsageIntelligenceDashboard /> : (leftPanel === 'browser' || leftPanel === 'maps') ? <BrowserWorkspace key={leftPanel} mode={leftPanel} openRequest={browserOpenRequests[0] ?? null} onOpenRequestHandled={(nonce) => setBrowserOpenRequests((current) => current.filter((request) => request.nonce !== nonce))} /> : leftPanel === 'sourceControl' ? sourceControlPath ? <SourceControlWorkspace workspaceRelativePath={sourceControlPath} /> : <aside className="source-control-closed"><GitBranch size={28} /><strong>No Git repository open</strong><button onClick={() => void openGitRepository()}>Open Git Repository…</button></aside> : leftPanel === 'search' ? <>
+      {layout !== 'chat' && (leftPanel === 'system' ? <HermesSystemWorkspace accountRequest={accountRequest} connectionsRequest={connectionsRequest} /> : leftPanel === 'models' ? <HermesModelManagementWorkspace onRunExternalSetup={runHermesExternalSetup} onOpenConnections={openHermesConnections} /> : leftPanel === 'usage' ? <UsageIntelligenceDashboard /> : (leftPanel === 'browser' || leftPanel === 'maps') ? <BrowserWorkspace key={leftPanel} mode={leftPanel === 'maps' ? 'maps' : 'browser'} openRequest={browserOpenRequests[0] ?? null} onOpenRequestHandled={(nonce) => setBrowserOpenRequests((current) => current.filter((request) => request.nonce !== nonce))} /> : leftPanel === 'sourceControl' ? sourceControlPath ? <SourceControlWorkspace workspaceRelativePath={sourceControlPath} /> : <aside className="source-control-closed"><GitBranch size={28} /><strong>No Git repository open</strong><button onClick={() => void openGitRepository()}>Open Git Repository…</button></aside> : leftPanel === 'search' ? <>
         <WorkspaceExplorer selectedPath={selectedWorkspacePath} onOpen={(entry) => { setWorkspaceSelection(null); setSelectedWorkspacePath(entry.path) }} />
         <WorkspaceSearchPanel controller={workspaceSearchController} />
       </> : leftPanel === 'containers' ? <>
@@ -760,7 +786,7 @@ export function App() {
               onSignIn={openWorkbenchSignIn}
               onOpen={(session) => setSessionRequest({ nonce: Date.now(), session })}
             />}
-        <WorkspaceEditor path={selectedWorkspacePath} selection={workspaceSelection} onClose={() => { setWorkspaceSelection(null); setSelectedWorkspacePath(null) }} buildResult={developerBuild.result} languageToolingResult={languageToolingResult} onOpenWorkspacePath={(path) => { setWorkspaceSelection(null); setSelectedWorkspacePath(path) }} />
+        <WorkspaceEditor path={selectedWorkspacePath} selection={workspaceSelection} terminalCommandRequest={terminalCommandRequest} onTerminalCommandHandled={(nonce) => setTerminalCommandRequest((current) => current?.nonce === nonce ? null : current)} onClose={() => { setWorkspaceSelection(null); setSelectedWorkspacePath(null) }} buildResult={developerBuild.result} languageToolingResult={languageToolingResult} onOpenWorkspacePath={(path) => { setWorkspaceSelection(null); setSelectedWorkspacePath(path) }} />
       </>)}
       <PhotonCadDesktopWorkspace
         projectActionsAvailable={photonCadProjectsAvailable}

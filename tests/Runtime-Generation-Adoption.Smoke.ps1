@@ -121,7 +121,7 @@ function Write-LegacySelfCommit {
     $identity = [ordered]@{
         protocolVersion = 1
         observedAtUtc = '2026-08-10T16:49:02Z'
-        containerName = 'hermes'
+        containerName = 'photon'
         imageReference = 'nousresearch/hermes-agent@' + $global:adoptionBeforeId
         imageId = $global:adoptionBeforeId
         repoDigest = 'nousresearch/hermes-agent@' + $global:adoptionBeforeId

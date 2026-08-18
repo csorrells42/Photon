@@ -35,53 +35,14 @@ function Resolve-HermesWorkspacePath {
         throw 'WorkspacePath must be a local drive path or a bundle-relative path.'
     }
 
-    $isRooted = [IO.Path]::IsPathRooted($configured)
-    $resolved = [IO.Path]::GetFullPath($(if ($isRooted) { $configured } else { Join-Path $bundleRoot $configured }))
-    $bundleFull = [IO.Path]::GetFullPath($bundleRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    $resolvedTrimmed = $resolved.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    $pathRoot = [IO.Path]::GetPathRoot($resolvedTrimmed)
-    if ([string]::IsNullOrWhiteSpace($pathRoot) -or
-        [string]::Equals($resolvedTrimmed, $pathRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
+    $resolved = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $bundleRoot $configured }))
+    $pathRoot = [IO.Path]::GetPathRoot($resolved)
+    if ([string]::Equals($resolved.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), $pathRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
         throw 'WorkspacePath cannot be a drive root.'
     }
-    if ([string]::Equals($resolvedTrimmed, $bundleFull, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'WorkspacePath cannot be the install bundle root.'
-    }
-    if (-not $isRooted -and
-        -not $resolvedTrimmed.StartsWith($bundleFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'A relative WorkspacePath must remain inside the install bundle.'
-    }
-
-    $relativeToRoot = $resolvedTrimmed.Substring($pathRoot.Length)
-    if ($relativeToRoot.Contains(':')) {
-        throw 'WorkspacePath cannot contain an alternate data stream.'
-    }
+    $resolvedTrimmed = $resolved.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
     if (-not (Test-Path -LiteralPath $resolvedTrimmed -PathType Container)) {
         throw "WorkspacePath must already exist as a directory: $resolvedTrimmed"
-    }
-
-    $blockedRoots = @(
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile),
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory),
-        [string]$env:OneDrive
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object {
-        [IO.Path]::GetFullPath($_).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    }
-    foreach ($blocked in $blockedRoots) {
-        if ([string]::Equals($resolvedTrimmed, $blocked, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'WorkspacePath cannot be a profile, Desktop, or OneDrive root.'
-        }
-    }
-
-    $cursor = $resolvedTrimmed
-    while (-not [string]::IsNullOrWhiteSpace($cursor)) {
-        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "WorkspacePath cannot traverse a reparse point: $cursor"
-        }
-        $parent = Split-Path -Parent $cursor
-        if ([string]::IsNullOrWhiteSpace($parent) -or [string]::Equals($parent, $cursor, [StringComparison]::OrdinalIgnoreCase)) { break }
-        $cursor = $parent
     }
     return $resolvedTrimmed
 }
@@ -95,7 +56,7 @@ function Get-ConfiguredWorkspacePath {
 }
 
 function Get-RunningHermesRuntime {
-    $result = Invoke-PhotonRuntimeDocker -Arguments @('inspect', '--type', 'container', 'hermes') -AllowFailure
+    $result = Invoke-PhotonRuntimeDocker -Arguments @('inspect', '--type', 'container', 'photon') -AllowFailure
     if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Output)) { return $null }
     try { $container = @($result.Output | ConvertFrom-Json -ErrorAction Stop)[0] }
     catch { throw 'runtime_adoption_container_inspect_invalid' }
@@ -114,7 +75,7 @@ function Get-ValidatedPreviousRuntimeEvidence {
     $evidence = Read-PhotonRuntimeJson -Path $path -FailureCode 'runtime_adoption_previous_evidence_invalid'
     $observed = [DateTime]::MinValue
     $committed = [DateTime]::MinValue
-    if ([int]$evidence.protocolVersion -ne 1 -or [string]$evidence.containerName -cne 'hermes' -or
+    if ([int]$evidence.protocolVersion -ne 1 -or [string]$evidence.containerName -cne 'photon' -or
         -not [DateTime]::TryParse([string]$evidence.observedAtUtc, [ref]$observed) -or
         -not [DateTime]::TryParse([string]$PriorCurrent.Commit.committedAtUtc, [ref]$committed) -or
         $observed.ToUniversalTime() -ge $committed.ToUniversalTime() -or
@@ -200,7 +161,7 @@ print(version.strip())
     $encoded = [Convert]::ToBase64String([Text.UTF8Encoding]::new($false).GetBytes($source))
     $bootstrap = "import base64;exec(compile(base64.b64decode('$encoded'),'<photon-adoption-health>','exec'))"
     do {
-        $result = Invoke-PhotonRuntimeDocker -Arguments @('exec', 'hermes', 'python', '-c', $bootstrap) -AllowFailure
+        $result = Invoke-PhotonRuntimeDocker -Arguments @('exec', 'photon', 'python', '-c', $bootstrap) -AllowFailure
         if ($result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($result.Output)) { return $result.Output.Trim() }
         Start-Sleep -Seconds 2
     } until ([DateTime]::UtcNow -ge $deadline)

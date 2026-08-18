@@ -18,7 +18,7 @@ hermes-bridge interrupt
 ```
 
 - `health` calls `GET /health` without loading settings and without an Authorization header.
-- `status` loads `%LOCALAPPDATA%\hermes\conversation-bridge.json` and calls authenticated `GET /v1/session`.
+- `status` loads `%LOCALAPPDATA%\HermesWorkbench\conversation-bridge.json` and calls authenticated `GET /v1/session`.
 - `send` requires an explicit `--text` argument and calls authenticated `POST /v1/turns` with `{ "text": "..." }`. It never reads stdin or submits a default message.
 - `interrupt` calls authenticated `POST /v1/interrupt` with no message body.
 
@@ -56,7 +56,7 @@ Generated `bin/` and `obj/` files remain inside `src/Tools/HermesBridgeClient/**
 
 ### Bridge-code handling
 
-- Authenticated commands load only `%LOCALAPPDATA%\hermes\conversation-bridge.json`.
+- Authenticated commands load only `%LOCALAPPDATA%\HermesWorkbench\conversation-bridge.json`.
 - Settings are bounded to 16 KiB, parsed with comments/trailing commas disabled and JSON depth 8, and require port 1024–65535 plus an exact 64-character hexadecimal authentication code.
 - Settings input bytes are cleared after parsing.
 - The authentication code is held behind `BridgeAuthentication`; it has no public getter and is never included in a result DTO.

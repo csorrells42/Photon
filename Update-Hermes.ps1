@@ -48,7 +48,7 @@ function Get-ImageMetadata {
 }
 
 function Get-RunningImageMetadata {
-    $json = (& docker inspect hermes 2>$null) -join [Environment]::NewLine
+    $json = (& docker inspect photon 2>$null) -join [Environment]::NewLine
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
     $container = @($json | ConvertFrom-Json)[0]
     return Get-ImageMetadata -Reference ([string]$container.Image)
@@ -107,7 +107,7 @@ function Write-UpdateRecord {
 function Write-HermesRuntimeIdentity {
     New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
     try {
-        $containerJson = (& docker inspect hermes 2>$null) -join [Environment]::NewLine
+        $containerJson = (& docker inspect photon 2>$null) -join [Environment]::NewLine
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerJson)) { return }
         $container = @($containerJson | ConvertFrom-Json)[0]
         $imageId = [string]$container.Image
@@ -116,7 +116,7 @@ function Write-HermesRuntimeIdentity {
         $identity = [ordered]@{
             protocolVersion = 1
             observedAtUtc = [DateTime]::UtcNow.ToString('o')
-            containerName = 'hermes'
+            containerName = 'photon'
             imageReference = [string]$container.Config.Image
             imageId = $imageId
             repoDigest = if ($image) { [string]$image.Digest } else { $null }

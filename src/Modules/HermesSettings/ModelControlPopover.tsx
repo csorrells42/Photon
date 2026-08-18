@@ -26,6 +26,7 @@ type Props = {
   approvalMode: HermesApprovalMode
   approvalModeSaving: boolean
   catalog: HermesModelCatalog | null
+  defaultSelection: HermesModelSelection | null
   loading: boolean
   onCancelConfirmation: () => void
   onClose: () => void
@@ -53,6 +54,7 @@ export function ModelControlPopover({
   approvalMode,
   approvalModeSaving,
   catalog,
+  defaultSelection,
   loading,
   onCancelConfirmation,
   onClose,
@@ -83,6 +85,8 @@ export function ModelControlPopover({
       return models.length ? [{ provider, models }] : []
     })
   }, [catalog, query])
+  const sessionOverride = Boolean(selection && defaultSelection
+    && (selection.model !== defaultSelection.model || selection.provider !== defaultSelection.provider))
 
   function choose(provider: string, model: string) {
     void onSelect({ provider, model }).then((switched) => {
@@ -109,6 +113,12 @@ export function ModelControlPopover({
           <button type="button" aria-label="Close model controls" onClick={onClose}><X size={14} /></button>
         </div>
       </header>
+
+      <div className="model-truth-summary">
+        <span><small>Default for new conversations</small><strong>{defaultSelection ? `${defaultSelection.provider} / ${shortModelName(defaultSelection.model)}` : 'Not reported'}</strong></span>
+        <span><small>This conversation</small><strong>{selection ? `${selection.provider} / ${shortModelName(selection.model)}` : 'Not started'}</strong></span>
+        {sessionOverride ? <p><AlertTriangle size={12} /> This conversation has a model override. Changing the global default does not rewrite an existing Hermes session.</p> : null}
+      </div>
 
       {pendingConfirmation ? (
         <div className="model-confirmation">

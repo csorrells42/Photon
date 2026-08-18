@@ -19,7 +19,7 @@ public sealed class AssistantBusRuntime : IAsyncDisposable
 
     public static string DefaultDataRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "hermes",
+        "HermesWorkbench",
         "assistant-conversation-bus");
 
     public static async Task<AssistantBusRuntime> OpenAsync(

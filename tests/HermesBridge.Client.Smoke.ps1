@@ -3,7 +3,7 @@ param([int]$TimeoutSec = 5)
 
 $ErrorActionPreference = 'Stop'
 $endpoint = 'http://127.0.0.1:8972'
-$settingsPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'hermes\conversation-bridge.json'
+$settingsPath = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'HermesWorkbench\conversation-bridge.json'
 $passed = 0
 $skipped = 0
 

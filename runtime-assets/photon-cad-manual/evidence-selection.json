@@ -1,20 +1,20 @@
 {
   "schema": "photon.cad.industrial.evidence-selection/v1",
-  "selectedUtc": "2026-08-12T16:13:36.6305325\u002B00:00",
-  "runId": "3f4a16ac96de47b3bf59b7be8279f8a7",
+  "selectedUtc": "2026-08-15T22:07:42.6921283\u002B00:00",
+  "runId": "2e740804b0044a61839e7867d1484e03",
   "receipt": {
-    "path": "runs/receipt-3f4a16ac96de47b3bf59b7be8279f8a7.json",
-    "sha256": "sha256:988c067ac29c5daf312c676bf65febcdfedc4f99459a2070157817b25a839965",
+    "path": "runs/receipt-2e740804b0044a61839e7867d1484e03.json",
+    "sha256": "sha256:fd831217e23baf638c78a29326ccd570b1e9e67037b4e1f840da1ae47761d65b",
     "immutable": true
   },
   "report": {
     "path": "IMPLEMENTATION-REPORT.md",
-    "sha256": "sha256:e9c4fd782e6c78be70d13bb9428a4bc9df03f6338e875be4fe290e1b8571cd8f"
+    "sha256": "sha256:e675c8b13623e43a2220ebda65aab0c01ed27e7d0d41f723aaf2eecdb9a6cd8f"
   },
   "baseImageId": "sha256:33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703",
-  "derivedImageId": "sha256:f84e4993c74cf87463175744d6da09e16f87038a924b013709078d1b038230c0",
+  "derivedImageId": "sha256:1f5b532d241cc7139e22e03ba7d3a2773acd58b5fcaacef93e7f0e2d741371e0",
   "friendlyTag": "photon-cad-industrial:0.1.0-b123dmcp-0.3.80-bdw0.2.0",
   "friendlyTagVerified": true,
-  "previousFriendlyImageId": "sha256:a1d8400b8a5db46173915dd9964530cf79453de0cedf788e6f4cc3acd99a56eb",
+  "previousFriendlyImageId": null,
   "scenarioCount": 23
 }

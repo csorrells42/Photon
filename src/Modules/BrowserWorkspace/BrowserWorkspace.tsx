@@ -14,7 +14,6 @@ export const HERMES_HELP_BROWSER_REQUEST = Object.freeze({
   url: 'https://hermes-agent.nousresearch.com/docs/',
   bookmark: true,
 })
-
 const googleMapsTravelModes = new Set<GoogleMapsTravelMode>(['driving', 'walking', 'bicycling', 'transit'])
 export const browserBookmarksStorageKey = 'phos.browser.bookmarks.v1'
 const maximumBrowserBookmarks = 256

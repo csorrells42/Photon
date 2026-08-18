@@ -89,7 +89,7 @@ else {
     if (-not $dockerReady) { Add-Check 'Docker' 'ERROR' 'Docker Desktop is installed but its engine is unavailable.' }
     else {
         Add-Check 'Docker' 'OK' 'Docker engine is available.'
-        $containerOutput = @(& $docker.Source inspect --format '{{.State.Status}}|{{.Image}}' hermes 2>$null)
+        $containerOutput = @(& $docker.Source inspect --format '{{.State.Status}}|{{.Image}}' photon 2>$null)
         $inspectExitCode = $LASTEXITCODE
         $containerLine = @($containerOutput | Select-Object -First 1)[0]
         if ($inspectExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($containerLine)) {
@@ -98,7 +98,7 @@ else {
             $containerParts = [string]$containerLine -split '\|', 2
             $containerImageId = if ($containerParts.Count -gt 1) { $containerParts[1] } else { $null }
             $containerState = $containerParts[0]
-            Add-Check 'Hermes container' $(if ($containerState -eq 'running') { 'OK' } else { 'ERROR' }) "Container state: $containerState."
+            Add-Check 'Photon container' $(if ($containerState -eq 'running') { 'OK' } else { 'ERROR' }) "Container state: $containerState."
         }
     }
 }
@@ -107,7 +107,7 @@ if ($dockerReady -and $containerState -eq 'running') {
     $previousErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'SilentlyContinue'
-        $visionOutput = @(& $docker.Source exec hermes python -c "from tools.vision_tools import check_vision_requirements; print(check_vision_requirements())" 2>$null)
+        $visionOutput = @(& $docker.Source exec photon python -c "from tools.vision_tools import check_vision_requirements; print(check_vision_requirements())" 2>$null)
         $visionExitCode = $LASTEXITCODE
     }
     finally {
@@ -139,19 +139,19 @@ if ($dockerReady -and $containerState -eq 'running') {
     $previousErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $mcpOutput = @(& $docker.Source exec hermes hermes mcp test photon_docker_gateway 2>$null)
+        $mcpOutput = @(& $docker.Source exec photon hermes mcp test photon_docker_gateway 2>$null)
         $mcpExitCode = $LASTEXITCODE
         $mcpText = $mcpOutput -join [Environment]::NewLine
-        $trust = ((& $docker.Source exec hermes hermes config get mcp_servers.photon_docker_gateway.trust 2>$null) -join '').Trim()
+        $trust = ((& $docker.Source exec photon hermes config get mcp_servers.photon_docker_gateway.trust 2>$null) -join '').Trim()
     }
     finally { $ErrorActionPreference = $previousErrorAction }
-    if ($mcpExitCode -eq 0 -and $mcpText -match 'Connected' -and $mcpText -match 'Tools discovered:\s*[1-9][0-9]*' -and $trust -ceq 'untrusted') {
-        Add-Check 'Photon MCP in Hermes' 'OK' 'Hermes discovered authenticated Docker tools with approval gating enabled.'
+    if ($mcpExitCode -eq 0 -and $mcpText -match 'Connected' -and $mcpText -match 'Tools discovered:\s*[1-9][0-9]*' -and $trust -ceq 'trusted') {
+        Add-Check 'Photon MCP in Photon' 'OK' 'Photon discovered the authenticated, trusted Docker tool catalog.'
     } else {
-        Add-Check 'Photon MCP in Hermes' 'ERROR' 'Hermes could not verify the authenticated, approval-gated Docker MCP catalog.'
+        Add-Check 'Photon MCP in Photon' 'ERROR' 'Photon could not verify the authenticated, trusted Docker MCP catalog.'
     }
 } else {
-    Add-Check 'Photon MCP in Hermes' 'ERROR' 'Docker MCP readiness cannot be checked until Hermes is running.'
+    Add-Check 'Photon MCP in Photon' 'ERROR' 'Docker MCP readiness cannot be checked until Photon is running.'
 }
 
 try {
@@ -167,7 +167,7 @@ if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
 } else {
     try {
         $identity = Get-Content -Raw -LiteralPath $identityPath | ConvertFrom-Json
-        $validIdentity = $identity.protocolVersion -eq 1 -and $identity.containerName -eq 'hermes' -and [string]$identity.imageId -match '^sha256:[a-f0-9]{64}$'
+        $validIdentity = $identity.protocolVersion -eq 1 -and $identity.containerName -eq 'photon' -and [string]$identity.imageId -match '^sha256:[a-f0-9]{64}$'
         if (-not $validIdentity) { Add-Check 'Runtime identity' 'ERROR' 'runtime-identity.json has an unsupported or invalid shape.' }
         elseif ($containerImageId -and [string]$identity.imageId -cne [string]$containerImageId) { Add-Check 'Runtime identity' 'WARN' 'Recorded identity differs from the running image; rerun Launch Hermes.cmd.' }
         else { Add-Check 'Runtime identity' 'OK' ("Recorded image " + ([string]$identity.imageId).Substring(7, 12) + '...') }

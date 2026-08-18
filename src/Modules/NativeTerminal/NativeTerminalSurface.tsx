@@ -9,6 +9,7 @@ import {
   NATIVE_TERMINAL_ADAPTER_VERSION,
 } from './DesktopHostTerminalClient'
 import type { NativeTerminalConnectionState } from './DesktopHostTerminalClient'
+import type { NativeTerminalCommandRequest } from './DesktopHostTerminalClient'
 import { useAssistantDisplayName } from '../AssistantIdentity/AssistantIdentity'
 
 type RestartClient = Pick<DesktopHostTerminalClient, 'start' | 'stop'>
@@ -44,16 +45,34 @@ export function createNativeTerminalRestartController(
   }
 }
 
-export function NativeTerminalSurface() {
+export function NativeTerminalSurface({ commandRequest = null, onCommandHandled }: { commandRequest?: NativeTerminalCommandRequest | null; onCommandHandled?: (nonce: number) => void }) {
   const [assistantName] = useAssistantDisplayName()
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const clientRef = useRef<DesktopHostTerminalClient | null>(null)
   const restartRef = useRef<ReturnType<typeof createNativeTerminalRestartController> | null>(null)
+  const commandRequestRef = useRef(commandRequest)
+  const commandHandledRef = useRef(onCommandHandled)
+  const lastCommandNonceRef = useRef<number | null>(null)
   const [available, setAvailable] = useState(isNativeTerminalAvailable())
   const [connection, setConnection] = useState<NativeTerminalConnectionState>(available ? 'connecting' : 'browser')
   const [details, setDetails] = useState('Native desktop terminal')
+
+  commandRequestRef.current = commandRequest
+  commandHandledRef.current = onCommandHandled
+
+  function sendPendingCommand() {
+    const request = commandRequestRef.current
+    const client = clientRef.current
+    if (!request || !client || client.connectionState !== 'open' || lastCommandNonceRef.current === request.nonce) return
+    lastCommandNonceRef.current = request.nonce
+    client.write(`${request.command}\r`)
+    terminalRef.current?.focus()
+    commandHandledRef.current?.(request.nonce)
+  }
+
+  useEffect(() => { sendPendingCommand() }, [commandRequest])
 
   useEffect(() => {
     const ready = () => setAvailable(isNativeTerminalAvailable())
@@ -104,6 +123,7 @@ export function NativeTerminalSurface() {
       if (frame.type === 'ready') {
         setDetails(`${frame.shell ?? 'PowerShell'} · PID ${frame.processId ?? '?'} · ${frame.cwd ?? ''}`)
         terminal.focus()
+        sendPendingCommand()
       }
       if (frame.type === 'error') terminal.writeln(`\r\n\x1b[31mHermes host: ${frame.message ?? 'Terminal error'}\x1b[0m`)
       if (frame.type === 'exit') terminal.writeln(`\r\n\x1b[90m[${frame.message ?? `process exited ${frame.exitCode ?? ''}`}]\x1b[0m`)

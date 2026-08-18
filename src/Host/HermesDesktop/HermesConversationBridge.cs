@@ -25,7 +25,7 @@ internal sealed class HermesConversationBridge : IAsyncDisposable
 
     public string SettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "hermes",
+        "HermesWorkbench",
         "conversation-bridge.json");
 
     public async Task StartAsync(CancellationToken cancellationToken = default)

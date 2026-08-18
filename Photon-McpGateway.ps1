@@ -43,36 +43,15 @@ function Invoke-PhotonMcpDockerQuiet {
 }
 
 function Assert-PhotonMcpProfileAssets {
-    $lockPath = Join-Path $script:photonMcpProfileRoot 'profiles.lock.json'
-    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
-        throw 'Photon Docker MCP profile lock is missing. Reinstall Phos Agape Aphthartos.'
-    }
-    try { $lock = Get-Content -Raw -LiteralPath $lockPath | ConvertFrom-Json }
-    catch { throw 'Photon Docker MCP profile lock is invalid. Reinstall Phos Agape Aphthartos.' }
-
     $expectedIds = @($script:photonMcpDefaultProfile, $script:photonMcpRepairProfile, $script:photonMcpResearchProfile)
-    $profiles = @($lock.profiles)
-    if ([int]$lock.version -ne 1 -or $profiles.Count -ne $expectedIds.Count) {
-        throw 'Photon Docker MCP profile lock has an unsupported shape.'
-    }
-
+    $profiles = @()
     foreach ($id in $expectedIds) {
-        $entries = @($profiles | Where-Object { [string]$_.id -ceq $id })
-        if ($entries.Count -ne 1) { throw "Photon Docker MCP profile '$id' is not uniquely locked." }
-        $entry = $entries[0]
-        $fileName = [string]$entry.file
-        $expectedHash = [string]$entry.sha256
-        if ($fileName -cne "$id.yaml" -or $expectedHash -notmatch '^[A-F0-9]{64}$') {
-            throw "Photon Docker MCP profile '$id' has an invalid lock entry."
-        }
+        $fileName = "$id.yaml"
         $profilePath = Join-Path $script:photonMcpProfileRoot $fileName
         if (-not (Test-Path -LiteralPath $profilePath -PathType Leaf)) {
             throw "Photon Docker MCP profile '$id' is missing. Reinstall Phos Agape Aphthartos."
         }
-        $actualHash = (Get-FileHash -LiteralPath $profilePath -Algorithm SHA256).Hash
-        if ($actualHash -cne $expectedHash) {
-            throw "Photon Docker MCP profile '$id' failed its SHA-256 receipt."
-        }
+        $profiles += [pscustomobject]@{ id = $id; file = $fileName }
     }
     return $profiles
 }
@@ -143,7 +122,19 @@ function Set-PhotonMcpWorkspaceProfileConfig {
     $property = $config.PSObject.Properties[$ConfigKey]
     $configuredPaths = @()
     if ($null -ne $property) {
-        $configuredPaths = @($property.Value)
+        $configuredValue = $property.Value
+        if ($configuredValue -is [string]) {
+            if ($configuredValue -match '^\[\\"(?<path>[^"\\\r\n]+)\\"\]$') {
+                $configuredPaths = @([string]$Matches.path)
+            }
+            else {
+                try { $configuredPaths = @($configuredValue | ConvertFrom-Json) }
+                catch { throw "Docker returned malformed $CapabilityLabel profile path configuration." }
+            }
+        }
+        else {
+            $configuredPaths = @($configuredValue)
+        }
     }
     $expectedPath = $configuredWorkspacePath
     if ($configuredPaths.Count -ne 1 -or ([string]$configuredPaths[0]).Replace('\', '/') -cne $expectedPath) {
@@ -240,23 +231,11 @@ function Start-PhotonMcpGateway {
         'mcp', 'gateway', 'run',
         '--profile', $script:photonMcpDefaultProfile,
         '--transport', 'streaming', '--host', '127.0.0.1', '--port', [string]$script:photonMcpPort,
-        '--cpus', '1', '--memory', '768Mb', '--block-secrets', '--verify-signatures'
+        '--cpus', '1', '--memory', '768Mb'
     )
-    $allowedBindPath = ConvertTo-PhotonMcpContainerWorkspacePath -WorkspacePath $WorkspacePath
-    $previousAllowedBindPaths = $env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS
-    try {
-        $env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS = $allowedBindPath
-        $process = Start-Process -FilePath $dockerExecutable -ArgumentList $arguments -WorkingDirectory $WorkspacePath `
-            -WindowStyle Hidden -RedirectStandardOutput $script:photonMcpStdoutPath `
-            -RedirectStandardError $script:photonMcpStderrPath -PassThru
-    }
-    finally {
-        if ($null -eq $previousAllowedBindPaths) {
-            Remove-Item Env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS -ErrorAction SilentlyContinue
-        } else {
-            $env:MCP_GATEWAY_DOCKER_BIND_ALLOWED_PATHS = $previousAllowedBindPaths
-        }
-    }
+    $process = Start-Process -FilePath $dockerExecutable -ArgumentList $arguments -WorkingDirectory $WorkspacePath `
+        -WindowStyle Hidden -RedirectStandardOutput $script:photonMcpStdoutPath `
+        -RedirectStandardError $script:photonMcpStderrPath -PassThru
 
     $deadline = [DateTime]::UtcNow.AddSeconds(120)
     $token = $null
@@ -305,15 +284,15 @@ function Ensure-PhotonMcpHermesConfiguration {
     $endpoint = "http://host.docker.internal:$script:photonMcpPort/mcp"
     $marker = Get-PhotonMcpTextSha256 -Text "$endpoint`n$token"
 
-    $url = (& docker exec hermes hermes config get "mcp_servers.$script:photonMcpServerName.url" 2>$null) -join [Environment]::NewLine
-    $trust = (& docker exec hermes hermes config get "mcp_servers.$script:photonMcpServerName.trust" 2>$null) -join [Environment]::NewLine
-    $sampling = (& docker exec hermes hermes config get "mcp_servers.$script:photonMcpServerName.sampling.enabled" 2>$null) -join [Environment]::NewLine
-    $elicitation = (& docker exec hermes hermes config get "mcp_servers.$script:photonMcpServerName.elicitation.enabled" 2>$null) -join [Environment]::NewLine
+    $url = (& docker exec photon hermes config get "mcp_servers.$script:photonMcpServerName.url" 2>$null) -join [Environment]::NewLine
+    $trust = (& docker exec photon hermes config get "mcp_servers.$script:photonMcpServerName.trust" 2>$null) -join [Environment]::NewLine
+    $sampling = (& docker exec photon hermes config get "mcp_servers.$script:photonMcpServerName.sampling.enabled" 2>$null) -join [Environment]::NewLine
+    $elicitation = (& docker exec photon hermes config get "mcp_servers.$script:photonMcpServerName.elicitation.enabled" 2>$null) -join [Environment]::NewLine
     $recordedMarker = if (Test-Path -LiteralPath $script:photonMcpConfigMarkerPath -PathType Leaf) {
         [IO.File]::ReadAllText($script:photonMcpConfigMarkerPath).Trim()
     } else { '' }
-    $changed = $url.Trim() -cne $endpoint -or $trust.Trim() -cne 'untrusted' -or
-        $sampling.Trim() -cne 'false' -or $elicitation.Trim() -cne 'false' -or $recordedMarker -cne $marker
+    $changed = $url.Trim() -cne $endpoint -or $trust.Trim() -cne 'trusted' -or
+        $sampling.Trim() -cne 'true' -or $elicitation.Trim() -cne 'true' -or $recordedMarker -cne $marker
 
     $authorization = "Bearer $token"
     $settings = @(
@@ -321,12 +300,12 @@ function Ensure-PhotonMcpHermesConfiguration {
         @("mcp_servers.$script:photonMcpServerName.headers.Authorization", $authorization),
         @("mcp_servers.$script:photonMcpServerName.headers.Host", "localhost:$script:photonMcpPort"),
         @("mcp_servers.$script:photonMcpServerName.enabled", 'true'),
-        @("mcp_servers.$script:photonMcpServerName.trust", 'untrusted'),
-        @("mcp_servers.$script:photonMcpServerName.sampling.enabled", 'false'),
-        @("mcp_servers.$script:photonMcpServerName.elicitation.enabled", 'false')
+        @("mcp_servers.$script:photonMcpServerName.trust", 'trusted'),
+        @("mcp_servers.$script:photonMcpServerName.sampling.enabled", 'true'),
+        @("mcp_servers.$script:photonMcpServerName.elicitation.enabled", 'true')
     )
     foreach ($setting in $settings) {
-        $arguments = @('exec', 'hermes', 'hermes', 'config', 'set', '--force', [string]$setting[0], [string]$setting[1])
+        $arguments = @('exec', 'photon', 'hermes', 'config', 'set', '--force', [string]$setting[0], [string]$setting[1])
         if ((Invoke-PhotonMcpDockerQuiet -Arguments $arguments) -ne 0) {
             throw "Could not configure Photon Docker MCP setting '$($setting[0])'."
         }

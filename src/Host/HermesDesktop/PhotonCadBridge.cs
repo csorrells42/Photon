@@ -84,8 +84,8 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     internal const string InstalledManualAssetRelativePath = "runtime-assets/photon-cad-manual";
     internal const string IndustrialEvidenceSelectionFileName = "evidence-selection.json";
     internal const string PreviewResourcePathPrefix = "/api/photon-cad/previews/";
-    internal const string IndustrialImageSha256 = "sha256:f84e4993c74cf87463175744d6da09e16f87038a924b013709078d1b038230c0";
-    private const string IndustrialReceiptSha256 = "988c067ac29c5daf312c676bf65febcdfedc4f99459a2070157817b25a839965";
+    internal const string IndustrialImageSha256 = "sha256:1f5b532d241cc7139e22e03ba7d3a2773acd58b5fcaacef93e7f0e2d741371e0";
+    private const string IndustrialReceiptSha256 = "fd831217e23baf638c78a29326ccd570b1e9e67037b4e1f840da1ae47761d65b";
     private const string GeometryImageSha256 = "33d9c839840115640b08dd3c4142b7f29624329408155fe1484e1d88c3891703";
     private const string GeometryProtocolId = "mcp-2025-06-18";
     private const long MaximumSealedStepBytes = 64L * 1024 * 1024;
@@ -1834,8 +1834,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     {
         var assets = Path.Combine(_installRoot, InstalledManualAssetRelativePath.Replace('/', Path.DirectorySeparatorChar));
         var evidence = Path.Combine(assets, IndustrialEvidenceSelectionFileName);
-        var docker = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "Docker", "Docker", "resources", "bin", "docker.exe");
+        var docker = DockerDesktopCliResolver.Resolve();
         if (!File.Exists(evidence) || !File.Exists(docker)) throw new InvalidOperationException("manual_runtime_unavailable");
         var workspace = CreateManualWorkspace();
         try
@@ -1871,8 +1870,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
     {
         var assets = Path.Combine(_installRoot, InstalledIndustrialAssetRelativePath.Replace('/', Path.DirectorySeparatorChar));
         var evidence = Path.Combine(assets, IndustrialEvidenceSelectionFileName);
-        var docker = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "Docker", "Docker", "resources", "bin", "docker.exe");
+        var docker = DockerDesktopCliResolver.Resolve();
         if (!File.Exists(evidence) || !File.Exists(docker)) throw new InvalidOperationException("industrial_runtime_unavailable");
         var workspace = CreateIndustrialWorkspace();
         try
@@ -2622,9 +2620,7 @@ internal sealed class PhotonCadBridge : IAsyncDisposable
         var assets = Path.Combine(_installRoot, InstalledAssetRelativePath.Replace('/', Path.DirectorySeparatorChar));
         var policy = Path.Combine(assets, "runtime-policy.json");
         var receipt = Path.Combine(assets, "bundle-receipt.json");
-        var docker = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "Docker", "Docker", "resources", "bin", "docker.exe");
+        var docker = DockerDesktopCliResolver.Resolve();
         if (!File.Exists(policy) || !File.Exists(receipt) || !File.Exists(docker))
             return new UnavailableCadRuntimeBroker();
 

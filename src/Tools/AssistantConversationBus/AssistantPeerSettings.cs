@@ -19,7 +19,7 @@ public static class AssistantPeerSettings
         var local = localRoot ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return
         [
-            LoadOrOffline(AssistantIdentity.Photon, Path.Combine(local, "hermes", "conversation-bridge.json"), "visible-turn"),
+            LoadOrOffline(AssistantIdentity.Photon, Path.Combine(local, "HermesWorkbench", "conversation-bridge.json"), "visible-turn"),
             LoadOrOffline(AssistantIdentity.Ali, Path.Combine(local, "AliFiles", "Settings", "ConversationBridge", "conversation-bridge.json"), "invoke-only"),
             LoadOrOffline(AssistantIdentity.Scarlett, Path.Combine(local, "ScarlettFiles", "Settings", "ConversationBridge", "conversation-bridge.json"), "invoke-only"),
         ];
@@ -30,7 +30,7 @@ public static class AssistantPeerSettings
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return
         [
-            Load(AssistantIdentity.Photon, Path.Combine(local, "hermes", "conversation-bridge.json"), "visible-turn"),
+            Load(AssistantIdentity.Photon, Path.Combine(local, "HermesWorkbench", "conversation-bridge.json"), "visible-turn"),
             Load(AssistantIdentity.Ali, Path.Combine(local, "AliFiles", "Settings", "ConversationBridge", "conversation-bridge.json"), "invoke-only"),
             Load(AssistantIdentity.Scarlett, Path.Combine(local, "ScarlettFiles", "Settings", "ConversationBridge", "conversation-bridge.json"), "invoke-only"),
         ];

@@ -113,7 +113,7 @@ export const hermesContractCorpus = {
   runtimeIdentity: {
     protocolVersion: 1,
     observedAtUtc: '2026-08-09T06:00:00.000Z',
-    containerName: 'hermes',
+    containerName: 'photon',
     imageReference: 'nousresearch/hermes-agent:latest',
     imageId: `sha256:${'a'.repeat(64)}`,
     repoDigest: `nousresearch/hermes-agent@sha256:${'b'.repeat(64)}`,

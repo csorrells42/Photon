@@ -1539,8 +1539,7 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
     {
         try
         {
-            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            var docker = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
+            var docker = DockerDesktopCliResolver.Resolve();
             var imageId = Environment.GetEnvironmentVariable("HERMES_IMAGE_REFERENCE")?.Trim() ?? string.Empty;
             var authority = new HermesContainerGccToolingAuthority(new HermesContainerGccToolingOptions
             {
@@ -1563,8 +1562,7 @@ internal sealed class DeveloperServicesBridge : IAsyncDisposable
     {
         try
         {
-            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            var docker = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
+            var docker = DockerDesktopCliResolver.Resolve();
             var imageId = Environment.GetEnvironmentVariable("HERMES_IMAGE_REFERENCE")?.Trim() ?? string.Empty;
             var authority = new HermesContainerPythonToolingAuthority(new HermesContainerPythonToolingOptions
             {

@@ -2,7 +2,7 @@
 param([switch]$Json)
 
 $ErrorActionPreference = 'Stop'
-$settingsPath = Join-Path $env:LOCALAPPDATA 'hermes\conversation-bridge.json'
+$settingsPath = Join-Path $env:LOCALAPPDATA 'HermesWorkbench\conversation-bridge.json'
 if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
     throw 'Hermes bridge settings do not exist yet. Launch Hermes Workbench once, then run this script again.'
 }

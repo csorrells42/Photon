@@ -62,6 +62,10 @@ internal sealed partial class SerenaPythonLanguageToolingProvider :
                 "Serena served a real Python symbol from the active workspace through its fixed language engine.")];
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TaskCanceledException)
+        {
+            return [Unavailable("python-language-service-timeout", "The trusted Serena Python language service timed out.")];
+        }
         catch (Exception exception) when (exception is HttpRequestException or InvalidDataException
             or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {

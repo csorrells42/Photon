@@ -153,7 +153,7 @@ function runtimeIdentityBridge(): Plugin {
           const identity = {
             protocolVersion: raw.protocolVersion === 1 ? 1 : 0,
             observedAtUtc,
-            containerName: raw.containerName === 'hermes' ? 'hermes' : null,
+            containerName: raw.containerName === 'photon' ? 'photon' : null,
             imageReference: string('imageReference', /^[a-z0-9./:_-]+$/i),
             imageId: string('imageId', /^sha256:[a-f0-9]{64}$/i, 71),
             repoDigest: string('repoDigest', /^nousresearch\/hermes-agent@sha256:[a-f0-9]{64}$/i, 110),

@@ -8,7 +8,7 @@ $script:ExpectedSchemaId = 'photon.model-runner.lock/v1'
 $script:ExpectedRuntime = 'docker-desktop-model-runner'
 $script:ExpectedContainerEndpoint = 'http://host.docker.internal:12434'
 $script:ExpectedOpenAiBasePath = '/engines/v1'
-$script:ExpectedGatewayContainer = 'hermes'
+$script:ExpectedGatewayContainer = 'photon'
 $script:ExpectedModels = @(
     [ordered]@{
         role = 'chat'

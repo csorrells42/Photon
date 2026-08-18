@@ -9,7 +9,6 @@ internal sealed class WindowsAdministratorBridge
 {
     internal const int ProtocolVersion = 1;
     private const int MaximumScriptCharacters = 16 * 1024;
-    private const int MaximumReasonCharacters = 512;
     private const int MaximumOutputBytes = 256 * 1024;
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromMinutes(30);
 
@@ -33,18 +32,11 @@ internal sealed class WindowsAdministratorBridge
         }
 
         var operation = (script ?? string.Empty).Trim();
-        var explanation = Normalize(reason, MaximumReasonCharacters);
         if (operation.Length == 0 || operation.Length > MaximumScriptCharacters || operation.IndexOf('\0') >= 0)
         {
             PostResult(id, false, "invalid-script", "The requested administrator operation is empty or exceeds the supported size.");
             return;
         }
-        if (explanation.Length == 0)
-        {
-            PostResult(id, false, "reason-required", "Photon must explain why Windows Administrator access is required.");
-            return;
-        }
-
         if (!await _operationGate.WaitAsync(0).ConfigureAwait(false))
         {
             PostResult(id, false, "administrator-busy", "Another Windows Administrator operation is already awaiting consent or completion.");

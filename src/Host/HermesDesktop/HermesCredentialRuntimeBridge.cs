@@ -46,8 +46,7 @@ internal sealed partial class HermesCredentialRuntimeBridge : IAsyncDisposable
         _installRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installRoot));
         _workbenchUri = workbenchUri ?? throw new ArgumentNullException(nameof(workbenchUri));
         _connections = connections ?? throw new ArgumentNullException(nameof(connections));
-        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        _dockerExecutable = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
+        _dockerExecutable = DockerDesktopCliResolver.Resolve();
     }
 
     internal async Task RestartAsync(CancellationToken cancellationToken = default)

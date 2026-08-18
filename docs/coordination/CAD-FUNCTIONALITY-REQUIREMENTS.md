@@ -32,7 +32,7 @@ The core bridge is already implemented and live. Do not replace or duplicate it.
 - Visible-dock adapter: `src/Modules/HermesGateway/HermesConversationBridgeAdapter.ts`
 - Composer/transcript binding: `src/Modules/AgentDock/AgentDock.tsx`
 - Local client: `src/Tools/HermesBridgeClient/`
-- Settings: `%LOCALAPPDATA%\hermes\conversation-bridge.json`
+- Settings: `%LOCALAPPDATA%\HermesWorkbench\conversation-bridge.json`
 - Loopback API: `GET /health`, authenticated `GET /v1/session`, `POST /v1/turns`, and `POST /v1/interrupt`
 
 The current bridge submits through the visible dock's `send` action, waits for that turn to complete, and returns the bounded visible transcript and tool activity. Root verified the live endpoint and current Photon session on 2026-08-11. Therefore direct Codex-to-Photon conversation is available now through `hermes-bridge status`, `hermes-bridge send --text <message>`, and `hermes-bridge interrupt`.

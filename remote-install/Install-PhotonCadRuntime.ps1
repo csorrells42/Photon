@@ -200,7 +200,7 @@ function Assert-ExactAssetDirectory {
 function Invoke-ExactDocker {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
 
-    $docker = Get-Command docker -CommandType Application -ErrorAction Stop
+    $docker = Get-Command docker.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'

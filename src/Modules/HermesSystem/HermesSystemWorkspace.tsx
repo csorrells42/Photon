@@ -166,9 +166,9 @@ function serenaTitle(snapshot: SerenaHealthSnapshot | null) {
   return 'Connection needs attention'
 }
 
-type Props = { accountRequest?: number }
+type Props = { accountRequest?: number; connectionsRequest?: number }
 
-export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
+export function HermesSystemWorkspace({ accountRequest = 0, connectionsRequest = 0 }: Props) {
   const [section, setSection] = useState<Section>('overview')
   const [status, setStatus] = useState<HermesStatusSnapshot | null>(null)
   const [stats, setStats] = useState<HermesSystemStats | null>(null)
@@ -231,6 +231,10 @@ export function HermesSystemWorkspace({ accountRequest = 0 }: Props) {
   useEffect(() => {
     if (accountRequest > 0) setSection('account')
   }, [accountRequest])
+
+  useEffect(() => {
+    if (connectionsRequest > 0) setSection('connections')
+  }, [connectionsRequest])
 
   useEffect(() => subscribeHermesAuthChanged(() => void load()), [load])
 

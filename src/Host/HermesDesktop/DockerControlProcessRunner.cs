@@ -31,8 +31,7 @@ internal sealed partial class DockerControlProcessRunner : IDockerControlRunner,
         if (string.IsNullOrWhiteSpace(trustedStackRoot)) throw new ArgumentException("A trusted stack root is required.", nameof(trustedStackRoot));
         _trustedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(trustedStackRoot));
         _composePath = Path.Combine(_trustedRoot, "docker-compose.yml");
-        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        _dockerExecutable = Path.GetFullPath(Path.Combine(programFiles, "Docker", "Docker", "resources", "bin", "docker.exe"));
+        _dockerExecutable = DockerDesktopCliResolver.Resolve();
     }
 
     public bool IsAvailable => IsTrustedFile(_composePath) && IsTrustedExecutable(_dockerExecutable);

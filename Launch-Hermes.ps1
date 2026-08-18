@@ -13,6 +13,52 @@ $serenaPort = 9121
 $workbenchPort = 4173
 $assistantBusPort = 9072
 $script:serenaProcessStarted = $false
+$script:nativeHermesRoot = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'hermes')).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+
+function Test-PhotonPathInsideNativeHermes {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        $expanded = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
+        if (-not [IO.Path]::IsPathRooted($expanded)) { return $false }
+        $resolved = [IO.Path]::GetFullPath($expanded).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        return [string]::Equals($resolved, $script:nativeHermesRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            $resolved.StartsWith($script:nativeHermesRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-PhotonIsolatedPathValue {
+    param([AllowNull()][string]$PathValue)
+
+    return (@($PathValue -split ';' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and -not (Test-PhotonPathInsideNativeHermes -Path $_)
+    }) -join ';')
+}
+
+function Assert-PhotonPathIsolated {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Purpose
+    )
+
+    if (Test-PhotonPathInsideNativeHermes -Path $Path) {
+        throw "Photon refused $Purpose from the native Hermes installation: $Path"
+    }
+}
+
+function Initialize-PhotonNativeHermesIsolation {
+    Assert-PhotonPathIsolated -Path $bundleRoot -Purpose 'its install bundle'
+    $env:PATH = Get-PhotonIsolatedPathValue -PathValue $env:PATH
+    foreach ($name in @('HERMES_HOME', 'HERMES_DESKTOP_HERMES_ROOT', 'HERMES_DESKTOP_HERMES')) {
+        Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
+    }
+}
+
+Initialize-PhotonNativeHermesIsolation
 $runtimeGenerationCandidates = @(
     (Join-Path $bundleRoot 'runtime\Runtime.Generation.ps1'),
     (Join-Path (Split-Path -Parent $bundleRoot) 'runtime\Runtime.Generation.ps1')
@@ -99,53 +145,14 @@ function Resolve-HermesWorkspacePath {
         throw 'WorkspacePath must be a local drive path or a bundle-relative path.'
     }
 
-    $isRooted = [IO.Path]::IsPathRooted($configured)
-    $resolved = [IO.Path]::GetFullPath($(if ($isRooted) { $configured } else { Join-Path $bundleRoot $configured }))
-    $bundleFull = [IO.Path]::GetFullPath($bundleRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    $resolvedTrimmed = $resolved.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    $pathRoot = [IO.Path]::GetPathRoot($resolvedTrimmed)
-    if ([string]::IsNullOrWhiteSpace($pathRoot) -or
-        [string]::Equals($resolvedTrimmed, $pathRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
+    $resolved = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $bundleRoot $configured }))
+    $pathRoot = [IO.Path]::GetPathRoot($resolved)
+    if ([string]::Equals($resolved.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), $pathRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)) {
         throw 'WorkspacePath cannot be a drive root.'
     }
-    if ([string]::Equals($resolvedTrimmed, $bundleFull, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'WorkspacePath cannot be the install bundle root.'
-    }
-    if (-not $isRooted -and
-        -not $resolvedTrimmed.StartsWith($bundleFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'A relative WorkspacePath must remain inside the install bundle.'
-    }
-
-    $relativeToRoot = $resolvedTrimmed.Substring($pathRoot.Length)
-    if ($relativeToRoot.Contains(':')) {
-        throw 'WorkspacePath cannot contain an alternate data stream.'
-    }
+    $resolvedTrimmed = $resolved.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
     if (-not (Test-Path -LiteralPath $resolvedTrimmed -PathType Container)) {
         throw "WorkspacePath must already exist as a directory: $resolvedTrimmed"
-    }
-
-    $blockedRoots = @(
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile),
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory),
-        [string]$env:OneDrive
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object {
-        [IO.Path]::GetFullPath($_).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    }
-    foreach ($blocked in $blockedRoots) {
-        if ([string]::Equals($resolvedTrimmed, $blocked, [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'WorkspacePath cannot be a profile, Desktop, or OneDrive root.'
-        }
-    }
-
-    $cursor = $resolvedTrimmed
-    while (-not [string]::IsNullOrWhiteSpace($cursor)) {
-        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "WorkspacePath cannot traverse a reparse point: $cursor"
-        }
-        $parent = Split-Path -Parent $cursor
-        if ([string]::IsNullOrWhiteSpace($parent) -or [string]::Equals($parent, $cursor, [StringComparison]::OrdinalIgnoreCase)) { break }
-        $cursor = $parent
     }
     return $resolvedTrimmed
 }
@@ -163,22 +170,42 @@ function Wait-DockerEngine {
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
-        & docker info *> $null
-        if ($LASTEXITCODE -eq 0) { return }
+        $dockerReady = $false
+        try {
+            & docker info *> $null
+            $dockerReady = $LASTEXITCODE -eq 0
+        }
+        catch {
+            # Windows PowerShell promotes Docker's unavailable-engine stderr to
+            # a terminating NativeCommandError while Desktop is still starting.
+        }
+        if ($dockerReady) { return }
         Start-Sleep -Seconds 2
     }
     throw "Docker Desktop did not become ready within $TimeoutSeconds seconds."
 }
 
 function Start-DockerDesktop {
-    & docker info *> $null
-    if ($LASTEXITCODE -eq 0) { return }
+    $dockerReady = $false
+    try {
+        & docker info *> $null
+        $dockerReady = $LASTEXITCODE -eq 0
+    }
+    catch {
+        # An unavailable engine is the condition this function is responsible
+        # for recovering; it is not itself a launcher failure.
+    }
+    if ($dockerReady) { return }
 
-    $dockerDesktop = 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
-    if (-not (Test-Path -LiteralPath $dockerDesktop)) {
+    $dockerDesktopCandidates = @(
+        (Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'Programs\DockerDesktop\Docker Desktop.exe'),
+        'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+    )
+    $dockerDesktop = @($dockerDesktopCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+    if ($dockerDesktop.Count -ne 1) {
         throw 'Docker Desktop is not installed. Run Install-Hermes.ps1 first.'
     }
-    Start-Process -FilePath $dockerDesktop -WindowStyle Hidden
+    Start-Process -FilePath ([string]$dockerDesktop[0]) -WindowStyle Hidden
     Wait-DockerEngine
 }
 
@@ -279,20 +306,32 @@ function Find-SerenaExecutable {
         $configured = [string]$settings.SerenaExecutable
         if (-not [string]::IsNullOrWhiteSpace($configured)) {
             if (-not [IO.Path]::IsPathRooted($configured)) { $configured = Join-Path $bundleRoot $configured }
-            if (Test-Path -LiteralPath $configured -PathType Leaf) { return [IO.Path]::GetFullPath($configured) }
+            if (Test-Path -LiteralPath $configured -PathType Leaf) {
+                $resolved = [IO.Path]::GetFullPath($configured)
+                Assert-PhotonPathIsolated -Path $resolved -Purpose 'its Serena executable'
+                return $resolved
+            }
         }
     }
 
     $serena = Get-Command serena -ErrorAction SilentlyContinue
-    if ($serena) { return $serena.Source }
+    if ($serena) {
+        Assert-PhotonPathIsolated -Path $serena.Source -Purpose 'its Serena executable'
+        return $serena.Source
+    }
 
     $uv = Get-Command uv -ErrorAction SilentlyContinue
     if ($uv) {
+        Assert-PhotonPathIsolated -Path $uv.Source -Purpose 'its uv executable'
         $toolBin = @(& $uv.Source tool dir --bin 2>$null) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1
         if ($LASTEXITCODE -eq 0 -and $toolBin) {
             foreach ($name in @('serena.exe', 'serena.cmd', 'serena')) {
                 $candidate = Join-Path ([string]$toolBin).Trim() $name
-                if (Test-Path -LiteralPath $candidate -PathType Leaf) { return [IO.Path]::GetFullPath($candidate) }
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $resolved = [IO.Path]::GetFullPath($candidate)
+                    Assert-PhotonPathIsolated -Path $resolved -Purpose 'its Serena executable'
+                    return $resolved
+                }
             }
         }
     }
@@ -340,6 +379,7 @@ function Start-Serena {
 
     $serenaExecutable = Find-SerenaExecutable
     $nodeExecutable = Find-NodeExecutable
+    Assert-PhotonPathIsolated -Path $nodeExecutable -Purpose 'its Node executable'
     $nodeDirectory = Split-Path -Parent $nodeExecutable
 
     $stdout = Join-Path $logsPath 'serena.out.log'
@@ -391,6 +431,7 @@ function Start-ConfiguredClient {
     if (-not [IO.Path]::IsPathRooted($executable)) {
         $executable = Join-Path $bundleRoot $executable
     }
+    Assert-PhotonPathIsolated -Path $executable -Purpose 'its desktop client'
     if (-not (Test-Path -LiteralPath $executable)) {
         Write-Warning "Configured desktop client was not found: $executable"
         return $false
@@ -594,9 +635,9 @@ function Ensure-SerenaMcpConfiguration {
     if ($hasUrl -and $hasHost) { return $false }
 
     Write-Host 'Connecting Hermes to the local Serena tools for the first time...' -ForegroundColor Cyan
-    & docker exec hermes hermes config set --force mcp_servers.serena.url 'http://host.docker.internal:9121/mcp' | Out-Null
+    & docker exec photon hermes config set --force mcp_servers.serena.url 'http://host.docker.internal:9121/mcp' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not configure the Serena MCP endpoint in Hermes.' }
-    & docker exec hermes hermes config set --force mcp_servers.serena.headers.Host 'localhost:9121' | Out-Null
+    & docker exec photon hermes config set --force mcp_servers.serena.headers.Host 'localhost:9121' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not configure Serena MCP host-header protection in Hermes.' }
     return $true
 }
@@ -604,7 +645,7 @@ function Ensure-SerenaMcpConfiguration {
 function Get-HermesConfigValue {
     param([Parameter(Mandatory)][string]$Key)
 
-    $value = (& docker exec hermes hermes config get $Key 2>$null) -join [Environment]::NewLine
+    $value = (& docker exec photon hermes config get $Key 2>$null) -join [Environment]::NewLine
     if ($LASTEXITCODE -ne 0) { return '' }
     return $value.Trim()
 }
@@ -614,13 +655,17 @@ function Ensure-HermesVisionConfiguration {
     if (-not [string]::IsNullOrWhiteSpace($visionProvider) -and $visionProvider -ne 'auto') { return $false }
 
     $mainProvider = Get-HermesConfigValue -Key 'model.provider'
+    if ($mainProvider -eq 'gemini') {
+        Write-Host 'Hermes image analysis is using the configured Gemini provider through automatic vision routing.' -ForegroundColor DarkGray
+        return $false
+    }
     if ($mainProvider -ne 'openrouter') {
         Write-Warning "Hermes image analysis still needs a vision provider. Current main provider '$mainProvider' is not configured automatically; choose one with 'hermes tools configure'."
         return $false
     }
 
     Write-Host 'Enabling Hermes image analysis through the configured OpenRouter account...' -ForegroundColor Cyan
-    & docker exec hermes hermes config set --force auxiliary.vision.provider openrouter | Out-Null
+    & docker exec photon hermes config set --force auxiliary.vision.provider openrouter | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not configure the Hermes auxiliary vision provider.' }
     return $true
 }
@@ -628,7 +673,7 @@ function Ensure-HermesVisionConfiguration {
 function Ensure-HermesWorkspaceConfiguration {
     if ((Get-HermesConfigValue -Key 'terminal.cwd') -eq '/workspace') { return $false }
     Write-Host 'Aligning Photon terminal tools with the dedicated workspace...' -ForegroundColor Cyan
-    & docker exec hermes hermes config set --force terminal.cwd /workspace | Out-Null
+    & docker exec photon hermes config set --force terminal.cwd /workspace | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not configure the Hermes terminal workspace.' }
     return $true
 }
@@ -651,7 +696,7 @@ function Wait-HermesGateway {
 function Write-HermesRuntimeIdentity {
     $identityPath = Join-Path $logsPath 'runtime-identity.json'
     try {
-        $containerJson = (& docker inspect hermes 2>$null) -join [Environment]::NewLine
+        $containerJson = (& docker inspect photon 2>$null) -join [Environment]::NewLine
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerJson)) { return }
         $container = @($containerJson | ConvertFrom-Json)[0]
 
@@ -670,7 +715,7 @@ function Write-HermesRuntimeIdentity {
         $identity = [ordered]@{
             protocolVersion = 1
             observedAtUtc = [DateTime]::UtcNow.ToString('o')
-            containerName = 'hermes'
+            containerName = 'photon'
             imageReference = $imageReference
             imageId = $imageId
             repoDigest = if ($repoDigest) { [string]$repoDigest } else { $null }
@@ -711,23 +756,19 @@ if ($SecuritySmoke) {
         throw 'Launcher relative workspace resolution smoke failed.'
     }
     Get-ConfiguredWorkspacePath | Out-Null
-    $bundleRootRejected = $false
-    try { Resolve-HermesWorkspacePath -ConfiguredPath $bundleRoot | Out-Null }
-    catch { $bundleRootRejected = $true }
-    if (-not $bundleRootRejected) { throw 'Launcher install-root workspace rejection smoke failed.' }
-    foreach ($blockedWorkspace in @(
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile),
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory),
-        [string]$env:OneDrive
-    )) {
-        if ([string]::IsNullOrWhiteSpace($blockedWorkspace)) { continue }
-        $rejected = $false
-        try { Resolve-HermesWorkspacePath -ConfiguredPath $blockedWorkspace | Out-Null }
-        catch { $rejected = $true }
-        if (-not $rejected) { throw 'Launcher broad workspace rejection smoke failed.' }
+    if ((Resolve-HermesWorkspacePath -ConfiguredPath $bundleRoot) -cne [IO.Path]::GetFullPath($bundleRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) {
+        throw 'Launcher broad workspace acceptance smoke failed.'
     }
+    $isolatedTestPath = Get-PhotonIsolatedPathValue -PathValue "$script:nativeHermesRoot\bin;$bundleRoot"
+    if (($isolatedTestPath -split ';' | Where-Object { Test-PhotonPathInsideNativeHermes -Path $_ }).Count -ne 0) {
+        throw 'Launcher native Hermes PATH isolation smoke failed.'
+    }
+    $nativeHermesExecutableRejected = $false
+    try { Assert-PhotonPathIsolated -Path "$script:nativeHermesRoot\bin\uvx.exe" -Purpose 'a smoke-test executable' }
+    catch { $nativeHermesExecutableRejected = $true }
+    if (-not $nativeHermesExecutableRejected) { throw 'Launcher native Hermes executable rejection smoke failed.' }
     Test-PhotonMcpGatewaySecuritySmoke
-    Write-Host 'Launcher endpoint and process-ownership security smoke passed.' -ForegroundColor Green
+    Write-Host 'Launcher endpoint, process ownership, native Hermes isolation, and unrestricted workspace smoke passed.' -ForegroundColor Green
     return
 }
 
@@ -753,7 +794,7 @@ try {
     $workspaceConfigurationChanged = Ensure-HermesWorkspaceConfiguration
     if ($serenaConfigurationChanged -or $photonMcpConfigurationChanged -or $photonMcpGatewayStarted -or $visionConfigurationChanged -or $workspaceConfigurationChanged -or $script:serenaProcessStarted) {
         Write-Host 'Refreshing Hermes with the current Serena, Docker MCP, and vision configuration...' -ForegroundColor Cyan
-        & docker restart hermes | Out-Null
+        & docker restart photon | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Hermes could not refresh its local integration configuration.' }
     }
     Wait-HermesGateway

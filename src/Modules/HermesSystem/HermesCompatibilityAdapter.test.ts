@@ -11,7 +11,7 @@ describe('HermesCompatibilityAdapter', () => {
   it('normalizes only the safe versioned runtime identity shape', () => {
     expect(normalizeRuntimeIdentity({
       protocolVersion: 1,
-      containerName: 'hermes',
+      containerName: 'photon',
       observedAtUtc: '2026-08-09T05:00:00.0000000Z',
       imageReference: 'nousresearch/hermes-agent:latest',
       imageId,
@@ -20,18 +20,18 @@ describe('HermesCompatibilityAdapter', () => {
       ignoredSecret: 'must not survive normalization',
     })).toEqual({
       protocolVersion: 1,
-      containerName: 'hermes',
+      containerName: 'photon',
       observedAtUtc: '2026-08-09T05:00:00.0000000Z',
       imageReference: 'nousresearch/hermes-agent:latest',
       imageId,
       repoDigest: `nousresearch/hermes-agent@sha256:${'b'.repeat(64)}`,
       revision: '51597c5e078256680ab05f0f2aad625ed8efeb30',
     })
-    expect(normalizeRuntimeIdentity({ protocolVersion: 1, containerName: 'hermes', imageId: 'latest' })).toBeNull()
+    expect(normalizeRuntimeIdentity({ protocolVersion: 1, containerName: 'photon', imageId: 'latest' })).toBeNull()
   })
 
   it('recognizes the tested runtime only when immutable identity is present', () => {
-    const identity = normalizeRuntimeIdentity({ protocolVersion: 1, containerName: 'hermes', imageId })
+    const identity = normalizeRuntimeIdentity({ protocolVersion: 1, containerName: 'photon', imageId })
     expect(evaluateHermesCompatibility('0.20.0', identity).state).toBe('compatible')
     expect(evaluateHermesCompatibility('0.21.0', identity).state).toBe('review')
     expect(evaluateHermesCompatibility('0.20.0', null).state).toBe('unverified')

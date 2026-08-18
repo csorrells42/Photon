@@ -13,7 +13,7 @@ Usage:
   hermes-bridge new
 
 health is unauthenticated. status, send, interrupt, and new read the bridge code from
-%LOCALAPPDATA%\hermes\conversation-bridge.json. send never reads from stdin.
+%LOCALAPPDATA%\HermesWorkbench\conversation-bridge.json. send never reads from stdin.
 """;
 
     public static async Task<int> RunAsync(
