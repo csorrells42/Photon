@@ -1,0 +1,125 @@
+.hermes-model-management {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(140, 114, 255, .12), transparent 28rem),
+    radial-gradient(circle at 10% 25%, rgba(93, 229, 193, .055), transparent 24rem),
+    #090b12;
+  color: #dce2f2;
+  padding: 22px clamp(18px, 3vw, 42px) 48px;
+}
+
+.hmm-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; max-width: 1120px; margin: 0 auto 18px; }
+.hmm-header h1 { margin: 4px 0 5px; font-size: clamp(22px, 2.4vw, 32px); font-weight: 650; letter-spacing: -.025em; }
+.hmm-header p, .hmm-card p { margin: 0; color: #8791a6; font-size: 11px; line-height: 1.55; }
+.hmm-header small, .hmm-truth small { color: #66e7c5; font-size: 8px; letter-spacing: .2em; }
+.hmm-header button, .hmm-card button, .hmm-key button, .hmm-auth-session button, .hmm-preset-toolbar button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 31px;
+  border: 1px solid rgba(140, 114, 255, .25); border-radius: 7px; background: rgba(140, 114, 255, .07);
+  padding: 6px 10px; color: #b9afdF; font-size: 9px; cursor: pointer;
+}
+.hmm-header button:hover, .hmm-card button:hover, .hmm-key button:hover, .hmm-auth-session button:hover, .hmm-preset-toolbar button:hover { border-color: rgba(93, 229, 193, .4); color: #dce2f2; }
+.hermes-model-management button:disabled { opacity: .42; cursor: not-allowed; }
+.hermes-model-management button.primary { border-color: rgba(93, 229, 193, .4); background: rgba(39, 149, 119, .17); color: #83efd2; }
+.hermes-model-management button.danger { border-color: rgba(255, 92, 157, .25); color: #ff8fc0; }
+
+.hmm-tabs { position: sticky; top: -22px; z-index: 3; display: flex; flex-wrap: wrap; gap: 3px; max-width: 1120px; margin: 0 auto 14px; padding: 8px 0; background: rgba(9, 11, 18, .94); backdrop-filter: blur(12px); }
+.hmm-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 9px 13px 7px; color: #737d92; font-size: 9px; cursor: pointer; }
+.hmm-tabs button:hover { color: #c2c9d7; }
+.hmm-tabs button.active { border-color: #8c72ff; color: #dcd5ff; }
+
+.hmm-notice { display: flex; align-items: center; gap: 8px; max-width: 1120px; margin: 0 auto 14px; border: 1px solid rgba(255,255,255,.09); border-radius: 8px; padding: 9px 11px; font-size: 9px; }
+.hmm-notice.is-good { border-color: rgba(93,229,193,.25); background: rgba(36,132,106,.12); color: #86e2ca; }
+.hmm-notice.is-warn { border-color: rgba(252,190,74,.25); background: rgba(152,103,24,.1); color: #e9c77f; }
+.hmm-notice.is-bad { border-color: rgba(255,92,157,.25); background: rgba(145,42,84,.1); color: #ff9bc5; }
+
+.hmm-section { display: grid; gap: 12px; max-width: 1120px; margin: 0 auto; }
+.hmm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.hmm-card, .hmm-auth-session, .hmm-truth, .hmm-section-heading {
+  border: 1px solid rgba(255,255,255,.075); border-radius: 10px; background: rgba(15,18,29,.87); box-shadow: 0 16px 45px rgba(0,0,0,.16); padding: 14px;
+}
+.hmm-card > header, .hmm-account > header, .hmm-auth-session > header, .hmm-section-heading { display: flex; align-items: center; gap: 9px; justify-content: space-between; }
+.hmm-card > header > div, .hmm-auth-session header > div, .hmm-section-heading > div { display: flex; flex-direction: column; gap: 3px; }
+.hmm-card strong, .hmm-auth-session strong, .hmm-section-heading strong { font-size: 10px; color: #d8deea; }
+.hmm-card small, .hmm-auth-session small, .hmm-section-heading small { color: #747f94; font-size: 8px; }
+.hmm-truth { display: flex; align-items: center; gap: 12px; border-color: rgba(93,229,193,.19); }
+.hmm-truth > span { display: grid; place-items: center; width: 39px; height: 39px; border-radius: 10px; background: linear-gradient(145deg, rgba(140,114,255,.24), rgba(93,229,193,.14)); color: #7ae9cc; }
+.hmm-truth div { display: flex; flex-direction: column; gap: 2px; }
+.hmm-truth strong { font-size: 16px; }
+.hmm-truth p { margin: 0; color: #8590a4; font-size: 9px; }
+
+.hmm-model-fields { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(230px, 1.2fr); gap: 9px; margin: 12px 0; }
+.hmm-model-fields label, .hmm-moa-settings label { display: flex; flex-direction: column; gap: 5px; color: #8993a8; font-size: 8px; }
+.hermes-model-management input, .hermes-model-management select {
+  width: 100%; min-width: 0; height: 32px; border: 1px solid rgba(255,255,255,.09); border-radius: 6px;
+  outline: 0; background: #0a0d15; padding: 0 9px; color: #d6ddea; font: inherit; font-size: 9px;
+}
+.hermes-model-management input:focus, .hermes-model-management select:focus { border-color: rgba(140,114,255,.55); box-shadow: 0 0 0 2px rgba(140,114,255,.08); }
+.hmm-provider-state { display: flex; align-items: center; gap: 5px; margin: -2px 0 12px; color: #8190a5; font-size: 8px; }
+.hmm-explanation { margin-top: 9px !important; }
+.hmm-reasoning-options { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.hmm-reasoning-options span { border: 1px solid rgba(140,114,255,.2); border-radius: 999px; background: rgba(140,114,255,.07); padding: 4px 7px; color: #b8abf2; font-size: 8px; text-transform: capitalize; }
+.hmm-reasoning-options p { margin: 0; }
+.hmm-endpoints { max-width: 1320px; }
+.hmm-endpoints .runtime-configuration { min-height: 0; }
+
+.hmm-account header { justify-content: flex-start; }
+.hmm-account header > span { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 8px; background: rgba(255,255,255,.04); color: #7c879c; }
+.hmm-account header > span.connected { background: rgba(49,160,129,.14); color: #65dfbe; }
+.hmm-account header > b { margin-left: auto; color: #7d8799; font-size: 8px; font-weight: 500; }
+.hmm-account p { min-height: 34px; margin-top: 10px; }
+.hmm-account footer, .hmm-auth-session footer, .hmm-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.hmm-account a, .hmm-key a, .hmm-auth-session a { display: inline-flex; align-items: center; gap: 4px; color: #8f80e5; font-size: 8px; text-decoration: none; }
+.hmm-auth-session { border-color: rgba(140,114,255,.3); }
+.hmm-auth-session p { color: #a1aabd; font-size: 9px; line-height: 1.55; }
+.hmm-auth-session code { border: 1px solid rgba(93,229,193,.22); border-radius: 5px; background: rgba(93,229,193,.08); padding: 3px 6px; color: #83efd2; }
+
+.hmm-key-list, .hmm-routing-list, .hmm-fallback-list { display: grid; gap: 6px; }
+.hmm-key { display: grid; grid-template-columns: minmax(190px, 1fr) 90px minmax(180px, 1fr) auto auto auto; align-items: center; gap: 7px; border: 1px solid rgba(255,255,255,.06); border-radius: 8px; background: rgba(15,18,29,.68); padding: 8px 9px; }
+.hmm-key > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hmm-key strong { overflow: hidden; text-overflow: ellipsis; color: #cdd5e2; font-size: 9px; }
+.hmm-key small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #697489; font-size: 7px; }
+.hmm-key > span { color: #727c8f; font-size: 8px; }
+.hmm-key > span.set { color: #62d5b6; }
+.hmm-key button { min-height: 28px; padding: 4px 8px; }
+.hmm-custom-key { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(180px, 1fr) auto; gap: 7px; margin-top: 11px; }
+.hmm-custom-key-list { display: grid; gap: 5px; margin-top: 9px; }
+.hmm-custom-key-list > span { display: grid; grid-template-columns: 1fr 100px auto; align-items: center; gap: 7px; border-top: 1px solid rgba(255,255,255,.055); padding-top: 6px; }
+.hmm-custom-key-list strong { color: #bdc6d6; font-size: 8px; }
+.hmm-custom-key-list small { color: #68d7ba; font-size: 8px; }
+.hmm-pool-add { display: grid; grid-template-columns: minmax(150px,.7fr) minmax(140px,.6fr) minmax(180px,1fr) auto; gap: 7px; margin-top: 11px; }
+.hmm-pool-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 8px; }
+.hmm-pool-entry > header > span { color: #66d9ba; font-size: 8px; text-transform: capitalize; }
+.hmm-pool-entry > div { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; color: #788398; font-size: 8px; }
+
+.hmm-route, .hmm-fallback, .hmm-moa-slot { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; align-items: end; gap: 9px; border-top: 1px solid rgba(255,255,255,.055); padding-top: 9px; }
+.hmm-route-body, .hmm-fallback-route { min-width: 0; }
+.hmm-route-details { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 7px; margin-top: -3px; }
+.hmm-route-details label { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: #727e92; font-size: 7px; }
+.hmm-route > strong, .hmm-fallback > strong, .hmm-moa-slot > strong { align-self: center; color: #aeb7c7; font-size: 9px; font-weight: 550; text-transform: capitalize; }
+.hmm-fallback { grid-template-columns: 34px minmax(0, 1fr) auto; }
+.hmm-fallback > strong { text-align: center; }
+.hmm-fallback > div:last-child { display: flex; gap: 4px; }
+.hmm-check { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px; }
+.hmm-check input { width: 14px; height: 14px; }
+
+.hmm-preset-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.hmm-preset-toolbar select { width: min(270px, 100%); }
+.hmm-moa-block { display: grid; gap: 8px; margin-top: 12px; }
+.hmm-moa-block > header { display: flex; align-items: center; justify-content: space-between; color: #bfc7d4; font-size: 9px; }
+.hmm-moa-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 8px; margin-top: 11px; }
+.hmm-empty { display: grid; place-items: center; gap: 9px; min-height: 220px; color: #737e92; font-size: 9px; }
+.spin { animation: hmm-spin .9s linear infinite; }
+@keyframes hmm-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 900px) {
+  .hmm-header { flex-direction: column; }
+  .hmm-model-fields, .hmm-route, .hmm-moa-slot { grid-template-columns: 1fr; }
+  .hmm-route-details { grid-template-columns: 1fr; }
+  .hmm-key { grid-template-columns: 1fr auto; }
+  .hmm-key input { grid-column: 1 / -1; }
+  .hmm-custom-key { grid-template-columns: 1fr; }
+  .hmm-pool-add { grid-template-columns: 1fr; }
+}
